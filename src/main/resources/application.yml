@@ -18,6 +18,9 @@ spring:
     store-type: redis
     # session 30 天过期
     timeout: 2592000
+  # 数据源配置
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
 server:
   port: 8124
   servlet:
@@ -26,9 +29,6 @@ server:
     session:
       cookie:
         max-age: 2592000
-  # 数据源配置
-  datasource:
-    driver-class-name: com.mysql.cj.jdbc.Driver
 
 mybatis-plus:
   configuration:
