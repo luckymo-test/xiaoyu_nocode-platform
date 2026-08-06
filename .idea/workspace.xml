@@ -4,30 +4,15 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="86cc827d-036c-42de-9fa4-dc121fb9841a" name="Changes" comment="初始化项目">
-      <change afterPath="$PROJECT_DIR$/.idea/ApifoxUploaderProjectSetting.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/dataSources.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/encodings.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/java/com/mofanyi/annotation/AuthCheck.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/java/com/mofanyi/aop/AuthInterceptor.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/java/com/mofanyi/constant/UserConstant.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/java/com/mofanyi/generator/MyBatisCodeGenerator.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/java/com/mofanyi/model/dto/user/UserAddRequest.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/java/com/mofanyi/model/dto/user/UserLoginRequest.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/java/com/mofanyi/model/dto/user/UserQueryRequest.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/java/com/mofanyi/model/dto/user/UserRegisterRequest.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/java/com/mofanyi/model/dto/user/UserUpdateRequest.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/java/com/mofanyi/model/enums/UserRoleEnum.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/java/com/mofanyi/model/vo/LoginUserVO.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/java/com/mofanyi/model/vo/UserVO.java" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/xiaoyuZeroCode-front/src/stores/loginUser.ts" afterDir="false" />
+    <list default="true" id="86cc827d-036c-42de-9fa4-dc121fb9841a" name="Changes" comment="用户模块完成">
+      <change afterPath="$PROJECT_DIR$/src/main/java/com/mofanyi/ai/AiCodeGeneratorService.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/java/com/mofanyi/ai/model/HtmlCodeResult.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/java/com/mofanyi/ai/model/MultiFileCodeResult.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/java/com/mofanyi/model/enums/CodeGenTypeEnum.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/resources/prompt/codegen_multifile_prompt.txt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/resources/prompt/codegen_singlehtml_prompt.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/pom.xml" beforeDir="false" afterPath="$PROJECT_DIR$/pom.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/sql/create_user.sql" beforeDir="false" afterPath="$PROJECT_DIR$/sql/create_user.sql" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/mofanyi/common/PageRequest.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/mofanyi/common/PageRequest.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/mofanyi/config/MyBatisPlusConfig.java" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/resources/application.yml" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/resources/application.yml" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -57,6 +42,8 @@
   <component name="PropertiesComponent"><![CDATA[{
   "keyToString": {
     "Application.MyBatisCodeGenerator.executor": "Run",
+    "JUnit.AiCodeGeneratorServiceImplTest.executor": "Run",
+    "JUnit.AiCodeGeneratorServiceImplTest.generateHtmlCode_shouldReturnModelContent.executor": "Run",
     "RequestMappingsPanelOrder0": "0",
     "RequestMappingsPanelOrder1": "1",
     "RequestMappingsPanelWidth0": "75",
@@ -66,7 +53,7 @@
     "Spring Boot.xiaoyuZeroCodeApplication.executor": "Run",
     "git-widget-placeholder": "master",
     "kotlin-language-version-configured": "true",
-    "last_opened_file_path": "D:/IDEAproject/xiaoyu_zerocode/src/main/resources",
+    "last_opened_file_path": "D:/IDEAproject/xiaoyu_zerocode/src/main/resources/doc",
     "node.js.detected.package.eslint": "true",
     "node.js.detected.package.tslint": "true",
     "node.js.selected.package.eslint": "(autodetect)",
@@ -86,11 +73,11 @@
 }]]></component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
+      <recent name="D:\IDEAproject\xiaoyu_zerocode\src\main\resources\doc" />
       <recent name="D:\IDEAproject\xiaoyu_zerocode\src\main\resources" />
       <recent name="D:\IDEAproject\xiaoyu_zerocode\src\main\java\com\mofanyi\config" />
       <recent name="D:\IDEAproject\xiaoyu_zerocode\src\main\java\com\mofanyi\exception" />
       <recent name="D:\IDEAproject\xiaoyu_zerocode\src\main\java\com\mofanyi\common" />
-      <recent name="D:\IDEAproject\xiaoyu_zerocode\src\main\java\com\mofanyi\xiaoyuZeroCode" />
     </key>
   </component>
   <component name="RunManager" selected="Spring Boot.xiaoyuZeroCodeApplication">
@@ -107,7 +94,41 @@
         <option name="Make" enabled="true" />
       </method>
     </configuration>
+    <configuration name="AiCodeGeneratorServiceImplTest" type="JUnit" factoryName="JUnit" temporary="true" nameIsGenerated="true">
+      <module name="xiaoyu_zerocode" />
+      <extension name="coverage">
+        <pattern>
+          <option name="PATTERN" value="com.mofanyi.ai.*" />
+          <option name="ENABLED" value="true" />
+        </pattern>
+      </extension>
+      <option name="PACKAGE_NAME" value="com.mofanyi.ai" />
+      <option name="MAIN_CLASS_NAME" value="com.mofanyi.ai.AiCodeGeneratorServiceImplTest" />
+      <option name="TEST_OBJECT" value="class" />
+      <method v="2">
+        <option name="Make" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="AiCodeGeneratorServiceImplTest.generateHtmlCode_shouldReturnModelContent" type="JUnit" factoryName="JUnit" temporary="true" nameIsGenerated="true">
+      <module name="xiaoyu_zerocode" />
+      <extension name="coverage">
+        <pattern>
+          <option name="PATTERN" value="com.mofanyi.ai.*" />
+          <option name="ENABLED" value="true" />
+        </pattern>
+      </extension>
+      <option name="PACKAGE_NAME" value="com.mofanyi.ai" />
+      <option name="MAIN_CLASS_NAME" value="com.mofanyi.ai.AiCodeGeneratorServiceImplTest" />
+      <option name="METHOD_NAME" value="generateHtmlCode_shouldReturnModelContent" />
+      <option name="TEST_OBJECT" value="method" />
+      <method v="2">
+        <option name="Make" enabled="true" />
+      </method>
+    </configuration>
     <configuration name="xiaoyuZeroCodeApplication" type="SpringBootApplicationConfigurationType" factoryName="Spring Boot" temporary="true" nameIsGenerated="true">
+      <envs>
+        <env name="DEEPSEEK_API_KEY" value="sk-e7729edda91142049869f81ed2932628" />
+      </envs>
       <option name="FRAME_DEACTIVATION_UPDATE_POLICY" value="UpdateClassesAndResources" />
       <module name="xiaoyu_zerocode" />
       <option name="SPRING_BOOT_MAIN_CLASS" value="com.mofanyi.xiaoyuZeroCodeApplication" />
@@ -121,9 +142,17 @@
         <option name="Make" enabled="true" />
       </method>
     </configuration>
+    <list>
+      <item itemvalue="Application.MyBatisCodeGenerator" />
+      <item itemvalue="JUnit.AiCodeGeneratorServiceImplTest" />
+      <item itemvalue="JUnit.AiCodeGeneratorServiceImplTest.generateHtmlCode_shouldReturnModelContent" />
+      <item itemvalue="Spring Boot.xiaoyuZeroCodeApplication" />
+    </list>
     <recent_temporary>
       <list>
         <item itemvalue="Spring Boot.xiaoyuZeroCodeApplication" />
+        <item itemvalue="JUnit.AiCodeGeneratorServiceImplTest" />
+        <item itemvalue="JUnit.AiCodeGeneratorServiceImplTest.generateHtmlCode_shouldReturnModelContent" />
         <item itemvalue="Application.MyBatisCodeGenerator" />
       </list>
     </recent_temporary>
@@ -137,7 +166,7 @@
       <option name="presentableId" value="Default" />
       <updated>1785674593481</updated>
       <workItem from="1785674594570" duration="2014000" />
-      <workItem from="1785720168562" duration="13279000" />
+      <workItem from="1785720168562" duration="39309000" />
     </task>
     <task id="LOCAL-00001" summary="初始化项目">
       <option name="closed" value="true" />
@@ -147,7 +176,15 @@
       <option name="project" value="LOCAL" />
       <updated>1785722488191</updated>
     </task>
-    <option name="localTasksCounter" value="2" />
+    <task id="LOCAL-00002" summary="用户模块完成">
+      <option name="closed" value="true" />
+      <created>1785746790205</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1785746790205</updated>
+    </task>
+    <option name="localTasksCounter" value="3" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -166,6 +203,7 @@
   </component>
   <component name="VcsManagerConfiguration">
     <MESSAGE value="初始化项目" />
-    <option name="LAST_COMMIT_MESSAGE" value="初始化项目" />
+    <MESSAGE value="用户模块完成" />
+    <option name="LAST_COMMIT_MESSAGE" value="用户模块完成" />
   </component>
 </project>

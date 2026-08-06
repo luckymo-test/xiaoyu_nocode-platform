@@ -21,6 +21,13 @@ spring:
   # 数据源配置
   datasource:
     driver-class-name: com.mysql.cj.jdbc.Driver
+  ai:
+    openai:
+      api-key: ${DEEPSEEK_API_KEY}
+      base-url: https://api.deepseek.com
+      chat:
+        options:
+          model: deepseek-chat
 server:
   port: 8124
   servlet:
@@ -30,16 +37,11 @@ server:
       cookie:
         max-age: 2592000
 
-mybatis-plus:
-  configuration:
-    map-underscore-to-camel-case: false
-    # 仅在开发环境开启日志
-    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
-  global-config:
-    db-config:
-      logic-delete-field: isDelete # 全局逻辑删除的实体字段名
-      logic-delete-value: 1 # 逻辑已删除值（默认为 1）
-      logic-not-delete-value: 0 # 逻辑未删除值（默认为 0）
+# 代码生成文件临时目录
+codegen:
+  file:
+    tmp-root: D:\IDEAproject\xiaoyu_zerocode\tmp
+
 # springdoc-openapi 配置
 springdoc:
   swagger-ui:
