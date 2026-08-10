@@ -12,4 +12,5 @@ export const menuItems: MenuItem[] = [
   { key: 'templates', label: '模板市场', path: '/templates' },
   { key: 'docs', label: '文档', path: '/docs' },
   { key: 'adminUser', label: '用户管理', path: '/admin/user', role: 'admin' },
+  { key: 'adminApp', label: '应用管理', path: '/admin/app', role: 'admin' },
 ]

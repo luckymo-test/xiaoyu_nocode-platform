@@ -24,10 +24,13 @@ spring:
   ai:
     openai:
       api-key: ${DEEPSEEK_API_KEY}
-      base-url: https://api.deepseek.com
+      # 用 beta 接口以支持 8K 输出上限（非 beta 只认 4K，复杂页面会截断）
+      base-url: https://api.deepseek.com/beta
       chat:
         options:
           model: deepseek-chat
+          # 调大输出上限，避免长 HTML 被截断导致 JSON 解析失败
+          max-tokens: 8192
 server:
   port: 8124
   servlet:
@@ -37,10 +40,12 @@ server:
       cookie:
         max-age: 2592000
 
-# 代码生成文件临时目录
+# 代码生成文件临时目录与部署配置
 codegen:
   file:
     tmp-root: D:\IDEAproject\xiaoyu_zerocode\tmp
+    deploy-root: D:\IDEAproject\xiaoyu_zerocode\deploy
+    domain: http://localhost
 
 # springdoc-openapi 配置
 springdoc:
@@ -54,9 +59,4 @@ springdoc:
     - group: 'default'
       paths-to-match: '/**'
       packages-to-scan: com.mofanyi.controller
-# knife4j
-knife4j:
-  enable: true
-  setting:
-    language: zh_cn
 

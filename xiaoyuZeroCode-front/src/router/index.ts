@@ -10,6 +10,7 @@ const router = createRouter({
       path: '/',
       name: 'home',
       component: HomeView,
+      meta: { requiresAuth: true },
     },
     {
       path: '/user/login',
@@ -28,16 +29,46 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
+      path: '/app/gen/:id',
+      name: 'appGenerate',
+      component: () => import('@/views/app/AppGeneratePage.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/app/edit/:id',
+      name: 'appEdit',
+      component: () => import('@/views/app/AppEditPage.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/projects',
+      name: 'projects',
+      component: () => import('@/views/projects/MyProjectsPage.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
       path: '/admin/user',
       name: 'adminUser',
       component: () => import('@/views/admin/AdminUserPage.vue'),
       meta: { requiresAdmin: true },
     },
+    {
+      path: '/admin/app',
+      name: 'adminApp',
+      component: () => import('@/views/admin/AdminAppPage.vue'),
+      meta: { requiresAdmin: true },
+    },
   ],
 })
 
-router.beforeEach((to, _from, next) => {
+router.beforeEach(async (to, _from, next) => {
   const userStore = useUserStore()
+  const needAuth = to.meta.requiresAuth || to.meta.requiresAdmin
+
+  // 首次进入受保护页面时，登录态可能还没从后端拉取，先同步一次再判断
+  if (needAuth && !userStore.loginUser) {
+    await userStore.fetchLoginUser()
+  }
 
   if (to.meta.requiresAuth && !userStore.loginUser) {
     message.warning('请先登录')

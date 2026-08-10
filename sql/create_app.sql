@@ -20,3 +20,11 @@ create table app
     INDEX idx_appName (appName),         -- 提升基于应用名称的查询性能
     INDEX idx_userId (userId)            -- 提升基于用户 ID 的查询性能
 ) comment '应用' collate = utf8mb4_unicode_ci;
+
+-- 功能优化新增字段
+ALTER TABLE app
+    ADD COLUMN description    varchar(512) NULL COMMENT '应用描述' AFTER cover,
+    ADD COLUMN tags           varchar(512) NULL COMMENT '标签(逗号分隔)' AFTER description,
+    ADD COLUMN visibility     varchar(16)  NOT NULL DEFAULT 'public' COMMENT '可见范围: public/private' AFTER tags,
+    ADD COLUMN generateStatus varchar(16)  NOT NULL DEFAULT 'not_generated' COMMENT '生成状态: not_generated/generating/done/stopped/failed' AFTER visibility,
+    ADD COLUMN featuredStatus tinyint      NOT NULL DEFAULT 0 COMMENT '精选状态: 0未申请/1待审核/2已推荐/3已拒绝' AFTER generateStatus;

@@ -64,18 +64,7 @@
             <artifactId>hutool-all</artifactId>
             <version>5.8.38</version>
         </dependency>
-        <dependency>
-            <groupId>com.github.xiaoymin</groupId>
-            <artifactId>knife4j-openapi3-jakarta-spring-boot-starter</artifactId>
-            <version>4.5.0</version>
-            <exclusions>
-                <exclusion>
-                    <groupId>org.springdoc</groupId>
-                    <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
-                </exclusion>
-            </exclusions>
-        </dependency>
-        <!-- 手动引入与 Spring Boot 3.5 兼容的 springdoc 版本 -->
+        <!-- springdoc-openapi 提供 /v3/api-docs 与原生 swagger-ui（knife4j 4.5.0 与 2.8.x 不兼容，已移除） -->
         <dependency>
             <groupId>org.springdoc</groupId>
             <artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
