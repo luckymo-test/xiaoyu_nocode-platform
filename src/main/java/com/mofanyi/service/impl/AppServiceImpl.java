@@ -3,6 +3,7 @@ package com.mofanyi.service.impl;
 import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.util.StrUtil;
+import com.mofanyi.config.RedisChatMemoryRepository;
 import com.mofanyi.constant.UserConstant;
 import com.mofanyi.core.CodeFileWriteService;
 import com.mofanyi.entity.App;
@@ -21,6 +22,7 @@ import com.mofanyi.model.enums.CodeGenTypeEnum;
 import com.mofanyi.model.vo.AiCodeGenResultVO;
 import com.mofanyi.model.vo.AppVO;
 import com.mofanyi.service.AppService;
+import com.mofanyi.service.ChatHistoryService;
 import com.mybatisflex.core.logicdelete.LogicDeleteManager;
 import com.mybatisflex.core.paginate.Page;
 import com.mybatisflex.core.query.QueryColumn;
@@ -61,8 +63,16 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
 
     private final CodeFileWriteService codeFileWriteService;
 
-    public AppServiceImpl(CodeFileWriteService codeFileWriteService) {
+    private final ChatHistoryService chatHistoryService;
+
+    private final RedisChatMemoryRepository redisChatMemoryRepository;
+
+    public AppServiceImpl(CodeFileWriteService codeFileWriteService,
+                          ChatHistoryService chatHistoryService,
+                          RedisChatMemoryRepository redisChatMemoryRepository) {
         this.codeFileWriteService = codeFileWriteService;
+        this.chatHistoryService = chatHistoryService;
+        this.redisChatMemoryRepository = redisChatMemoryRepository;
     }
 
     @Override
@@ -145,6 +155,10 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         int rows = LogicDeleteManager.execWithoutLogicDelete(
                 () -> this.mapper.deleteByQuery(QueryWrapper.create().eq("id", id)));
         ThrowUtils.throwIf(rows == 0, ErrorCode.OPERATION_ERROR);
+        // 级联物理删除该应用的全部对话历史，彻底清除数据
+        chatHistoryService.physicalDeleteByAppId(id);
+        // 清理 Redis 中的对话记忆
+        redisChatMemoryRepository.deleteByConversationId(String.valueOf(id));
         return true;
     }
 
@@ -329,6 +343,8 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         checkAppOwnership(oldApp, loginUser);
         boolean result = this.removeById(id);
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
+        // 级联逻辑删除该应用的全部对话历史
+        chatHistoryService.deleteByAppId(id);
         return true;
     }
 
@@ -392,6 +408,8 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         ThrowUtils.throwIf(oldApp == null, ErrorCode.NOT_FOUND_ERROR);
         boolean result = this.removeById(id);
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
+        // 级联逻辑删除该应用的全部对话历史
+        chatHistoryService.deleteByAppId(id);
         return true;
     }
 

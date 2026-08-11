@@ -13,4 +13,5 @@ export const menuItems: MenuItem[] = [
   { key: 'docs', label: '文档', path: '/docs' },
   { key: 'adminUser', label: '用户管理', path: '/admin/user', role: 'admin' },
   { key: 'adminApp', label: '应用管理', path: '/admin/app', role: 'admin' },
+  { key: 'adminChat', label: '对话管理', path: '/admin/chat', role: 'admin' },
 ]

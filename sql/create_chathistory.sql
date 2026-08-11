@@ -11,6 +11,7 @@ create table chat_history
     createTime  datetime default CURRENT_TIMESTAMP not null comment '创建时间',
     updateTime  datetime default CURRENT_TIMESTAMP not null on update CURRENT_TIMESTAMP comment '更新时间',
     isDelete    tinyint  default 0                 not null comment '是否删除',
+    parentId   bigint  null comment '父消息id（用于上下文关联）',
     INDEX idx_appId (appId),                       -- 提升基于应用的查询性能
     INDEX idx_createTime (createTime),             -- 提升基于时间的查询性能
     INDEX idx_appId_createTime (appId, createTime) -- 游标查询核心索引

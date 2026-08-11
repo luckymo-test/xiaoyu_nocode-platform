@@ -55,7 +55,7 @@ public class AiCodeGeneratorFacade {
         checkGenerateParams(userMessage, appId);
         appService.updateGenerateStatus(appId, AppGenerateStatusEnum.GENERATING.getValue());
         try {
-            HtmlCodeResult result = aiCodeGeneratorService.generateHtmlCode(userMessage);
+            HtmlCodeResult result = aiCodeGeneratorService.generateHtmlCode(userMessage, appId);
             File projectDir = codeFileWriteService.saveHtmlCode(result, appId);
             appService.updateGenerateStatus(appId, AppGenerateStatusEnum.DONE.getValue());
             return toVo(projectDir, result.getHtmlCode(), null, null, result.getDescription());
@@ -76,7 +76,7 @@ public class AiCodeGeneratorFacade {
         checkGenerateParams(userMessage, appId);
         appService.updateGenerateStatus(appId, AppGenerateStatusEnum.GENERATING.getValue());
         try {
-            MultiFileCodeResult result = aiCodeGeneratorService.generateMultiFileCode(userMessage);
+            MultiFileCodeResult result = aiCodeGeneratorService.generateMultiFileCode(userMessage, appId);
             File projectDir = codeFileWriteService.saveMultiFileCode(result, appId);
             appService.updateGenerateStatus(appId, AppGenerateStatusEnum.DONE.getValue());
             return toVo(projectDir, result.getHtmlCode(), result.getCssCode(), result.getJsCode(),
@@ -99,7 +99,7 @@ public class AiCodeGeneratorFacade {
         ThrowUtils.throwIf(callback == null, ErrorCode.PARAMS_ERROR);
         appService.updateGenerateStatus(appId, AppGenerateStatusEnum.GENERATING.getValue());
         StringBuilder raw = new StringBuilder();
-        Disposable disposable = aiCodeGeneratorService.streamGenerateHtmlCode(userMessage)
+        Disposable disposable = aiCodeGeneratorService.streamGenerateHtmlCode(userMessage, appId)
                 .subscribe(
                         token -> {
                             raw.append(token);
@@ -142,7 +142,7 @@ public class AiCodeGeneratorFacade {
         ThrowUtils.throwIf(callback == null, ErrorCode.PARAMS_ERROR);
         appService.updateGenerateStatus(appId, AppGenerateStatusEnum.GENERATING.getValue());
         StringBuilder raw = new StringBuilder();
-        Disposable disposable = aiCodeGeneratorService.streamGenerateMultiFileCode(userMessage)
+        Disposable disposable = aiCodeGeneratorService.streamGenerateMultiFileCode(userMessage, appId)
                 .subscribe(
                         token -> {
                             raw.append(token);

@@ -5,6 +5,7 @@ import { message } from 'ant-design-vue'
 import { ArrowLeftOutlined, UserOutlined, RobotOutlined, DoubleRightOutlined, DoubleLeftOutlined } from '@ant-design/icons-vue'
 import { getAppVoById, getAppCode, deployApp, unDeployApp } from '@/api/appController'
 import { chat, chatMulti, stopGenerate } from '@/api/aiChatController'
+import { listChatHistory } from '@/api/chatHistoryController'
 import {
   streamGenerateHtmlProject,
   streamGenerateMultiFileProject,
@@ -48,6 +49,13 @@ const formattedCode = ref('')
 // 右侧预览面板是否展开（伸缩框）
 const previewExpanded = ref(true)
 
+// 对话历史每页条数（与后端默认一致）
+const HISTORY_PAGE_SIZE = 10
+// 游标：当前已加载消息中最老一条的 createTime / id，用于向前加载更早记录
+const historyCursor = ref<{ beforeCreateTime?: string; beforeId?: number }>({})
+const hasMoreHistory = ref(false)
+const historyLoading = ref(false)
+
 const msgListRef = ref<HTMLElement | null>(null)
 let connection: SseConnection | null = null
 
@@ -62,8 +70,16 @@ const loadApp = async () => {
     const res = await getAppVoById({ id: appId.value as unknown as number })
     if (res.data.code === 0 && res.data.data) {
       app.value = res.data.data
-      // 先尝试读取已生成的代码；未生成时才自动触发 AI 生成
-      await tryLoadExistingCode()
+      const isOwner = app.value.userId === userStore.loginUser?.id
+      const records = await loadChatHistory()
+      // 网站展示：至少 2 条对话记录（即至少完成过一轮对话）才展示对应的网站
+      if (records.length >= 2) {
+        await tryLoadWebsite()
+      }
+      // 自动发送初始消息：仅自己的应用且没有对话历史时，将 initPrompt 作为第一条消息触发对话
+      if (isOwner && records.length === 0 && app.value?.initPrompt) {
+        sendMessage(app.value.initPrompt, true)
+      }
     } else {
       message.error(res.data.message || '加载应用失败')
     }
@@ -74,25 +90,83 @@ const loadApp = async () => {
   }
 }
 
-const tryLoadExistingCode = async () => {
+// 加载最新一页对话历史（后端按创建时间正序返回），作为已加载列表的初始数据
+const loadChatHistory = async (): Promise<API.ChatHistory[]> => {
+  try {
+    const res = await listChatHistory({
+      appId: appId.value as unknown as number,
+      pageSize: HISTORY_PAGE_SIZE,
+    })
+    if (res.data.code === 0 && res.data.data) {
+      const records = res.data.data
+      messages.value = records.map(toChatMessage)
+      updateCursor(records)
+      hasMoreHistory.value = records.length === HISTORY_PAGE_SIZE
+      return records
+    }
+    // 非应用创建者无权查看历史等场景，按无历史处理
+    hasMoreHistory.value = false
+  } catch {
+    hasMoreHistory.value = false
+  }
+  return []
+}
+
+// 加载更早一页历史消息，拼接到已加载列表之前
+const loadMoreHistory = async () => {
+  if (historyLoading.value || !hasMoreHistory.value) return
+  historyLoading.value = true
+  try {
+    const res = await listChatHistory({
+      appId: appId.value as unknown as number,
+      pageSize: HISTORY_PAGE_SIZE,
+      beforeCreateTime: historyCursor.value.beforeCreateTime,
+      beforeId: historyCursor.value.beforeId,
+    })
+    if (res.data.code === 0 && res.data.data) {
+      const older = res.data.data
+      messages.value = [...older.map(toChatMessage), ...messages.value]
+      updateCursor(older)
+      hasMoreHistory.value = older.length === HISTORY_PAGE_SIZE
+    } else {
+      hasMoreHistory.value = false
+    }
+  } finally {
+    historyLoading.value = false
+  }
+}
+
+// 游标取已加载消息中最老一条（列表升序，最后一条最老）
+const updateCursor = (records: API.ChatHistory[]) => {
+  const oldest = records[records.length - 1]
+  if (oldest) {
+    historyCursor.value = {
+      beforeCreateTime: oldest.createTime,
+      beforeId: oldest.id,
+    }
+  }
+}
+
+const toChatMessage = (item: API.ChatHistory): ChatMessage => ({
+  role: item.messageType === 'user' ? 'user' : 'ai',
+  content: item.message ?? '',
+  status: item.messageType === 'error' ? 'error' : 'done',
+})
+
+// 加载已生成的代码并展示对应的网站
+const tryLoadWebsite = async () => {
   try {
     const res = await getAppCode({ id: appId.value as unknown as number })
     if (res.data.code === 0 && res.data.data) {
       const result = res.data.data
-      messages.value.push({ role: 'user', content: app.value?.initPrompt || '查看已生成的应用' })
-      messages.value.push({ role: 'ai', content: buildMarkdownContent(result), status: 'done' })
       previewDoc.value = buildPreviewDoc(result)
       formattedCode.value = buildFormattedCode(result)
-      // 已生成代码：可切到网页预览
+      // 已有生成结果：允许切换预览，并直接展示网站
       generationDone.value = true
-      return
+      previewMode.value = 'web'
     }
   } catch {
-    // 读取失败时回退到自动生成
-  }
-  // 无已生成代码，自动触发 AI 生成
-  if (app.value?.initPrompt) {
-    sendMessage(app.value.initPrompt, true)
+    // 读取失败不阻塞页面
   }
 }
 
@@ -482,6 +556,11 @@ onUnmounted(() => {
       <div class="chat-panel">
         <div ref="msgListRef" class="msg-list">
           <a-spin v-if="loading" class="msg-loading" />
+          <div v-if="hasMoreHistory" class="load-more-bar">
+            <a-button type="link" size="small" :loading="historyLoading" @click="loadMoreHistory">
+              加载更多
+            </a-button>
+          </div>
           <div
             v-for="(msg, index) in messages"
             :key="index"
@@ -644,6 +723,12 @@ onUnmounted(() => {
 
 .msg-loading {
   margin: 24px auto;
+}
+
+.load-more-bar {
+  display: flex;
+  justify-content: center;
+  flex-shrink: 0;
 }
 
 .msg-row {

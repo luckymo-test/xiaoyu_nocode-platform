@@ -4,25 +4,26 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="86cc827d-036c-42de-9fa4-dc121fb9841a" name="Changes" comment="后端ai生成应用模块完成">
+    <list default="true" id="86cc827d-036c-42de-9fa4-dc121fb9841a" name="Changes" comment="前端后端ai生成应用模块完善">
+      <change afterPath="$PROJECT_DIR$/src/main/resources/doc/chat-memory.adoc" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/dataSources.local.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/dataSources.local.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/dataSources/8d7a76d3-2642-4178-b826-55c8e06083d6.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/dataSources/8d7a76d3-2642-4178-b826-55c8e06083d6.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/pom.xml" beforeDir="false" afterPath="$PROJECT_DIR$/pom.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/sql/create_app.sql" beforeDir="false" afterPath="$PROJECT_DIR$/sql/create_app.sql" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/development-notes.md" beforeDir="false" afterPath="$PROJECT_DIR$/development-notes.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/sql/create_chathistory.sql" beforeDir="false" afterPath="$PROJECT_DIR$/sql/create_chathistory.sql" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/mofanyi/ai/AiCodeGeneratorService.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/mofanyi/ai/AiCodeGeneratorService.java" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/java/com/mofanyi/ai/AiCodeGeneratorServiceImpl.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/mofanyi/ai/AiCodeGeneratorServiceImpl.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/mofanyi/ai/AiServiceFactory.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/mofanyi/ai/AiServiceFactory.java" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/java/com/mofanyi/controller/AiChatController.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/mofanyi/controller/AiChatController.java" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/java/com/mofanyi/core/AiCodeGeneratorFacade.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/mofanyi/core/AiCodeGeneratorFacade.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/mofanyi/core/CodeFileWriteService.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/mofanyi/core/CodeFileWriteService.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/java/com/mofanyi/core/CodeParser.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/mofanyi/core/CodeParser.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/resources/application.yml" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/resources/application.yml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/xiaoyuZeroCode-front/package-lock.json" beforeDir="false" afterPath="$PROJECT_DIR$/xiaoyuZeroCode-front/package-lock.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/xiaoyuZeroCode-front/package.json" beforeDir="false" afterPath="$PROJECT_DIR$/xiaoyuZeroCode-front/package.json" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/mofanyi/generator/MyBatisCodeGenerator.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/mofanyi/generator/MyBatisCodeGenerator.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/java/com/mofanyi/service/impl/AppServiceImpl.java" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/java/com/mofanyi/service/impl/AppServiceImpl.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/test/java/com/mofanyi/ai/AiCodeGeneratorServiceImplTest.java" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/xiaoyuZeroCode-front/src/api/index.ts" beforeDir="false" afterPath="$PROJECT_DIR$/xiaoyuZeroCode-front/src/api/index.ts" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/xiaoyuZeroCode-front/src/api/typings.d.ts" beforeDir="false" afterPath="$PROJECT_DIR$/xiaoyuZeroCode-front/src/api/typings.d.ts" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/xiaoyuZeroCode-front/src/config/menu.ts" beforeDir="false" afterPath="$PROJECT_DIR$/xiaoyuZeroCode-front/src/config/menu.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/xiaoyuZeroCode-front/src/request.ts" beforeDir="false" afterPath="$PROJECT_DIR$/xiaoyuZeroCode-front/src/request.ts" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/xiaoyuZeroCode-front/src/router/index.ts" beforeDir="false" afterPath="$PROJECT_DIR$/xiaoyuZeroCode-front/src/router/index.ts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/xiaoyuZeroCode-front/src/views/HomeView.vue" beforeDir="false" afterPath="$PROJECT_DIR$/xiaoyuZeroCode-front/src/views/HomeView.vue" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/xiaoyuZeroCode-front/src/views/app/AppGeneratePage.vue" beforeDir="false" afterPath="$PROJECT_DIR$/xiaoyuZeroCode-front/src/views/app/AppGeneratePage.vue" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/xiaoyuZeroCode-front/tsconfig.app.tsbuildinfo" beforeDir="false" afterPath="$PROJECT_DIR$/xiaoyuZeroCode-front/tsconfig.app.tsbuildinfo" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -184,7 +185,8 @@
       <workItem from="1785674594570" duration="2014000" />
       <workItem from="1785720168562" duration="55588000" />
       <workItem from="1786195469380" duration="14721000" />
-      <workItem from="1786342409903" duration="760000" />
+      <workItem from="1786342409903" duration="10026000" />
+      <workItem from="1786412175191" duration="1303000" />
     </task>
     <task id="LOCAL-00001" summary="初始化项目">
       <option name="closed" value="true" />
@@ -210,7 +212,15 @@
       <option name="project" value="LOCAL" />
       <updated>1786009542165</updated>
     </task>
-    <option name="localTasksCounter" value="4" />
+    <task id="LOCAL-00004" summary="前端后端ai生成应用模块完善">
+      <option name="closed" value="true" />
+      <created>1786347227280</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1786347227280</updated>
+    </task>
+    <option name="localTasksCounter" value="5" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -231,6 +241,7 @@
     <MESSAGE value="初始化项目" />
     <MESSAGE value="用户模块完成" />
     <MESSAGE value="后端ai生成应用模块完成" />
-    <option name="LAST_COMMIT_MESSAGE" value="后端ai生成应用模块完成" />
+    <MESSAGE value="前端后端ai生成应用模块完善" />
+    <option name="LAST_COMMIT_MESSAGE" value="前端后端ai生成应用模块完善" />
   </component>
 </project>

@@ -1,5 +1,6 @@
 package com.mofanyi.ai;
 
+import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
@@ -26,8 +27,9 @@ public class AiServiceFactory {
     public AiCodeGeneratorService aiCodeGeneratorService(@Qualifier("openAiChatModel") ChatModel chatModel,
                                                           String singleHtmlPrompt,
                                                           String multiFilePrompt,
-                                                          CodeParser codeParser) {
-        return new AiCodeGeneratorServiceImpl(chatModel, singleHtmlPrompt, multiFilePrompt, codeParser);
+                                                          CodeParser codeParser,
+                                                          ChatMemory chatMemory) {
+        return new AiCodeGeneratorServiceImpl(chatModel, singleHtmlPrompt, multiFilePrompt, codeParser, chatMemory);
     }
 
     private String loadPrompt(String path) {

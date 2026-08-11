@@ -58,6 +58,12 @@ const router = createRouter({
       component: () => import('@/views/admin/AdminAppPage.vue'),
       meta: { requiresAdmin: true },
     },
+    {
+      path: '/admin/chat',
+      name: 'adminChat',
+      component: () => import('@/views/admin/AdminChatPage.vue'),
+      meta: { requiresAdmin: true },
+    },
   ],
 })
 
