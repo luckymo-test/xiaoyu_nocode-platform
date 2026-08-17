@@ -124,6 +124,16 @@ public interface AppService extends IService<App> {
     String deployApp(long appId, User loginUser);
 
     /**
+     * 流式部署应用（vue 模式构建 + 自动修复），进度通过回调推送。
+     *
+     * @param appId     应用 id
+     * @param loginUser 登录用户
+     * @param progress  进度回调（文本标记），可为 null
+     * @return 部署后的访问 URL
+     */
+    String deployAppStream(long appId, User loginUser, java.util.function.Consumer<String> progress);
+
+    /**
      * 恢复自己误删的应用
      *
      * @param id        应用 id
@@ -227,6 +237,14 @@ public interface AppService extends IService<App> {
      * @return 生成结果 VO，未生成返回 null
      */
     AiCodeGenResultVO getAppCode(long id);
+
+    /**
+     * 获取 vue 工程构建产物的自包含预览 HTML（dist 不存在则先构建，含自动修复）。
+     *
+     * @param id 应用 id
+     * @return 自包含 HTML；非 vue 应用或失败抛异常
+     */
+    String getVuePreview(long id);
 
     /**
      * 转换为应用视图对象

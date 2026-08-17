@@ -28,7 +28,7 @@ spring:
       base-url: https://api.deepseek.com/beta
       chat:
         options:
-          model: deepseek-chat
+          model: deepseek-v4-flash
           # 调大输出上限，避免长 HTML 被截断导致 JSON 解析失败
           max-tokens: 8192
 server:
@@ -43,9 +43,34 @@ server:
 # 代码生成文件临时目录与部署配置
 codegen:
   file:
-    tmp-root: D:\IDEAproject\xiaoyu_zerocode\tmp
-    deploy-root: D:\IDEAproject\xiaoyu_zerocode\deploy
-    domain: http://localhost
+    tmp-root: ${CODEGEN_TMP_ROOT:D:\IDEAproject\xiaoyu_zerocode\tmp}
+    deploy-root: ${CODEGEN_DEPLOY_ROOT:D:\IDEAproject\xiaoyu_zerocode\deploy}
+    domain: ${CODEGEN_DOMAIN:http://localhost}
+
+# 封面截图配置（默认值，实际按环境在 profile 文件中覆盖）
+screenshot:
+  browser: edge
+  driver-path:
+  headless: true
+  width: 1440
+  height: 900
+  wait-millis: 5000
+  original-folder: app-cover/original
+  compressed-folder: app-cover/compressed
+  compressed-width: 480
+# 封面截图线程池默认参数
+thread-pool:
+  screenshot:
+    core-pool-size: 1
+    max-pool-size: 2
+    keep-alive-seconds: 60
+    queue-capacity: 50
+    thread-name-prefix: "screenshot-"
+
+# Pexels 图库 API 默认配置（key 在 profile 文件中按环境配置）
+pexels:
+  api-key:
+  page-size: 5
 
 # springdoc-openapi 配置
 springdoc:

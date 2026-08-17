@@ -27,6 +27,11 @@ public class AppVO implements Serializable {
     private String cover;
 
     /**
+     * 压缩图（封面缩略图 URL）
+     */
+    private String compressPictures;
+
+    /**
      * 应用描述
      */
     private String description;

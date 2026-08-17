@@ -5,12 +5,14 @@ declare namespace API {
     cssCode?: string;
     jsCode?: string;
     description?: string;
+    files?: VueFileResult[];
   };
 
   type App = {
     id?: number;
     appName?: string;
     cover?: string;
+    compressPictures?: string;
     description?: string;
     tags?: string;
     visibility?: string;
@@ -81,6 +83,7 @@ declare namespace API {
     id?: number;
     appName?: string;
     cover?: string;
+    compressPictures?: string;
     description?: string;
     tags?: string;
     visibility?: string;
@@ -237,12 +240,26 @@ declare namespace API {
     message?: string;
   };
 
+  type chatVueParams = {
+    appId: number;
+    message?: string;
+  };
+
+  type chatVueStreamParams = {
+    appId: number;
+    message?: string;
+  };
+
   type DeleteBatchRequest = {
     ids?: number[];
   };
 
   type DeleteRequest = {
     id?: number;
+  };
+
+  type deployAppStreamParams = {
+    appId: number;
   };
 
   type getAppByIdParams = {
@@ -262,6 +279,10 @@ declare namespace API {
   };
 
   type getUserVOByIdParams = {
+    id: number;
+  };
+
+  type getVuePreviewParams = {
     id: number;
   };
 
@@ -393,5 +414,10 @@ declare namespace API {
     userProfile?: string;
     userRole?: string;
     createTime?: string;
+  };
+
+  type VueFileResult = {
+    path?: string;
+    content?: string;
   };
 }

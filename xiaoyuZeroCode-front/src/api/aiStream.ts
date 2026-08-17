@@ -41,3 +41,23 @@ export function streamGenerateMultiFileProject(
     callbacks,
   )
 }
+
+/**
+ * 流式生成 Vue3 工程（agent 逐文件生成）
+ * 对应后端 GET /ai/chat/vue/stream
+ * agent_progress 事件携带 "path:size" 文件进度；done 携带最终 VO（含 files）
+ */
+export function streamGenerateVueProject(
+  appId: number | string,
+  message: string | undefined,
+  callbacks: SseCallbacks,
+): SseConnection {
+  return createSseConnection(
+    '/ai/chat/vue/stream',
+    {
+      appId,
+      message: message ?? '你好，请简单介绍一下你自己',
+    },
+    callbacks,
+  )
+}

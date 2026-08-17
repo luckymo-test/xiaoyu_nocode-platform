@@ -6,12 +6,15 @@ import cn.hutool.core.util.StrUtil;
 import com.mofanyi.config.RedisChatMemoryRepository;
 import com.mofanyi.constant.UserConstant;
 import com.mofanyi.core.CodeFileWriteService;
+import com.mofanyi.core.CoverImageService;
+import com.mofanyi.core.VueBuildService;
 import com.mofanyi.entity.App;
 import com.mofanyi.entity.User;
 import com.mofanyi.exception.BusinessException;
 import com.mofanyi.exception.ErrorCode;
 import com.mofanyi.exception.ThrowUtils;
 import com.mofanyi.mapper.AppMapper;
+import com.mofanyi.mapper.AppImageMapper;
 import com.mofanyi.model.dto.app.AppAddRequest;
 import com.mofanyi.model.dto.app.AppQueryRequest;
 import com.mofanyi.model.dto.app.AppUpdateRequest;
@@ -67,16 +70,41 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
 
     private final RedisChatMemoryRepository redisChatMemoryRepository;
 
+    private final VueBuildService vueBuildService;
+
+    private final CoverImageService coverImageService;
+
+    private final AppImageMapper appImageMapper;
+
     public AppServiceImpl(CodeFileWriteService codeFileWriteService,
                           ChatHistoryService chatHistoryService,
-                          RedisChatMemoryRepository redisChatMemoryRepository) {
+                          RedisChatMemoryRepository redisChatMemoryRepository,
+                          VueBuildService vueBuildService,
+                          CoverImageService coverImageService,
+                          AppImageMapper appImageMapper) {
         this.codeFileWriteService = codeFileWriteService;
         this.chatHistoryService = chatHistoryService;
         this.redisChatMemoryRepository = redisChatMemoryRepository;
+        this.vueBuildService = vueBuildService;
+        this.coverImageService = coverImageService;
+        this.appImageMapper = appImageMapper;
     }
 
     @Override
     public String deployApp(long appId, User loginUser) {
+        return doDeploy(appId, loginUser, null);
+    }
+
+    @Override
+    public String deployAppStream(long appId, User loginUser, java.util.function.Consumer<String> progress) {
+        return doDeploy(appId, loginUser, progress);
+    }
+
+    /**
+     * 部署应用：vue 模式先构建（含自动修复）再拷 dist，其他模式整目录拷贝。
+     * progress 为流式部署的进度回调，可为 null（普通部署）。
+     */
+    private String doDeploy(long appId, User loginUser, java.util.function.Consumer<String> progress) {
         ThrowUtils.throwIf(appId <= 0, ErrorCode.PARAMS_ERROR);
         ThrowUtils.throwIf(loginUser == null || loginUser.getId() == null, ErrorCode.NOT_LOGIN_ERROR);
         App app = this.getById(appId);
@@ -90,13 +118,34 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
             update.setDeployKey(deployKey);
             ThrowUtils.throwIf(!this.updateById(update), ErrorCode.OPERATION_ERROR);
         }
-        codeFileWriteService.deployApp(app.getCodeGenType(), app.getId(), deployKey);
+        if (CodeGenTypeEnum.VUE.getValue().equals(app.getCodeGenType())) {
+            // vue 模式：构建 dist（失败自动修复）→ 拷 dist 到部署目录
+            java.io.File distDir = vueBuildService.build(app.getId(),
+                    text -> { if (progress != null) progress.accept(text); });
+            java.io.File target = java.nio.file.Paths.get(deployRoot(), deployKey).toFile();
+            if (!cn.hutool.core.io.FileUtil.exist(target)) {
+                cn.hutool.core.io.FileUtil.mkdir(target);
+            }
+            cn.hutool.core.io.FileUtil.copyContent(distDir, target, true);
+        } else {
+            codeFileWriteService.deployApp(app.getCodeGenType(), app.getId(), deployKey);
+        }
         // 更新部署时间
         App timeUpdate = new App();
         timeUpdate.setId(app.getId());
         timeUpdate.setDeployedTime(LocalDateTime.now());
         this.updateById(timeUpdate);
-        return codeFileWriteService.getDomain() + "/" + deployKey;
+        String deployUrl = codeFileWriteService.getDomain() + "/" + deployKey;
+        // 异步生成封面截图：失败仅记日志，不影响部署
+        coverImageService.generateCoverAsync(app.getId(), deployUrl);
+        return deployUrl;
+    }
+
+    /**
+     * 部署目录根路径（复用 CodeFileWriteService 的 deployRoot 配置）
+     */
+    private String deployRoot() {
+        return codeFileWriteService.getDeployRoot();
     }
 
     @Override
@@ -157,6 +206,8 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         ThrowUtils.throwIf(rows == 0, ErrorCode.OPERATION_ERROR);
         // 级联物理删除该应用的全部对话历史，彻底清除数据
         chatHistoryService.physicalDeleteByAppId(id);
+        // 级联物理删除该应用的嵌入图片记录
+        appImageMapper.deleteByAppId(id);
         // 清理 Redis 中的对话记忆
         redisChatMemoryRepository.deleteByConversationId(String.valueOf(id));
         return true;
@@ -202,6 +253,28 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
     }
 
     @Override
+    public String getVuePreview(long id) {
+        ThrowUtils.throwIf(id <= 0, ErrorCode.PARAMS_ERROR);
+        App app = this.getById(id);
+        ThrowUtils.throwIf(app == null, ErrorCode.NOT_FOUND_ERROR);
+        ThrowUtils.throwIf(!CodeGenTypeEnum.VUE.getValue().equals(app.getCodeGenType()),
+                ErrorCode.PARAMS_ERROR, "非 Vue 工程无法预览构建产物");
+        String html = vueBuildService.readVueDist(app.getId());
+        if (html == null) {
+            // dist 未构建：同步构建（含自动修复）后再读
+            synchronized (String.valueOf(app.getId()).intern()) {
+                html = vueBuildService.readVueDist(app.getId());
+                if (html == null) {
+                    vueBuildService.build(app.getId(), null);
+                    html = vueBuildService.readVueDist(app.getId());
+                }
+            }
+        }
+        ThrowUtils.throwIf(html == null, ErrorCode.OPERATION_ERROR, "Vue 工程构建失败，无法预览");
+        return html;
+    }
+
+    @Override
     public void updateGenerateStatus(long id, String status) {
         ThrowUtils.throwIf(id <= 0, ErrorCode.PARAMS_ERROR);
         ThrowUtils.throwIf(StrUtil.isBlank(status), ErrorCode.PARAMS_ERROR);
@@ -223,12 +296,9 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         if (StrUtil.isNotBlank(app.getDeployKey())) {
             // 删除部署目录
             codeFileWriteService.deleteDeployDir(app.getDeployKey());
-            // 清空部署标识与部署时间
-            App update = new App();
-            update.setId(id);
-            update.setDeployKey(null);
-            update.setDeployedTime(null);
-            ThrowUtils.throwIf(!this.updateById(update), ErrorCode.OPERATION_ERROR);
+            // 清空部署标识与部署时间（原生 SQL，绕过 updateById 忽略 null 字段的限制）
+            int rows = this.mapper.clearDeploy(app.getId());
+            ThrowUtils.throwIf(rows <= 0, ErrorCode.OPERATION_ERROR);
         }
         return true;
     }
@@ -343,8 +413,9 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         checkAppOwnership(oldApp, loginUser);
         boolean result = this.removeById(id);
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
-        // 级联逻辑删除该应用的全部对话历史
+        // 级联逻辑删除该应用的全部对话历史与嵌入图片
         chatHistoryService.deleteByAppId(id);
+        appImageMapper.deleteByAppId(id);
         return true;
     }
 
@@ -369,10 +440,8 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         ThrowUtils.throwIf(loginUser == null || loginUser.getId() == null, ErrorCode.NOT_LOGIN_ERROR);
         checkPageSize(appQueryRequest);
         QueryWrapper queryWrapper = getQueryWrapper(appQueryRequest);
-        // 普通用户只看公开应用；管理员可看全部
-        if (!isAdmin(loginUser)) {
-            queryWrapper.eq("visibility", AppVisibilityEnum.PUBLIC.getValue());
-        }
+        // 公开应用栏对所有用户（含管理员）只展示公开应用，私有应用不在此栏目显示
+        queryWrapper.eq("visibility", AppVisibilityEnum.PUBLIC.getValue());
         return pageAppVO(appQueryRequest, queryWrapper);
     }
 
@@ -408,8 +477,9 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         ThrowUtils.throwIf(oldApp == null, ErrorCode.NOT_FOUND_ERROR);
         boolean result = this.removeById(id);
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
-        // 级联逻辑删除该应用的全部对话历史
+        // 级联逻辑删除该应用的全部对话历史与嵌入图片
         chatHistoryService.deleteByAppId(id);
+        appImageMapper.deleteByAppId(id);
         return true;
     }
 

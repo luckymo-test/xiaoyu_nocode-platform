@@ -152,6 +152,12 @@
             <artifactId>HikariCP</artifactId>
         </dependency>
 
+        <!-- Selenium 浏览器自动化：封面截图（Selenium Manager 自动管理 driver） -->
+        <dependency>
+            <groupId>org.seleniumhq.selenium</groupId>
+            <artifactId>selenium-java</artifactId>
+            <version>4.27.0</version>
+        </dependency>
 
     </dependencies>
 

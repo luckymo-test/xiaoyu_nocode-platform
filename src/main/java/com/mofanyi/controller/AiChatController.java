@@ -82,7 +82,7 @@ public class AiChatController {
         ChatHistory userMsg = saveUserMessage(appId, message, request);
         SseEmitter emitter = new SseEmitter(300_000L);
         aiCodeGeneratorFacade.streamGenerateHtmlProject(message, appId, new StreamCallback(
-                token -> send(emitter, "token", token),
+                token -> send(emitter, "agent_progress", token),
                 vo -> {
                     send(emitter, "done", vo);
                     emitter.complete();
@@ -103,7 +103,47 @@ public class AiChatController {
         ChatHistory userMsg = saveUserMessage(appId, message, request);
         SseEmitter emitter = new SseEmitter(300_000L);
         aiCodeGeneratorFacade.streamGenerateMultiFileProject(message, appId, new StreamCallback(
-                token -> send(emitter, "token", token),
+                token -> send(emitter, "agent_progress", token),
+                vo -> {
+                    send(emitter, "done", vo);
+                    emitter.complete();
+                    saveAssistantMessage(appId, userMsg, vo);
+                },
+                error -> {
+                    send(emitter, "error", error.getMessage());
+                    emitter.complete();
+                    saveErrorMessage(appId, userMsg, error);
+                }));
+        return emitter;
+    }
+
+    @GetMapping("/chat/vue")
+    public AiCodeGenResultVO chatVue(@RequestParam Long appId,
+                                     @RequestParam(defaultValue = "你好，请简单介绍一下你自己") String message,
+                                     HttpServletRequest request) {
+        ChatHistory userMsg = saveUserMessage(appId, message, request);
+        try {
+            AiCodeGenResultVO vo = aiCodeGeneratorFacade.generateVueProject(message, appId);
+            saveAssistantMessage(appId, userMsg, vo);
+            return vo;
+        } catch (RuntimeException e) {
+            saveErrorMessage(appId, userMsg, e);
+            throw e;
+        }
+    }
+
+    /**
+     * 流式生成 Vue3 工程：SSE 推送 agent_progress（每个文件写入）与 done（最终 VO）。
+     * onToken 收到的是 "path:size" 格式的文件进度文本。
+     */
+    @GetMapping(value = "/chat/vue/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter chatVueStream(@RequestParam Long appId,
+                                    @RequestParam(defaultValue = "你好，请简单介绍一下你自己") String message,
+                                    HttpServletRequest request) {
+        ChatHistory userMsg = saveUserMessage(appId, message, request);
+        SseEmitter emitter = new SseEmitter(300_000L);
+        aiCodeGeneratorFacade.streamGenerateVueProject(message, appId, new StreamCallback(
+                token -> send(emitter, "agent_progress", token),
                 vo -> {
                     send(emitter, "done", vo);
                     emitter.complete();
@@ -174,12 +214,22 @@ public class AiChatController {
     }
 
     /**
-     * 将生成结果拼成 Markdown（description + 代码块），与前端展示格式保持一致
+     * 将生成结果拼成 Markdown（description + 代码块），与前端展示格式保持一致。
+     * vue 模式输出 description + 文件清单（每文件代码块）。
      */
     private String buildAssistantContent(AiCodeGenResultVO vo) {
         StringBuilder sb = new StringBuilder();
         if (StrUtil.isNotBlank(vo.getDescription())) {
             sb.append(vo.getDescription());
+        }
+        if (vo.getFiles() != null && !vo.getFiles().isEmpty()) {
+            for (com.mofanyi.ai.model.VueFileResult f : vo.getFiles()) {
+                if (StrUtil.isNotBlank(f.getPath()) && f.getContent() != null) {
+                    sb.append("\n\n#### ").append(f.getPath()).append("\n```js\n")
+                            .append(f.getContent()).append("\n```");
+                }
+            }
+            return sb.toString();
         }
         if (StrUtil.isNotBlank(vo.getHtmlCode())) {
             sb.append("\n\n#### index.html\n```html\n").append(vo.getHtmlCode()).append("\n```");

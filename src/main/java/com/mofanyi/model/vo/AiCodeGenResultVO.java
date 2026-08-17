@@ -1,8 +1,10 @@
 package com.mofanyi.model.vo;
 
+import com.mofanyi.ai.model.VueFileResult;
 import lombok.Data;
 
 import java.io.Serializable;
+import java.util.List;
 
 /**
  * AI 代码生成结果视图对象
@@ -34,6 +36,11 @@ public class AiCodeGenResultVO implements Serializable {
      * 需求理解与实现方案描述
      */
     private String description;
+
+    /**
+     * Vue3 工程文件清单（vue 模式用；其他模式为空）
+     */
+    private List<VueFileResult> files;
 
     private static final long serialVersionUID = 1L;
 }

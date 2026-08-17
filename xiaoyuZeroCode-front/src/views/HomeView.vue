@@ -28,6 +28,7 @@ const generateModes: GenerateMode[] = [
   { label: '多文件生成', codeGenType: 'multi_file', stream: false },
   { label: '单文件流式生成', codeGenType: 'html', stream: true },
   { label: '多文件流式生成', codeGenType: 'multi_file', stream: true },
+  { label: 'Vue3 工程生成', codeGenType: 'vue', stream: true },
 ]
 
 const selectedModeIndex = ref(2)
@@ -326,11 +327,13 @@ const columns = [
           @click="handleOpenApp(app.id)"
         >
           <template #cover>
-            <img
-              v-if="app.cover"
-              :src="app.cover"
+            <a-image
+              v-if="app.cover || app.compressPictures"
+              :src="app.compressPictures || app.cover"
+              :preview="{ src: app.cover }"
               alt="cover"
               class="featured-cover"
+              @click.stop
             />
             <div v-else class="featured-cover featured-cover-placeholder">
               {{ app.appName?.charAt(0) || 'A' }}
@@ -398,11 +401,13 @@ const columns = [
           @click="handleOpenApp(app.id)"
         >
           <template #cover>
-            <img
-              v-if="app.cover"
-              :src="app.cover"
+            <a-image
+              v-if="app.cover || app.compressPictures"
+              :src="app.compressPictures || app.cover"
+              :preview="{ src: app.cover }"
               alt="cover"
               class="featured-cover"
+              @click.stop
             />
             <div v-else class="featured-cover featured-cover-placeholder">
               {{ app.appName?.charAt(0) || 'A' }}
@@ -511,6 +516,12 @@ const columns = [
 }
 
 .featured-cover {
+  height: 140px;
+  width: 100%;
+  object-fit: cover;
+}
+
+.featured-cover :deep(.ant-image-img) {
   height: 140px;
   width: 100%;
   object-fit: cover;

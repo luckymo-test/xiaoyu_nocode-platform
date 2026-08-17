@@ -1,12 +1,8 @@
 package com.mofanyi.ai;
 
-import org.springframework.ai.chat.memory.ChatMemory;
-import org.springframework.ai.chat.model.ChatModel;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.ClassPathResource;
-import com.mofanyi.core.CodeParser;
 
 import java.nio.charset.StandardCharsets;
 
@@ -24,12 +20,13 @@ public class AiServiceFactory {
     }
 
     @Bean
-    public AiCodeGeneratorService aiCodeGeneratorService(@Qualifier("openAiChatModel") ChatModel chatModel,
-                                                          String singleHtmlPrompt,
-                                                          String multiFilePrompt,
-                                                          CodeParser codeParser,
-                                                          ChatMemory chatMemory) {
-        return new AiCodeGeneratorServiceImpl(chatModel, singleHtmlPrompt, multiFilePrompt, codeParser, chatMemory);
+    public String vuePrompt() {
+        return loadPrompt("prompt/codegen_vue_prompt.txt");
+    }
+
+    @Bean
+    public String vueFixPrompt() {
+        return loadPrompt("prompt/codegen_vue_fix_prompt.txt");
     }
 
     private String loadPrompt(String path) {

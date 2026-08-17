@@ -28,3 +28,21 @@ ALTER TABLE app
     ADD COLUMN visibility     varchar(16)  NOT NULL DEFAULT 'public' COMMENT '可见范围: public/private' AFTER tags,
     ADD COLUMN generateStatus varchar(16)  NOT NULL DEFAULT 'not_generated' COMMENT '生成状态: not_generated/generating/done/stopped/failed' AFTER visibility,
     ADD COLUMN featuredStatus tinyint      NOT NULL DEFAULT 0 COMMENT '精选状态: 0未申请/1待审核/2已推荐/3已拒绝' AFTER generateStatus;
+
+ALTER TABLE app
+    ADD COLUMN compressPictures   varchar(512) NULL COMMENT '压缩图' ;
+
+-- 应用嵌入图片表：记录生成网页时嵌入的真实图片（1:N，一个应用可有多张图）
+create table if not exists app_image
+(
+    id         bigint auto_increment comment 'id' primary key,
+    appId      bigint       not null comment '应用id',
+    imageUrl   varchar(512) not null comment '图片 COS URL',
+    imageType  varchar(32)  null comment '用途: main/embed',
+    sortOrder  int          default 0 null comment '排序',
+    createTime datetime     default CURRENT_TIMESTAMP null comment '创建时间',
+    updateTime datetime     default CURRENT_TIMESTAMP on update CURRENT_TIMESTAMP null comment '更新时间',
+    isDelete   tinyint      default 0 not null comment '是否删除',
+    INDEX idx_appId (appId)
+) comment '应用嵌入图片' collate = utf8mb4_unicode_ci;
+

@@ -70,6 +70,40 @@ export async function chatStream(
   });
 }
 
+/** 此处后端没有提供注释 GET /ai/chat/vue */
+export async function chatVue(
+  // 叠加生成的Param类型 (非body参数swagger默认没有生成对象)
+  params: API.chatVueParams,
+  options?: { [key: string]: any }
+) {
+  return request<API.AiCodeGenResultVO>("/ai/chat/vue", {
+    method: "GET",
+    params: {
+      // message has a default value: 你好，请简单介绍一下你自己
+      message: "你好，请简单介绍一下你自己",
+      ...params,
+    },
+    ...(options || {}),
+  });
+}
+
+/** 此处后端没有提供注释 GET /ai/chat/vue/stream */
+export async function chatVueStream(
+  // 叠加生成的Param类型 (非body参数swagger默认没有生成对象)
+  params: API.chatVueStreamParams,
+  options?: { [key: string]: any }
+) {
+  return request<API.SseEmitter>("/ai/chat/vue/stream", {
+    method: "GET",
+    params: {
+      // message has a default value: 你好，请简单介绍一下你自己
+      message: "你好，请简单介绍一下你自己",
+      ...params,
+    },
+    ...(options || {}),
+  });
+}
+
 /** 此处后端没有提供注释 POST /ai/stop */
 export async function stopGenerate(
   // 叠加生成的Param类型 (非body参数swagger默认没有生成对象)

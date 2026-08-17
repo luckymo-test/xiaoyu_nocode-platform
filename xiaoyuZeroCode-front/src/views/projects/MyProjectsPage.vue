@@ -263,7 +263,10 @@ const handleRecyclePageChange = (page: number) => {
 }
 
 const codeGenTypeText = (type?: string) =>
-  type === 'multi_file' ? '多文件' : '单文件'
+  type === 'multi_file' ? '多文件' : type === 'vue' ? 'Vue3 工程' : '单文件'
+
+const codeGenTypeColor = (type?: string) =>
+  type === 'multi_file' ? 'purple' : type === 'vue' ? 'green' : 'blue'
 
 const handleTabChange = (key: string) => {
   if (key === 'recycle') {
@@ -371,7 +374,7 @@ const recycleColumns = [
           >
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'codeGenType'">
-                <a-tag :color="record.codeGenType === 'multi_file' ? 'purple' : 'blue'">
+                <a-tag :color="codeGenTypeColor(record.codeGenType)">
                   {{ codeGenTypeText(record.codeGenType) }}
                 </a-tag>
               </template>
@@ -475,7 +478,7 @@ const recycleColumns = [
           >
             <template #bodyCell="{ column, record }">
               <template v-if="column.key === 'codeGenType'">
-                <a-tag :color="record.codeGenType === 'multi_file' ? 'purple' : 'blue'">
+                <a-tag :color="codeGenTypeColor(record.codeGenType)">
                   {{ codeGenTypeText(record.codeGenType) }}
                 </a-tag>
               </template>
@@ -523,6 +526,7 @@ const recycleColumns = [
           <a-select v-model:value="addForm.codeGenType">
             <a-select-option value="html">单文件</a-select-option>
             <a-select-option value="multi_file">多文件</a-select-option>
+            <a-select-option value="vue">Vue3 工程</a-select-option>
           </a-select>
         </a-form-item>
         <a-form-item label="可见范围">

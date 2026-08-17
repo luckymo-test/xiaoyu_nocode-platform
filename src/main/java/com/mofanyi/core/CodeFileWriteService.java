@@ -2,8 +2,7 @@ package com.mofanyi.core;
 
 import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.util.StrUtil;
-import com.mofanyi.ai.model.HtmlCodeResult;
-import com.mofanyi.ai.model.MultiFileCodeResult;
+import com.mofanyi.ai.model.VueFileResult;
 import com.mofanyi.exception.ErrorCode;
 import com.mofanyi.exception.ThrowUtils;
 import com.mofanyi.model.enums.CodeGenTypeEnum;
@@ -16,6 +15,9 @@ import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 
 /**
  * 代码文件写入工具服务。
@@ -114,7 +116,7 @@ public class CodeFileWriteService {
     /**
      * 读取已生成的项目代码；未生成（index.html 不存在）时返回 null
      *
-     * @param type  业务类型（html / multi_file）
+     * @param type  业务类型（html / multi_file / vue）
      * @param appId 应用 id
      * @return 生成结果 VO；未生成返回 null
      */
@@ -129,43 +131,104 @@ public class CodeFileWriteService {
         AiCodeGenResultVO vo = new AiCodeGenResultVO();
         vo.setProjectPath(projectDir);
         vo.setHtmlCode(htmlCode);
-        if (type == CodeGenTypeEnum.MULTI_FILE) {
+        // html / multi_file 都可能拆分了独立 css/js 文件，存在则一并返回
+        if (type == CodeGenTypeEnum.MULTI_FILE || type == CodeGenTypeEnum.HTML) {
             vo.setCssCode(readFile(projectDir, CSS_FILE));
             vo.setJsCode(readFile(projectDir, JS_FILE));
+        }
+        if (type == CodeGenTypeEnum.VUE) {
+            vo.setFiles(readVueProject(projectDir));
         }
         return vo;
     }
 
     /**
-     * 保存单文件 HTML 生成结果：创建项目目录并写入 index.html
-     *
-     * @param result AI 生成的单文件 HTML 结果
-     * @param appId  应用 id
-     * @return 项目文件夹的 File 对象
+     * 读取 vue 工程全部文件（遍历项目目录，排除 node_modules / dist 构建产物），
+     * 按路径字典序返回
      */
-    public File saveHtmlCode(HtmlCodeResult result, Long appId) {
-        ThrowUtils.throwIf(result == null, ErrorCode.PARAMS_ERROR);
-        ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
-        String projectDir = createProjectDir(CodeGenTypeEnum.HTML, appId);
-        writeFile(projectDir, INDEX_HTML, result.getHtmlCode());
-        return new File(projectDir);
+    public List<VueFileResult> readVueProject(String projectDir) {
+        ThrowUtils.throwIf(StrUtil.isBlank(projectDir), ErrorCode.PARAMS_ERROR);
+        List<VueFileResult> files = new ArrayList<>();
+        File root = new File(projectDir);
+        if (!root.isDirectory()) {
+            return files;
+        }
+        walkDir(root, root, files);
+        files.sort(Comparator.comparing(VueFileResult::getPath));
+        return files;
     }
 
     /**
-     * 保存多文件生成结果：创建项目目录并写入 index.html、css/styles.css、js/app.js
-     *
-     * @param result AI 生成的多文件结果
-     * @param appId  应用 id
-     * @return 项目文件夹的 File 对象
+     * 递归收集目录下所有文件（排除 node_modules / dist），路径为相对项目根路径
      */
-    public File saveMultiFileCode(MultiFileCodeResult result, Long appId) {
-        ThrowUtils.throwIf(result == null, ErrorCode.PARAMS_ERROR);
+    private void walkDir(File root, File dir, List<VueFileResult> files) {
+        File[] children = dir.listFiles();
+        if (children == null) {
+            return;
+        }
+        for (File child : children) {
+            if (child.isDirectory()) {
+                if ("node_modules".equals(child.getName()) || "dist".equals(child.getName())) {
+                    continue;
+                }
+                walkDir(root, child, files);
+            } else {
+                VueFileResult f = new VueFileResult();
+                f.setPath(relativePath(root, child));
+                f.setContent(FileUtil.readString(child, StandardCharsets.UTF_8));
+                files.add(f);
+            }
+        }
+    }
+
+    /**
+     * 计算文件相对项目根的路径（用 / 分隔）
+     */
+    private String relativePath(File root, File file) {
+        Path rootPath = root.toPath().toAbsolutePath();
+        Path filePath = file.toPath().toAbsolutePath();
+        String rel = rootPath.relativize(filePath).toString().replace('\\', '/');
+        return rel.startsWith("/") ? rel.substring(1) : rel;
+    }
+
+    /**
+     * 向 vue 工程目录写入单个文件（自动创建父目录）
+     *
+     * @param appId   应用 id
+     * @param path    相对路径（如 src/App.js、package.json）
+     * @param content 文件内容
+     */
+    public void saveVueFile(Long appId, String path, String content) {
+        saveProjectFile(CodeGenTypeEnum.VUE, appId, path, content);
+    }
+
+    /**
+     * 向任意类型项目目录写入单个文件（自动创建父目录）。
+     * 通用 Agent 按相对路径写入 html/multi_file/vue 三种工程。
+     *
+     * @param type    代码生成类型
+     * @param appId   应用 id
+     * @param path    相对路径（如 index.html、css/styles.css、src/App.vue）
+     * @param content 文件内容
+     */
+    public void saveProjectFile(CodeGenTypeEnum type, Long appId, String path, String content) {
+        ThrowUtils.throwIf(type == null, ErrorCode.PARAMS_ERROR);
         ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
-        String projectDir = createProjectDir(CodeGenTypeEnum.MULTI_FILE, appId);
-        writeFile(projectDir, INDEX_HTML, result.getHtmlCode());
-        writeFile(projectDir, CSS_FILE, result.getCssCode());
-        writeFile(projectDir, JS_FILE, result.getJsCode());
-        return new File(projectDir);
+        ThrowUtils.throwIf(StrUtil.isBlank(path), ErrorCode.PARAMS_ERROR, "文件路径不能为空");
+        String projectDir = getProjectDir(type, appId);
+        writeFile(projectDir, path, content);
+    }
+
+    /**
+     * 删除 vue 工程的构建产物目录（dist）。
+     * vue 源码更新（重新生成）后调用，使下次预览/部署重新构建，避免预览旧页面。
+     *
+     * @param appId 应用 id
+     */
+    public void deleteVueDist(Long appId) {
+        ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
+        String projectDir = getProjectDir(CodeGenTypeEnum.VUE, appId);
+        FileUtil.del(Paths.get(projectDir, "dist").toFile());
     }
 
     /**
@@ -232,13 +295,17 @@ public class CodeFileWriteService {
     public void deleteProjectFiles(String codeGenType, Long appId, String deployKey) {
         ThrowUtils.throwIf(StrUtil.isBlank(codeGenType), ErrorCode.PARAMS_ERROR);
         ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
-        // 删除临时目录
+        // 删除临时目录（不存在则跳过）
         Path tmpDir = Paths.get(tmpRoot, codeGenType + "_" + appId);
-        FileUtil.del(tmpDir.toFile());
-        // 删除部署目录
+        if (FileUtil.exist(tmpDir.toFile())) {
+            FileUtil.del(tmpDir.toFile());
+        }
+        // 删除部署目录（不存在则跳过）
         if (StrUtil.isNotBlank(deployKey)) {
             Path deployDir = Paths.get(deployRoot, deployKey);
-            FileUtil.del(deployDir.toFile());
+            if (FileUtil.exist(deployDir.toFile())) {
+                FileUtil.del(deployDir.toFile());
+            }
         }
     }
 
@@ -250,6 +317,9 @@ public class CodeFileWriteService {
     public void deleteDeployDir(String deployKey) {
         ThrowUtils.throwIf(StrUtil.isBlank(deployKey), ErrorCode.PARAMS_ERROR);
         Path deployDir = Paths.get(deployRoot, deployKey);
-        FileUtil.del(deployDir.toFile());
+        // 目录不存在时静默跳过，避免下线因部署目录缺失而失败
+        if (FileUtil.exist(deployDir.toFile())) {
+            FileUtil.del(deployDir.toFile());
+        }
     }
 }

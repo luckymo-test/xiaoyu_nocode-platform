@@ -3,13 +3,15 @@ import { ref, reactive, computed, watch, nextTick, onMounted, onUnmounted } from
 import { useRoute, useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
 import { ArrowLeftOutlined, UserOutlined, RobotOutlined, DoubleRightOutlined, DoubleLeftOutlined } from '@ant-design/icons-vue'
-import { getAppVoById, getAppCode, deployApp, unDeployApp } from '@/api/appController'
+import { getAppVoById, getAppCode, getVuePreview, deployApp, unDeployApp } from '@/api/appController'
 import { chat, chatMulti, stopGenerate } from '@/api/aiChatController'
 import { listChatHistory } from '@/api/chatHistoryController'
 import {
   streamGenerateHtmlProject,
   streamGenerateMultiFileProject,
+  streamGenerateVueProject,
 } from '@/api/aiStream'
+import { createSseConnection } from '@/utils/sse'
 import type { SseCallbacks, SseConnection } from '@/utils/sse'
 import { useUserStore } from '@/stores/user'
 import MarkdownView from '@/components/MarkdownView.vue'
@@ -33,6 +35,9 @@ const messages = ref<ChatMessage[]>([])
 const input = ref('')
 const generating = ref(false)
 
+// 生成中的动态进度文案（如"正在生成 index.html…"、"正在搜索图片…"），用于让用户明确生成在推进
+const genProgress = ref('')
+
 const previewDoc = ref('')
 const previewLoading = ref(false)
 const deploying = ref(false)
@@ -40,8 +45,6 @@ const deploying = ref(false)
 // 预览模式：code=代码预览（默认），web=网页预览（代码流式完成后才可切换）
 type PreviewMode = 'code' | 'web'
 const previewMode = ref<PreviewMode>('code')
-// 代码预览展示的文本：流式时实时累积的原始 JSON，完成后为完整 JSON
-const streamRawJson = ref('')
 // 本次生成是否已完成（完成后才允许切到网页预览）
 const generationDone = ref(false)
 // 格式化后的完整代码（供代码预览展示）
@@ -60,6 +63,43 @@ const msgListRef = ref<HTMLElement | null>(null)
 let connection: SseConnection | null = null
 
 const isMultiFile = computed(() => app.value?.codeGenType === 'multi_file')
+const isVue = computed(() => app.value?.codeGenType === 'vue')
+
+// Vue 工程：文件树（生成完成后填充）+ 流式进度
+const vueFiles = ref<API.VueFileResult[]>([])
+const vueProgress = ref('')
+// vue 构建产物预览加载中（首次构建较慢）
+const vuePreviewLoading = ref(false)
+// 文件树中当前选中的文件（用于代码预览分文件查看）
+const selectedVuePath = ref('')
+const selectedVueContent = computed(
+  () => vueFiles.value.find((f) => f.path === selectedVuePath.value)?.content ?? '',
+)
+const selectVueFile = (path: string) => {
+  selectedVuePath.value = path
+}
+
+// 加载 vue 工程构建产物的自包含预览 HTML（后端 dist 不存在时自动构建）
+const loadVuePreview = async (): Promise<boolean> => {
+  try {
+    vuePreviewLoading.value = true
+    const res = await getVuePreview({ id: appId.value as unknown as number })
+    if (res.data.code === 0 && res.data.data) {
+      previewDoc.value = res.data.data
+      generationDone.value = true
+      previewMode.value = 'web'
+      return true
+    }
+  } catch {
+    // 构建失败或网络异常
+  } finally {
+    vuePreviewLoading.value = false
+  }
+  return false
+}
+
+// 部署进度（vue 流式部署状态文案）
+const deployStatus = ref('')
 
 // 是否流式生成：创建时通过 query 传入（?stream=true/false），默认流式
 const useStream = computed(() => route.query.stream !== 'false')
@@ -156,6 +196,16 @@ const toChatMessage = (item: API.ChatHistory): ChatMessage => ({
 // 加载已生成的代码并展示对应的网站
 const tryLoadWebsite = async () => {
   try {
+    if (isVue.value) {
+      // vue：加载构建产物预览（后端自动构建）
+      vueFiles.value = (await getAppCode({ id: appId.value as unknown as number })).data.data?.files ?? []
+      if (vueFiles.value.length > 0) {
+        selectedVuePath.value = vueFiles.value[0].path ?? ''
+      }
+      vueProgress.value = `已生成 ${vueFiles.value.length} 个文件`
+      await loadVuePreview()
+      return
+    }
     const res = await getAppCode({ id: appId.value as unknown as number })
     if (res.data.code === 0 && res.data.data) {
       const result = res.data.data
@@ -190,80 +240,209 @@ const sendMessage = async (text?: string, auto = false) => {
   const aiMsg = reactive<ChatMessage>({ role: 'ai', content: '', status: 'streaming' })
   messages.value.push(aiMsg)
   generating.value = true
+  genProgress.value = '正在分析需求并生成代码…（可能需要 1-2 分钟）'
   previewLoading.value = true
   previewDoc.value = ''
   // 重置本次生成的预览状态：默认回到代码预览，生成完成前不可切网页预览
   previewMode.value = 'code'
   generationDone.value = false
-  streamRawJson.value = ''
   formattedCode.value = ''
 
   if (useStream.value) {
-    // 后端 token 逐字流出。description 阶段用 reveal 逐字打字机；
-    // 代码块出现后停止 reveal，改由 onToken 整段刷新，保证代码流式可见。
-    let rawJson = ''
-    let targetText = ''
-    let flushTimer: ReturnType<typeof setInterval> | null = null
-    let codeStarted = false
-    let lastFlush = 0
-    const reveal = () => {
-      const target = targetText
-      if (target === '' || codeStarted) return
-      const current = aiMsg.content
-      if (target.length > current.length) {
-        aiMsg.content = target.slice(0, current.length + 1)
-      }
-    }
-    flushTimer = setInterval(reveal, 20)
-    const stopReveal = () => {
-      if (flushTimer) {
-        clearInterval(flushTimer)
-        flushTimer = null
-      }
-    }
-    const finishReveal = (finalText: string) => {
-      stopReveal()
-      aiMsg.content = finalText
-    }
-    const callbacks: SseCallbacks = {
-      onToken: (token) => {
-        rawJson += token
-        // 同步累积的原始 JSON 到响应式 ref，右侧代码预览实时显示
-        streamRawJson.value = rawJson
-        const now = Date.now()
-        if (now - lastFlush < 30) return
-        lastFlush = now
-        const md = buildStreamingMarkdown(rawJson)
-        // 代码块已到达：停止打字机，整段刷新显示代码
-        if (md.includes('```')) {
-          if (!codeStarted) {
-            codeStarted = true
-            stopReveal()
-          }
-          aiMsg.content = md
-        } else {
-          targetText = md
+    // vue 模式：agent 逐文件生成，SSE 推送 agent_progress（每文件完整代码）
+    if (isVue.value) {
+      vueFiles.value = []
+      vueProgress.value = '正在生成 Vue 工程…'
+      // ---- vue 逐文件显示：每个文件整块显示，配合 vueProgress/genProgress 传达进度 ----
+      const REVEAL_INTERVAL = 80 // 文件间显示间隔 ms
+      const revealQueue: { path: string; content: string }[] = [] // 待显示文件队列
+      let completedText = '' // 已完整显示的文件块的拼接（只在新文件完成时更新一次）
+      let revealTimer: ReturnType<typeof setInterval> | null = null
+      let donePayload: API.AiCodeGenResultVO | null = null // onDone 的结果（等 reveal 完收尾）
+      let vueFileCount = 0 // 已收到的文件数（进度展示用）
+
+      // 收尾：description 前缀 + 文件树 + 预览等
+      const finishVue = () => {
+        if (donePayload) {
+          const desc = donePayload.description ? donePayload.description + '\n\n' : ''
+          aiMsg.content = desc + aiMsg.content.trim()
         }
-      },
-      onDone: (result) => {
-        finishReveal(buildMarkdownContent(result))
+        const result = donePayload ?? ({ files: [] } as API.AiCodeGenResultVO)
         aiMsg.status = 'done'
-        previewDoc.value = buildPreviewDoc(result)
+        vueFiles.value = result.files ?? []
+        if (vueFiles.value.length > 0) {
+          selectedVuePath.value = vueFiles.value[0].path ?? ''
+        }
+        vueProgress.value = `已生成 ${vueFiles.value.length} 个文件`
         formattedCode.value = buildFormattedCode(result)
         previewLoading.value = false
         generating.value = false
+        genProgress.value = ''
         generationDone.value = true
+        // 生成完成后加载构建产物预览（后端自动构建 dist）
+        vueProgress.value = '正在构建预览…'
+        loadVuePreview()
+      }
+
+      // 每个文件整块显示（不逐字符打字机），避免大代码块 markdown 反复全量重渲染导致 O(n²) 卡死
+      const tick = () => {
+        if (revealQueue.length > 0) {
+          const next = revealQueue.shift()!
+          completedText = (completedText ? completedText + '\n\n' : '')
+            + `#### ${next.path}\n\`\`\`js\n${next.content}\n\`\`\``
+          aiMsg.content = completedText
+          return
+        }
+        // 队列空且当前无显示中
+        clearInterval(revealTimer!)
+        revealTimer = null
+        if (donePayload) {
+          finishVue()
+        }
+      }
+
+      const ensureReveal = () => {
+        if (!revealTimer) {
+          revealTimer = setInterval(tick, REVEAL_INTERVAL)
+        }
+      }
+
+      const stopReveal = () => {
+        if (revealTimer) {
+          clearInterval(revealTimer)
+          revealTimer = null
+        }
+      }
+
+      const callbacks: SseCallbacks = {
+        onAgentProgress: (data) => {
+          // data 为 {"path":"...","content":"..."} JSON
+          try {
+            const parsed = JSON.parse(data)
+            const path: string = parsed.path || ''
+            const content: string = parsed.content || ''
+            if (path) {
+              vueFileCount++
+              vueProgress.value = `正在生成 ${path}…`
+              genProgress.value = `正在生成 ${path}…（第 ${vueFileCount} 个文件）`
+              revealQueue.push({ path, content })
+              ensureReveal()
+            }
+          } catch {
+            // 解析失败忽略（兼容旧格式）
+          }
+        },
+        onDone: (result) => {
+          donePayload = result
+          // 若 reveal 已空闲（队列空且无当前文件）立即收尾，否则等 tick 自然完成
+          if (!revealTimer && revealQueue.length === 0) {
+            finishVue()
+          }
+        },
+        onError: (errorMsg) => {
+          stopReveal()
+          aiMsg.content = friendlyError(errorMsg)
+          aiMsg.status = 'error'
+          vueProgress.value = ''
+          genProgress.value = ''
+          previewLoading.value = false
+          generating.value = false
+          generationDone.value = true
+        },
+        onClose: () => {
+          generating.value = false
+          genProgress.value = ''
+        },
+      }
+      connection = streamGenerateVueProject(appId.value, content, callbacks)
+      return
+    }
+    // html/multi_file 模式：agent 逐文件生成，SSE 推送 agent_progress（每文件完整代码）。
+    // 每个文件整块显示（不逐字符打字机），避免大代码块 markdown 反复全量重渲染导致 O(n²) 卡死；
+    // 文件间用短间隔维持"逐文件流式"观感，配合 genProgress 进度条传达生成进度。
+    const AGENT_INTERVAL = 80 // 文件间显示间隔 ms
+    const revealQueue: { path: string; content: string }[] = [] // 待显示文件队列
+    let completedText = '' // 已完整显示的文件块的拼接（只在新文件完成时更新一次）
+    let revealTimer: ReturnType<typeof setInterval> | null = null
+    let donePayload: API.AiCodeGenResultVO | null = null // onDone 的结果（等 reveal 完收尾）
+    let genFileCount = 0 // 已收到/显示的文件数（进度展示用）
+
+    const agentTick = () => {
+      if (revealQueue.length > 0) {
+        const next = revealQueue.shift()!
+        // 整文件块一次显示（不逐字符打字机），避免大代码块 markdown 反复全量重渲染导致 O(n²) 卡死
+        completedText = (completedText ? completedText + '\n\n' : '')
+          + `#### ${next.path}\n\`\`\`html\n${next.content}\n\`\`\``
+        aiMsg.content = completedText
+        return
+      }
+      clearInterval(revealTimer!)
+      revealTimer = null
+      if (donePayload) {
+        finishAgent()
+      }
+    }
+    const ensureAgentReveal = () => {
+      if (!revealTimer) {
+        revealTimer = setInterval(agentTick, AGENT_INTERVAL)
+      }
+    }
+    const stopAgentReveal = () => {
+      if (revealTimer) {
+        clearInterval(revealTimer)
+        revealTimer = null
+      }
+    }
+    const finishAgent = () => {
+      if (donePayload) {
+        const desc = donePayload.description ? donePayload.description + '\n\n' : ''
+        aiMsg.content = desc + aiMsg.content.trim()
+        aiMsg.status = 'done'
+        previewDoc.value = buildPreviewDoc(donePayload)
+        formattedCode.value = buildFormattedCode(donePayload)
+      }
+      previewLoading.value = false
+      generating.value = false
+      genProgress.value = ''
+      generationDone.value = true
+    }
+    const callbacks: SseCallbacks = {
+      onAgentProgress: (data) => {
+        // data 为 {"path":"...","content":"..."} JSON
+        try {
+          const parsed = JSON.parse(data)
+          const path: string = parsed.path || ''
+          const content: string = parsed.content || ''
+          if (path) {
+            genFileCount++
+            genProgress.value = `正在生成 ${path}…（第 ${genFileCount} 个文件）`
+            revealQueue.push({ path, content })
+            ensureAgentReveal()
+          }
+        } catch {
+          // 解析失败忽略（兼容旧格式）
+        }
+      },
+      onDone: (result) => {
+        donePayload = result
+        // 若 reveal 已空闲立即收尾，否则等 agentTick 自然完成
+        if (!revealTimer && revealQueue.length === 0) {
+          finishAgent()
+        }
       },
       onError: (errorMsg) => {
-        finishReveal(friendlyError(errorMsg))
+        stopAgentReveal()
+        aiMsg.content = friendlyError(errorMsg)
         aiMsg.status = 'error'
         previewLoading.value = false
         generating.value = false
+        genProgress.value = ''
         generationDone.value = true
       },
       onClose: () => {
-        stopReveal()
+        stopAgentReveal()
         generating.value = false
+        genProgress.value = ''
       },
     }
     if (isMultiFile.value) {
@@ -293,6 +472,7 @@ const sendMessage = async (text?: string, auto = false) => {
     } finally {
       previewLoading.value = false
       generating.value = false
+      genProgress.value = ''
       generationDone.value = true
     }
   }
@@ -310,73 +490,9 @@ const friendlyError = (errorMsg: string): string => {
   return '生成失败：' + errorMsg.slice(0, 80)
 }
 
-// 从流式累积的 JSON 片段中增量提取 description 字段，实现打字机效果。
-// description 值未结束（缺右引号）时也能取到已输出的部分。
-const extractDescription = (raw: string): string | null => {
-  const full = raw.match(/"description"\s*:\s*"((?:[^"\\]|\\.)*)"/)
-  if (full) return full[1]
-  // 部分：值正在流式中，取到当前为止
-  const partial = raw.match(/"description"\s*:\s*"((?:[^"\\]|\\.)*)$/)
-  if (partial) return partial[1]
-  return null
-}
-
-// 线性扫描从流式 JSON 中提取字符串字段（如 htmlCode/cssCode/jsCode）。
-// 字段未出现返回 null；已闭合返回真实字符串；流式中未闭合返回已到达部分（手动反转义）。
-const extractFieldLinear = (raw: string, field: string): string | null => {
-  const marker = `"${field}":"`
-  const idx = raw.indexOf(marker)
-  if (idx === -1) return null
-  const start = idx + marker.length
-  let i = start
-  let closed = false
-  while (i < raw.length) {
-    const c = raw[i]
-    if (c === '\\') {
-      i += 2
-      continue
-    }
-    if (c === '"') {
-      closed = true
-      break
-    }
-    i++
-  }
-  const segment = raw.slice(start, i)
-  if (segment === '' || segment === 'null') return null
-  if (closed) {
-    try {
-      return JSON.parse('"' + segment + '"')
-    } catch {
-      return segment
-    }
-  }
-  // 未闭合：把已到达的转义序列转成真实字符
-  return segment
-    .replace(/\\n/g, '\n')
-    .replace(/\\t/g, '\t')
-    .replace(/\\r/g, '\r')
-    .replace(/\\\\/g, '\\')
-}
-
-// 从流式累积的 JSON 片段拼出当前可见的 Markdown（description + 已到达的代码块）
-const buildStreamingMarkdown = (raw: string): string => {
-  const parts: string[] = []
-  const desc = extractDescription(raw)
-  if (desc) parts.push(desc)
-  const html = extractFieldLinear(raw, 'htmlCode')
-  if (html) parts.push('#### index.html\n```html\n' + html + '\n```')
-  if (isMultiFile.value) {
-    const css = extractFieldLinear(raw, 'cssCode')
-    if (css) parts.push('#### css/styles.css\n```css\n' + css + '\n```')
-    const js = extractFieldLinear(raw, 'jsCode')
-    if (js) parts.push('#### js/app.js\n```javascript\n' + js + '\n```')
-  }
-  return parts.join('\n\n')
-}
-
 const buildPreviewDoc = (result: API.AiCodeGenResultVO): string => {
-  if (isMultiFile.value) {
+  // html 模式若拆分了 css/js 文件，也内联进预览（否则外链相对路径在 srcdoc 中失效）
+  if (isMultiFile.value || (result.cssCode || result.jsCode)) {
     return [
       '<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8">',
       '<style>' + (result.cssCode ?? '') + '</style>',
@@ -393,7 +509,16 @@ const buildFormattedCode = (result: API.AiCodeGenResultVO): string => {
   const parts: string[] = []
   parts.push('// ===== description =====')
   parts.push(result.description || '')
-  if (isMultiFile.value) {
+  if (isVue.value) {
+    for (const f of result.files ?? []) {
+      if (f.path && f.content) {
+        parts.push(`// ===== ${f.path} =====`)
+        parts.push(f.content)
+      }
+    }
+    return parts.join('\n\n')
+  }
+  if (isMultiFile.value || result.cssCode || result.jsCode) {
     if (result.htmlCode) {
       parts.push('// ===== index.html =====')
       parts.push(result.htmlCode)
@@ -421,7 +546,15 @@ const buildMarkdownContent = (result: API.AiCodeGenResultVO): string => {
   if (result.description) {
     parts.push(result.description)
   }
-  if (isMultiFile.value) {
+  if (isVue.value) {
+    for (const f of result.files ?? []) {
+      if (f.path && f.content) {
+        parts.push('#### ' + f.path + '\n```js\n' + f.content + '\n```')
+      }
+    }
+    return parts.join('\n\n')
+  }
+  if (isMultiFile.value || result.cssCode || result.jsCode) {
     if (result.htmlCode) {
       parts.push('#### index.html\n```html\n' + result.htmlCode + '\n```')
     }
@@ -448,26 +581,77 @@ const handleDeploy = async () => {
       const res = await unDeployApp({ id: app.value.id })
       if (res.data.code === 0) {
         message.success('已下线')
+        deployStatus.value = ''
+        deploying.value = false
         await loadApp()
       } else {
         message.error(res.data.message || '下线失败')
+        deployStatus.value = ''
+        deploying.value = false
       }
+      return
+    }
+    // 未部署 → 上线
+    if (isVue.value) {
+      // vue 模式：流式部署（构建 + 自动修复进度）
+      deployStatus.value = '正在准备部署…'
+      const deployConn = createSseConnection(
+        '/app/deploy/stream',
+        { appId: app.value.id },
+        {
+          onDeployProgress: (text) => {
+            deployStatus.value = deployStatusText(text)
+          },
+          onDone: (result: any) => {
+            deploying.value = false
+            deployStatus.value = '部署成功'
+            message.success('部署成功')
+            loadApp()
+            // done 事件 data 为 {"url":"http://localhost/xxx"}
+            const url = result?.url || ''
+            if (url) {
+              window.open(url, '_blank')
+            }
+          },
+          onError: (errorMsg) => {
+            deploying.value = false
+            deployStatus.value = ''
+            message.error(errorMsg || '部署失败')
+          },
+          onClose: () => {
+            deploying.value = false
+          },
+        },
+      )
+      // 保持引用防 GC；onDone 里完成
+      deployConn
+      return
+    }
+    const res = await deployApp({ appId: app.value.id })
+    if (res.data.code === 0 && res.data.data) {
+      message.success('部署成功')
+      await loadApp()
+      window.open(res.data.data, '_blank')
     } else {
-      // 未部署 → 上线
-      const res = await deployApp({ appId: app.value.id })
-      if (res.data.code === 0 && res.data.data) {
-        message.success('部署成功')
-        await loadApp()
-        window.open(res.data.data, '_blank')
-      } else {
-        message.error(res.data.message || '部署失败')
-      }
+      message.error(res.data.message || '部署失败')
     }
   } catch {
     message.error('操作失败')
   } finally {
-    deploying.value = false
+    if (!isVue.value) deploying.value = false
   }
+}
+
+// 部署进度文本映射
+const deployStatusText = (text: string): string => {
+  if (text === 'START_INSTALL') return '正在安装依赖（npm install）…'
+  if (text === 'START_BUILD') return '正在构建（npm run build）…'
+  if (text === 'BUILD_OK') return '构建完成'
+  if (text.startsWith('BUILD_FAILED')) return '构建失败，正在自动修复…'
+  if (text.startsWith('FIXED|')) return `已修复 ${text.slice(6)}，重新构建…`
+  if (text === 'REBUILDING') return '正在重新构建…'
+  if (text.startsWith('FIX_FAILED')) return '自动修复失败'
+  return text
 }
 
 // 停止生成：断开 SSE + 通知后端中断
@@ -525,7 +709,8 @@ onUnmounted(() => {
           <template #icon><ArrowLeftOutlined /></template>
         </a-button>
         <span class="app-name">{{ app?.appName || '应用生成' }}</span>
-        <a-tag v-if="app && isMultiFile" color="purple">多文件</a-tag>
+        <a-tag v-if="app && isVue" color="green">Vue3 工程</a-tag>
+        <a-tag v-else-if="app && isMultiFile" color="purple">多文件</a-tag>
         <a-tag v-else-if="app" color="blue">单文件</a-tag>
         <a-tag
           v-if="app?.generateStatus"
@@ -549,6 +734,7 @@ onUnmounted(() => {
         >
           {{ app?.deployKey ? '下线' : '部署' }}
         </a-button>
+        <span v-if="deployStatus" class="deploy-status">{{ deployStatus }}</span>
       </a-space>
     </div>
 
@@ -582,6 +768,10 @@ onUnmounted(() => {
               <span v-else>{{ msg.content }}</span>
             </div>
           </div>
+        </div>
+        <div v-if="generating && genProgress" class="gen-progress-bar">
+          <a-spin size="small" />
+          <span class="gen-progress-text">{{ genProgress }}</span>
         </div>
         <div class="input-bar">
           <a-textarea
@@ -622,14 +812,32 @@ onUnmounted(() => {
         </div>
         <div class="preview-content">
           <template v-if="previewMode === 'code'">
-            <pre v-if="streamRawJson || formattedCode" class="code-frame">{{
-              formattedCode || streamRawJson
-            }}</pre>
-            <div v-else class="preview-empty">
-              <a-empty
-                :description="previewLoading ? '正在生成代码，请稍候...' : '代码生成后在此展示'"
-              />
-            </div>
+            <template v-if="isVue">
+              <div class="vue-code-layout">
+                <div class="vue-file-tree">
+                  <div v-if="vueProgress" class="vue-progress">{{ vueProgress }}</div>
+                  <div
+                    v-for="f in vueFiles"
+                    :key="f.path"
+                    class="vue-file-item"
+                    :class="{ active: f.path === selectedVuePath }"
+                    @click="selectVueFile(f.path ?? '')"
+                  >
+                    {{ f.path }}
+                  </div>
+                  <a-empty v-if="vueFiles.length === 0" :description="vueProgress || '暂无文件'" :image="false" />
+                </div>
+                <pre class="code-frame vue-code">{{ selectedVueContent }}</pre>
+              </div>
+            </template>
+            <template v-else>
+              <pre v-if="formattedCode" class="code-frame">{{ formattedCode }}</pre>
+              <div v-else class="preview-empty">
+                <a-empty
+                  :description="previewLoading ? '正在生成代码，请稍候...' : '代码生成后在此展示'"
+                />
+              </div>
+            </template>
           </template>
           <template v-else>
             <template v-if="previewDoc">
@@ -641,7 +849,7 @@ onUnmounted(() => {
             </template>
             <div v-else class="preview-empty">
               <a-empty
-                :description="previewLoading ? '正在生成，请稍候...' : '生成完成后将在此展示网页效果'"
+                :description="vuePreviewLoading ? '正在构建预览，请稍候...' : previewLoading ? '正在生成，请稍候...' : '生成完成后将在此展示网页效果'"
               />
             </div>
           </template>
@@ -673,6 +881,15 @@ onUnmounted(() => {
 .app-name {
   font-size: 16px;
   font-weight: 600;
+}
+
+.deploy-status {
+  font-size: 13px;
+  color: #1677ff;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .gen-body {
@@ -817,6 +1034,21 @@ onUnmounted(() => {
   resize: none;
 }
 
+.gen-progress-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-top: 1px solid #f0f0f0;
+  background: #fafafa;
+  flex-shrink: 0;
+}
+
+.gen-progress-text {
+  font-size: 13px;
+  color: #666;
+}
+
 .preview-panel {
   display: flex;
   flex-direction: column;
@@ -865,6 +1097,51 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.vue-code-layout {
+  display: flex;
+  height: 100%;
+}
+
+.vue-file-tree {
+  width: 220px;
+  border-right: 1px solid #f0f0f0;
+  overflow-y: auto;
+  padding: 8px 0;
+  background: #fafafa;
+  flex-shrink: 0;
+}
+
+.vue-progress {
+  padding: 4px 12px;
+  font-size: 12px;
+  color: #666;
+}
+
+.vue-file-item {
+  padding: 6px 12px;
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background 0.2s;
+}
+
+.vue-file-item:hover {
+  background: #f0f5ff;
+}
+
+.vue-file-item.active {
+  background: #e6f4ff;
+  color: #1677ff;
+  font-weight: 500;
+}
+
+.vue-code {
+  flex: 1;
+  min-width: 0;
 }
 
 @media (max-width: 768px) {

@@ -10,10 +10,11 @@ export default defineConfig({
     },
   },
   server: {
-    port: 5173,
+    port: 5199,
     proxy: {
+      // 开发环境把 /api 代理到后端，前后端同源，避免跨域
       '/api': {
-        target: 'http://localhost:8080',
+        target: 'http://localhost:8124',
         changeOrigin: true,
       },
     },

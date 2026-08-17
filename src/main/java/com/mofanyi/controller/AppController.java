@@ -23,11 +23,15 @@ import com.mofanyi.service.UserService;
 import com.mybatisflex.core.paginate.Page;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+
+import java.util.concurrent.CompletableFuture;
 
 /**
  * 应用控制层。
@@ -179,6 +183,17 @@ public class AppController {
     }
 
     /**
+     * 获取 vue 工程构建产物的自包含预览 HTML（dist 不存在则先构建）
+     */
+    @GetMapping("/get/vue-preview")
+    public BaseResponse<String> getVuePreview(long id, HttpServletRequest request) {
+        ThrowUtils.throwIf(id <= 0, ErrorCode.PARAMS_ERROR);
+        userService.getLoginUser(request);
+        String html = appService.getVuePreview(id);
+        return ResultUtils.success(html);
+    }
+
+    /**
      * 部署应用（仅本人可部署）
      */
     @PostMapping("/deploy")
@@ -189,6 +204,37 @@ public class AppController {
         User loginUser = userService.getLoginUser(request);
         String url = appService.deployApp(appDeployRequest.getAppId(), loginUser);
         return ResultUtils.success(url);
+    }
+
+    /**
+     * 流式部署应用（vue 模式构建 + 自动修复）：SSE 推送 deploy_progress（构建/修复进度）与 done（URL）。
+     * 非 vue 模式也支持（无构建进度，直接 done）。
+     */
+    @GetMapping(value = "/deploy/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter deployAppStream(long appId, HttpServletRequest request) {
+        ThrowUtils.throwIf(appId <= 0, ErrorCode.PARAMS_ERROR);
+        User loginUser = userService.getLoginUser(request);
+        SseEmitter emitter = new SseEmitter(300_000L);
+        CompletableFuture.runAsync(() -> {
+            try {
+                String url = appService.deployAppStream(appId, loginUser, text -> send(emitter, "deploy_progress", text));
+                // done 事件发送 JSON 对象，与生成接口的 done 事件格式一致（前端统一 JSON.parse）
+                send(emitter, "done", java.util.Map.of("url", url));
+                emitter.complete();
+            } catch (Exception e) {
+                send(emitter, "error", e.getMessage() == null ? "部署失败" : e.getMessage());
+                emitter.complete();
+            }
+        });
+        return emitter;
+    }
+
+    private void send(SseEmitter emitter, String name, Object data) {
+        try {
+            emitter.send(SseEmitter.event().name(name).data(data));
+        } catch (Exception e) {
+            emitter.completeWithError(e);
+        }
     }
 
     /**

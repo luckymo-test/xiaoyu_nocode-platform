@@ -164,7 +164,10 @@ onMounted(() => {
 })
 
 const codeGenTypeText = (type?: string) =>
-  type === 'multi_file' ? '多文件' : '单文件'
+  type === 'multi_file' ? '多文件' : type === 'vue' ? 'Vue3 工程' : '单文件'
+
+const codeGenTypeColor = (type?: string) =>
+  type === 'multi_file' ? 'purple' : type === 'vue' ? 'green' : 'blue'
 
 const columns = [
   { title: 'ID', dataIndex: 'id', key: 'id', width: 200 },
@@ -236,7 +239,7 @@ const columns = [
       >
         <template #bodyCell="{ column, record }">
           <template v-if="column.key === 'codeGenType'">
-            <a-tag :color="record.codeGenType === 'multi_file' ? 'purple' : 'blue'">
+            <a-tag :color="codeGenTypeColor(record.codeGenType)">
               {{ codeGenTypeText(record.codeGenType) }}
             </a-tag>
           </template>
