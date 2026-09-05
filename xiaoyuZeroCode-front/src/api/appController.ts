@@ -227,6 +227,15 @@ export async function getVuePreview(
   });
 }
 
+/** 下载应用源码 zip（仅创建者可下载；响应为二进制流，后端带 Content-Disposition 下载文件名） */
+export async function downloadCode(params: { id: number | string }) {
+  return request.get("/app/download/code", {
+    params,
+    responseType: "blob",
+    timeout: 120000,
+  });
+}
+
 /** 此处后端没有提供注释 POST /app/list/featured/page/vo */
 export async function listFeaturedAppVoByPage(
   body: API.AppQueryRequest,

@@ -42,5 +42,20 @@ public class AiCodeGenResultVO implements Serializable {
      */
     private List<VueFileResult> files;
 
+    /**
+     * 本次生成消耗的输入 token 数（透传模型 usage，供前端展示元信息）
+     */
+    private Long promptTokens;
+
+    /**
+     * 本次生成消耗的输出 token 数
+     */
+    private Long completionTokens;
+
+    /**
+     * 总 token 数（prompt + completion）
+     */
+    private Long totalTokens;
+
     private static final long serialVersionUID = 1L;
 }

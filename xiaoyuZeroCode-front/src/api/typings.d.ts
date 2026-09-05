@@ -6,6 +6,9 @@ declare namespace API {
     jsCode?: string;
     description?: string;
     files?: VueFileResult[];
+    promptTokens?: number;
+    completionTokens?: number;
+    totalTokens?: number;
   };
 
   type App = {
@@ -21,6 +24,7 @@ declare namespace API {
     initPrompt?: string;
     codeGenType?: string;
     deployKey?: string;
+    deployUrl?: string;
     deployedTime?: string;
     priority?: number;
     userId?: number;
@@ -91,6 +95,7 @@ declare namespace API {
     featuredStatus?: number;
     initPrompt?: string;
     deployKey?: string;
+    deployUrl?: string;
     codeGenType?: string;
     priority?: number;
     userId?: number;

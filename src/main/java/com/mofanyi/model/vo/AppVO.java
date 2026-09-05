@@ -67,6 +67,11 @@ public class AppVO implements Serializable {
     private String deployKey;
 
     /**
+     * 部署访问地址（已部署时由 domain + deployKey 拼出，供前端一键打开网站）
+     */
+    private String deployUrl;
+
+    /**
      * 代码生成类型（枚举）
      */
     private String codeGenType;

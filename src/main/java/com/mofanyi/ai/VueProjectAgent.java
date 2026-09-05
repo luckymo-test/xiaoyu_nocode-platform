@@ -19,8 +19,11 @@ import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.metadata.ChatGenerationMetadata;
+import org.springframework.ai.chat.metadata.ChatResponseMetadata;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.model.tool.DefaultToolCallingChatOptions;
 import org.springframework.ai.tool.ToolCallback;
@@ -36,6 +39,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
 
 /**
  * 通用代码生成 Agent：通过手动 tool-calling loop 逐文件生成 html / multi_file / vue 三种工程。
@@ -95,6 +99,12 @@ public class VueProjectAgent {
      */
     public interface VueProgressListener {
         void onFileWritten(String path, int size, String content);
+
+        /**
+         * 模型思考过程增量（reasoning_content），默认空实现；前端据此流式展示"思考过程"
+         */
+        default void onReasoning(String reasoning) {
+        }
     }
 
     /**
@@ -136,14 +146,18 @@ public class VueProjectAgent {
         messages.addAll(chatMemory.get(String.valueOf(appId)));
         messages.add(new UserMessage(userMessage));
 
-        runToolLoop(type, appId, messages, files, finished, description, listener);
+        // [promptTokens, completionTokens] 累加器，runToolLoop 各轮模型调用后写入
+        long[] usage = new long[2];
+        runToolLoop(type, appId, messages, files, finished, description, usage, listener);
 
         // 强制补图：模型可能漏调 searchImage，导致页面缺图。扫描代码中的空图片字段/占位图并填真实图。
         autoFillImages(type, appId, userMessage);
         // 生成完成后扫描项目代码，把嵌入的图片 URL 落库（含补图后的真实 URL）
         scanAndSaveImages(type, appId);
 
-        return assembleResult(type, appId, files, description.get());
+        GenerateResult result = assembleResult(type, appId, files, description.get());
+        result.setUsage(new TokenUsage(usage[0], usage[1]));
+        return result;
     }
 
     /**
@@ -451,7 +465,7 @@ public class VueProjectAgent {
                 + "\n\n当前工程相关文件内容：\n" + buildFilesContext(appId)
                 + "\n\n请修复导致报错的文件后调用 finish 结束。"));
 
-        runToolLoop(CodeGenTypeEnum.VUE, appId, messages, files, finished, description, listener);
+        runToolLoop(CodeGenTypeEnum.VUE, appId, messages, files, finished, description, null, listener);
     }
 
     /**
@@ -459,7 +473,7 @@ public class VueProjectAgent {
      * 直到模型不再调工具或达最大轮数。
      */
     private void runToolLoop(CodeGenTypeEnum type, Long appId, List<Message> messages, Map<String, String> files,
-                             AtomicBoolean finished, AtomicReference<String> description,
+                             AtomicBoolean finished, AtomicReference<String> description, long[] usage,
                              VueProgressListener listener) {
         List<ToolCallback> toolCallbacks = List.of(
                 buildWriteFileTool(type, appId, files, listener),
@@ -467,8 +481,27 @@ public class VueProjectAgent {
                 buildFinishTool(finished, description));
         var options = DefaultToolCallingChatOptions.builder().toolCallbacks(toolCallbacks).build();
 
+        // 连续异常计数：模型返回被截断（工具参数 JSON 不完整）等可恢复错误时重试，连续多次失败才终止
+        int consecutiveFailures = 0;
         for (int step = 0; step < MAX_STEPS; step++) {
-            ChatResponse resp = chatModel.call(new Prompt(messages, options));
+            ChatResponse resp;
+            try {
+                // 用流式调用聚合，以便拿到模型思考过程（reasoning_content）增量
+                resp = streamAndAggregate(new Prompt(messages, options),
+                        listener == null ? null : listener::onReasoning);
+            } catch (RuntimeException e) {
+                log.warn("[agent] 模型响应异常（参数截断/解析失败），step={}，提示模型重试", step, e);
+                if (++consecutiveFailures >= 3) {
+                    log.error("[agent] 连续 3 次模型响应异常，终止生成，step={}", step);
+                    break;
+                }
+                messages.add(new UserMessage("你上一步的返回内容被截断（工具调用参数不完整，解析失败）。"
+                        + "请重新调用工具：若文件内容较大，请拆成多次 writeFile 调用，每次内容控制在 3000 字符以内；"
+                        + "若已完成，直接调用 finish。"));
+                continue;
+            }
+            consecutiveFailures = 0;
+            accumulateUsage(resp, usage);
             AssistantMessage output = resp.getResult().getOutput();
             if (!output.hasToolCalls()) {
                 // 模型直接返回文本（未调工具）→ 结束
@@ -496,6 +529,73 @@ public class VueProjectAgent {
             if (finished.get()) {
                 break;
             }
+        }
+    }
+
+    /**
+     * 流式调用并聚合：逐 chunk 累积文本内容、收集模型思考过程（reasoningContent，存于消息 metadata）、
+     * 保留最后一份 usage 元信息，返回与 call() 等价的 ChatResponse（供后续判断 hasToolCalls/usage）。
+     * 框架会在流内部自动执行工具回调（writeFile/finish），reasoning 增量通过 reasoningSink 实时转发。
+     */
+    private ChatResponse streamAndAggregate(Prompt prompt, Consumer<String> reasoningSink) {
+        StringBuilder text = new StringBuilder();
+        AtomicReference<ChatResponseMetadata> metaRef = new AtomicReference<>();
+        AtomicReference<ChatGenerationMetadata> genMetaRef = new AtomicReference<>();
+        chatModel.stream(prompt)
+                .doOnNext(chunk -> {
+                    Generation gen = chunk.getResult();
+                    if (gen != null) {
+                        AssistantMessage out = gen.getOutput();
+                        if (out != null) {
+                            // 只在非工具调用块追加文本，避免把工具参数增量拼进 content
+                            if (!out.hasToolCalls()) {
+                                String t = out.getText();
+                                if (t != null && !t.isEmpty()) {
+                                    text.append(t);
+                                }
+                            }
+                            // reasoningContent 存在消息 metadata（lambda$internalStream$5 写入）
+                            if (reasoningSink != null && out.getMetadata() != null) {
+                                Object reasoning = out.getMetadata().get("reasoningContent");
+                                if (reasoning != null) {
+                                    String r = String.valueOf(reasoning);
+                                    if (!r.isEmpty()) {
+                                        reasoningSink.accept(r);
+                                    }
+                                }
+                            }
+                            genMetaRef.set(gen.getMetadata());
+                        }
+                    }
+                    if (chunk.getMetadata() != null) {
+                        metaRef.set(chunk.getMetadata());
+                    }
+                })
+                .collectList()
+                .block();
+        AssistantMessage msg = AssistantMessage.builder().content(text.toString()).build();
+        return ChatResponse.builder()
+                .generations(List.of(new Generation(msg, genMetaRef.get())))
+                .metadata(metaRef.get() == null ? ChatResponseMetadata.builder().build() : metaRef.get())
+                .build();
+    }
+
+    /**
+     * 累加单轮模型响应的 token 用量到 usage[0]=prompt、usage[1]=completion
+     */
+    private void accumulateUsage(ChatResponse resp, long[] usage) {
+        if (usage == null || resp == null || resp.getMetadata() == null) {
+            return;
+        }
+        var usageMeta = resp.getMetadata().getUsage();
+        if (usageMeta == null) {
+            return;
+        }
+        if (usageMeta.getPromptTokens() != null) {
+            usage[0] += usageMeta.getPromptTokens();
+        }
+        if (usageMeta.getCompletionTokens() != null) {
+            usage[1] += usageMeta.getCompletionTokens();
         }
     }
 
@@ -742,11 +842,22 @@ public class VueProjectAgent {
     }
 
     /**
+     * 单次生成的 token 用量（模型 usage 累加）
+     */
+    public record TokenUsage(long promptTokens, long completionTokens) {
+
+        public long totalTokens() {
+            return promptTokens + completionTokens;
+        }
+    }
+
+    /**
      * 通用生成结果：vue 类型含文件清单；html/multi_file 由门面从项目目录读取
      */
     public static class GenerateResult {
         private String description;
         private VueProjectResult vueResult;
+        private TokenUsage usage;
 
         public String getDescription() {
             return description;
@@ -762,6 +873,14 @@ public class VueProjectAgent {
 
         public void setVueResult(VueProjectResult vueResult) {
             this.vueResult = vueResult;
+        }
+
+        public TokenUsage getUsage() {
+            return usage;
+        }
+
+        public void setUsage(TokenUsage usage) {
+            this.usage = usage;
         }
     }
 }

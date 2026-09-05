@@ -2,8 +2,8 @@
 import { ref, reactive, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
-import { ArrowLeftOutlined, UserOutlined, RobotOutlined, DoubleRightOutlined, DoubleLeftOutlined } from '@ant-design/icons-vue'
-import { getAppVoById, getAppCode, getVuePreview, deployApp, unDeployApp } from '@/api/appController'
+import { ArrowLeftOutlined, UserOutlined, RobotOutlined, DoubleRightOutlined, DoubleLeftOutlined, LinkOutlined, FileTextOutlined, DownloadOutlined } from '@ant-design/icons-vue'
+import { getAppVoById, getAppCode, getVuePreview, deployApp, unDeployApp, downloadCode } from '@/api/appController'
 import { chat, chatMulti, stopGenerate } from '@/api/aiChatController'
 import { listChatHistory } from '@/api/chatHistoryController'
 import {
@@ -17,10 +17,21 @@ import { useUserStore } from '@/stores/user'
 import MarkdownView from '@/components/MarkdownView.vue'
 import { generateStatusText } from '@/utils/appStatus'
 
+interface CodeFile {
+  path: string
+  content: string
+}
+
 interface ChatMessage {
   role: 'user' | 'ai'
   content: string
   status?: 'streaming' | 'done' | 'error'
+  /** 该消息生成的文件清单（气泡里只显示文件名，点击在右侧预览查看完整代码） */
+  files?: CodeFile[]
+  /** 模型思考过程（流式增量拼接，可折叠展示） */
+  reasoning?: string
+  /** token 元信息（本次生成消耗；历史消息无此字段） */
+  usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number }
 }
 
 const route = useRoute()
@@ -47,8 +58,6 @@ type PreviewMode = 'code' | 'web'
 const previewMode = ref<PreviewMode>('code')
 // 本次生成是否已完成（完成后才允许切到网页预览）
 const generationDone = ref(false)
-// 格式化后的完整代码（供代码预览展示）
-const formattedCode = ref('')
 // 右侧预览面板是否展开（伸缩框）
 const previewExpanded = ref(true)
 
@@ -65,18 +74,39 @@ let connection: SseConnection | null = null
 const isMultiFile = computed(() => app.value?.codeGenType === 'multi_file')
 const isVue = computed(() => app.value?.codeGenType === 'vue')
 
-// Vue 工程：文件树（生成完成后填充）+ 流式进度
-const vueFiles = ref<API.VueFileResult[]>([])
+// 预览面板：统一文件集 + 文件树（生成中实时累加；点击对话里的文件清单可切换；html/multi_file/vue 共用）
+const previewFiles = ref<CodeFile[]>([])
 const vueProgress = ref('')
 // vue 构建产物预览加载中（首次构建较慢）
 const vuePreviewLoading = ref(false)
 // 文件树中当前选中的文件（用于代码预览分文件查看）
-const selectedVuePath = ref('')
-const selectedVueContent = computed(
-  () => vueFiles.value.find((f) => f.path === selectedVuePath.value)?.content ?? '',
+const selectedFilePath = ref('')
+const selectedFileContent = computed(
+  () => previewFiles.value.find((f) => f.path === selectedFilePath.value)?.content ?? '',
 )
-const selectVueFile = (path: string) => {
-  selectedVuePath.value = path
+// 把选中的文件内容包成 markdown 代码块（按扩展名选语言），供 MarkdownView 语法高亮渲染
+const selectedFileMarkdown = computed(() => {
+  const content = selectedFileContent.value
+  if (!content) return ''
+  const lang = langOfFile(selectedFilePath.value)
+  return '```' + lang + '\n' + content + '\n```'
+})
+// 按文件扩展名推断代码语言（highlight.js 语言名）
+function langOfFile(path: string): string {
+  const ext = path.split('.').pop()?.toLowerCase() ?? ''
+  switch (ext) {
+    case 'vue': return 'html'
+    case 'js': case 'mjs': case 'cjs': return 'javascript'
+    case 'ts': return 'typescript'
+    case 'css': return 'css'
+    case 'html': case 'htm': return 'html'
+    case 'json': return 'json'
+    case 'md': case 'mdx': return 'markdown'
+    default: return ''
+  }
+}
+const selectFile = (path: string) => {
+  selectedFilePath.value = path
 }
 
 // 加载 vue 工程构建产物的自包含预览 HTML（后端 dist 不存在时自动构建）
@@ -187,22 +217,33 @@ const updateCursor = (records: API.ChatHistory[]) => {
   }
 }
 
-const toChatMessage = (item: API.ChatHistory): ChatMessage => ({
-  role: item.messageType === 'user' ? 'user' : 'ai',
-  content: item.message ?? '',
-  status: item.messageType === 'error' ? 'error' : 'done',
-})
+const toChatMessage = (item: API.ChatHistory): ChatMessage => {
+  const content = item.message ?? ''
+  const isAi = item.messageType !== 'user'
+  if (isAi) {
+    // AI 消息存库是 description + 文件代码块，解析成"描述 + 文件清单"，气泡只显示清单
+    const parsed = parseMessageContent(content)
+    return {
+      role: 'ai',
+      content: item.messageType === 'error' ? content : parsed.description || '',
+      status: item.messageType === 'error' ? 'error' : 'done',
+      files: parsed.files,
+    }
+  }
+  return { role: 'user', content, status: 'done' }
+}
 
 // 加载已生成的代码并展示对应的网站
 const tryLoadWebsite = async () => {
   try {
     if (isVue.value) {
       // vue：加载构建产物预览（后端自动构建）
-      vueFiles.value = (await getAppCode({ id: appId.value as unknown as number })).data.data?.files ?? []
-      if (vueFiles.value.length > 0) {
-        selectedVuePath.value = vueFiles.value[0].path ?? ''
+      const files = (await getAppCode({ id: appId.value as unknown as number })).data.data?.files ?? []
+      previewFiles.value = files.map((f) => ({ path: f.path ?? '', content: f.content ?? '' }))
+      if (previewFiles.value.length > 0) {
+        selectedFilePath.value = previewFiles.value[0].path ?? ''
       }
-      vueProgress.value = `已生成 ${vueFiles.value.length} 个文件`
+      vueProgress.value = `已生成 ${previewFiles.value.length} 个文件`
       await loadVuePreview()
       return
     }
@@ -210,7 +251,11 @@ const tryLoadWebsite = async () => {
     if (res.data.code === 0 && res.data.data) {
       const result = res.data.data
       previewDoc.value = buildPreviewDoc(result)
-      formattedCode.value = buildFormattedCode(result)
+      const files = filesFromResult(result)
+      previewFiles.value = files
+      if (files.length > 0) {
+        selectedFilePath.value = files[0].path
+      }
       // 已有生成结果：允许切换预览，并直接展示网站
       generationDone.value = true
       previewMode.value = 'web'
@@ -237,7 +282,7 @@ const sendMessage = async (text?: string, auto = false) => {
   messages.value.push({ role: 'user', content })
   // 必须用 reactive 创建，否则 aiMsg 是普通对象，后续 aiMsg.content = 赋值
   // 不会触发 Vue proxy 的 set，streaming 期间 UI 不会实时刷新
-  const aiMsg = reactive<ChatMessage>({ role: 'ai', content: '', status: 'streaming' })
+  const aiMsg = reactive<ChatMessage>({ role: 'ai', content: '', status: 'streaming', files: [], reasoning: '' })
   messages.value.push(aiMsg)
   generating.value = true
   genProgress.value = '正在分析需求并生成代码…（可能需要 1-2 分钟）'
@@ -246,35 +291,32 @@ const sendMessage = async (text?: string, auto = false) => {
   // 重置本次生成的预览状态：默认回到代码预览，生成完成前不可切网页预览
   previewMode.value = 'code'
   generationDone.value = false
-  formattedCode.value = ''
+  previewFiles.value = []
+  selectedFilePath.value = ''
 
   if (useStream.value) {
     // vue 模式：agent 逐文件生成，SSE 推送 agent_progress（每文件完整代码）
     if (isVue.value) {
-      vueFiles.value = []
+      previewFiles.value = []
       vueProgress.value = '正在生成 Vue 工程…'
-      // ---- vue 逐文件显示：每个文件整块显示，配合 vueProgress/genProgress 传达进度 ----
-      const REVEAL_INTERVAL = 80 // 文件间显示间隔 ms
-      const revealQueue: { path: string; content: string }[] = [] // 待显示文件队列
-      let completedText = '' // 已完整显示的文件块的拼接（只在新文件完成时更新一次）
-      let revealTimer: ReturnType<typeof setInterval> | null = null
-      let donePayload: API.AiCodeGenResultVO | null = null // onDone 的结果（等 reveal 完收尾）
+      let donePayload: API.AiCodeGenResultVO | null = null
       let vueFileCount = 0 // 已收到的文件数（进度展示用）
 
-      // 收尾：description 前缀 + 文件树 + 预览等
+      // 收尾：description + 最终文件集 + 预览
       const finishVue = () => {
-        if (donePayload) {
-          const desc = donePayload.description ? donePayload.description + '\n\n' : ''
-          aiMsg.content = desc + aiMsg.content.trim()
-        }
         const result = donePayload ?? ({ files: [] } as API.AiCodeGenResultVO)
         aiMsg.status = 'done'
-        vueFiles.value = result.files ?? []
-        if (vueFiles.value.length > 0) {
-          selectedVuePath.value = vueFiles.value[0].path ?? ''
+        if (donePayload?.description) {
+          aiMsg.content = donePayload.description
         }
-        vueProgress.value = `已生成 ${vueFiles.value.length} 个文件`
-        formattedCode.value = buildFormattedCode(result)
+        const finalFiles = filesFromResult(result)
+        aiMsg.files = finalFiles
+        setMsgUsage(aiMsg, donePayload)
+        previewFiles.value = finalFiles
+        if (previewFiles.value.length > 0) {
+          selectedFilePath.value = previewFiles.value[0].path
+        }
+        vueProgress.value = `已生成 ${previewFiles.value.length} 个文件`
         previewLoading.value = false
         generating.value = false
         genProgress.value = ''
@@ -282,36 +324,6 @@ const sendMessage = async (text?: string, auto = false) => {
         // 生成完成后加载构建产物预览（后端自动构建 dist）
         vueProgress.value = '正在构建预览…'
         loadVuePreview()
-      }
-
-      // 每个文件整块显示（不逐字符打字机），避免大代码块 markdown 反复全量重渲染导致 O(n²) 卡死
-      const tick = () => {
-        if (revealQueue.length > 0) {
-          const next = revealQueue.shift()!
-          completedText = (completedText ? completedText + '\n\n' : '')
-            + `#### ${next.path}\n\`\`\`js\n${next.content}\n\`\`\``
-          aiMsg.content = completedText
-          return
-        }
-        // 队列空且当前无显示中
-        clearInterval(revealTimer!)
-        revealTimer = null
-        if (donePayload) {
-          finishVue()
-        }
-      }
-
-      const ensureReveal = () => {
-        if (!revealTimer) {
-          revealTimer = setInterval(tick, REVEAL_INTERVAL)
-        }
-      }
-
-      const stopReveal = () => {
-        if (revealTimer) {
-          clearInterval(revealTimer)
-          revealTimer = null
-        }
       }
 
       const callbacks: SseCallbacks = {
@@ -325,22 +337,21 @@ const sendMessage = async (text?: string, auto = false) => {
               vueFileCount++
               vueProgress.value = `正在生成 ${path}…`
               genProgress.value = `正在生成 ${path}…（第 ${vueFileCount} 个文件）`
-              revealQueue.push({ path, content })
-              ensureReveal()
+              upsertFile(aiMsg.files!, { path, content })
+              upsertFile(previewFiles.value, { path, content })
             }
           } catch {
             // 解析失败忽略（兼容旧格式）
           }
         },
+        onReasoning: (text) => {
+          aiMsg.reasoning = (aiMsg.reasoning || '') + text
+        },
         onDone: (result) => {
           donePayload = result
-          // 若 reveal 已空闲（队列空且无当前文件）立即收尾，否则等 tick 自然完成
-          if (!revealTimer && revealQueue.length === 0) {
-            finishVue()
-          }
+          finishVue()
         },
         onError: (errorMsg) => {
-          stopReveal()
           aiMsg.content = friendlyError(errorMsg)
           aiMsg.status = 'error'
           vueProgress.value = ''
@@ -358,48 +369,22 @@ const sendMessage = async (text?: string, auto = false) => {
       return
     }
     // html/multi_file 模式：agent 逐文件生成，SSE 推送 agent_progress（每文件完整代码）。
-    // 每个文件整块显示（不逐字符打字机），避免大代码块 markdown 反复全量重渲染导致 O(n²) 卡死；
-    // 文件间用短间隔维持"逐文件流式"观感，配合 genProgress 进度条传达生成进度。
-    const AGENT_INTERVAL = 80 // 文件间显示间隔 ms
-    const revealQueue: { path: string; content: string }[] = [] // 待显示文件队列
-    let completedText = '' // 已完整显示的文件块的拼接（只在新文件完成时更新一次）
-    let revealTimer: ReturnType<typeof setInterval> | null = null
-    let donePayload: API.AiCodeGenResultVO | null = null // onDone 的结果（等 reveal 完收尾）
+    // 消息里只显示文件清单，完整代码放右侧预览（分文件文件树），避免大代码块重渲染卡顿。
+    let donePayload: API.AiCodeGenResultVO | null = null
     let genFileCount = 0 // 已收到/显示的文件数（进度展示用）
 
-    const agentTick = () => {
-      if (revealQueue.length > 0) {
-        const next = revealQueue.shift()!
-        // 整文件块一次显示（不逐字符打字机），避免大代码块 markdown 反复全量重渲染导致 O(n²) 卡死
-        completedText = (completedText ? completedText + '\n\n' : '')
-          + `#### ${next.path}\n\`\`\`html\n${next.content}\n\`\`\``
-        aiMsg.content = completedText
-        return
-      }
-      clearInterval(revealTimer!)
-      revealTimer = null
-      if (donePayload) {
-        finishAgent()
-      }
-    }
-    const ensureAgentReveal = () => {
-      if (!revealTimer) {
-        revealTimer = setInterval(agentTick, AGENT_INTERVAL)
-      }
-    }
-    const stopAgentReveal = () => {
-      if (revealTimer) {
-        clearInterval(revealTimer)
-        revealTimer = null
-      }
-    }
     const finishAgent = () => {
       if (donePayload) {
-        const desc = donePayload.description ? donePayload.description + '\n\n' : ''
-        aiMsg.content = desc + aiMsg.content.trim()
+        aiMsg.content = donePayload.description ?? ''
         aiMsg.status = 'done'
         previewDoc.value = buildPreviewDoc(donePayload)
-        formattedCode.value = buildFormattedCode(donePayload)
+        const finalFiles = filesFromResult(donePayload)
+        aiMsg.files = finalFiles
+        setMsgUsage(aiMsg, donePayload)
+        previewFiles.value = finalFiles
+        if (previewFiles.value.length > 0) {
+          selectedFilePath.value = previewFiles.value[0].path
+        }
       }
       previewLoading.value = false
       generating.value = false
@@ -416,22 +401,21 @@ const sendMessage = async (text?: string, auto = false) => {
           if (path) {
             genFileCount++
             genProgress.value = `正在生成 ${path}…（第 ${genFileCount} 个文件）`
-            revealQueue.push({ path, content })
-            ensureAgentReveal()
+            upsertFile(aiMsg.files!, { path, content })
+            upsertFile(previewFiles.value, { path, content })
           }
         } catch {
           // 解析失败忽略（兼容旧格式）
         }
       },
+      onReasoning: (text) => {
+        aiMsg.reasoning = (aiMsg.reasoning || '') + text
+      },
       onDone: (result) => {
         donePayload = result
-        // 若 reveal 已空闲立即收尾，否则等 agentTick 自然完成
-        if (!revealTimer && revealQueue.length === 0) {
-          finishAgent()
-        }
+        finishAgent()
       },
       onError: (errorMsg) => {
-        stopAgentReveal()
         aiMsg.content = friendlyError(errorMsg)
         aiMsg.status = 'error'
         previewLoading.value = false
@@ -440,7 +424,6 @@ const sendMessage = async (text?: string, auto = false) => {
         generationDone.value = true
       },
       onClose: () => {
-        stopAgentReveal()
         generating.value = false
         genProgress.value = ''
       },
@@ -458,10 +441,16 @@ const sendMessage = async (text?: string, auto = false) => {
         : await chat({ appId: appId.value as unknown as number, message: content })
       const result = res.data
       if (result) {
-        aiMsg.content = buildMarkdownContent(result)
+        aiMsg.content = result.description ?? ''
         aiMsg.status = 'done'
         previewDoc.value = buildPreviewDoc(result)
-        formattedCode.value = buildFormattedCode(result)
+        const finalFiles = filesFromResult(result)
+        aiMsg.files = finalFiles
+        setMsgUsage(aiMsg, result)
+        previewFiles.value = finalFiles
+        if (previewFiles.value.length > 0) {
+          selectedFilePath.value = previewFiles.value[0].path
+        }
       } else {
         aiMsg.content = '生成失败：返回结果为空'
         aiMsg.status = 'error'
@@ -504,72 +493,125 @@ const buildPreviewDoc = (result: API.AiCodeGenResultVO): string => {
   return result.htmlCode ?? ''
 }
 
-// 生成格式化的完整代码文本，供"代码预览"展示
-const buildFormattedCode = (result: API.AiCodeGenResultVO): string => {
-  const parts: string[] = []
-  parts.push('// ===== description =====')
-  parts.push(result.description || '')
-  if (isVue.value) {
-    for (const f of result.files ?? []) {
-      if (f.path && f.content) {
-        parts.push(`// ===== ${f.path} =====`)
-        parts.push(f.content)
-      }
-    }
-    return parts.join('\n\n')
+// 从生成结果 VO 提取 token 用量并挂到消息上（气泡底部展示元信息）
+const setMsgUsage = (msg: ChatMessage, result: API.AiCodeGenResultVO | null | undefined) => {
+  if (!result || (result.promptTokens == null && result.totalTokens == null)) {
+    return
   }
-  if (isMultiFile.value || result.cssCode || result.jsCode) {
-    if (result.htmlCode) {
-      parts.push('// ===== index.html =====')
-      parts.push(result.htmlCode)
-    }
-    if (result.cssCode) {
-      parts.push('// ===== css/styles.css =====')
-      parts.push(result.cssCode)
-    }
-    if (result.jsCode) {
-      parts.push('// ===== js/app.js =====')
-      parts.push(result.jsCode)
-    }
-  } else {
-    if (result.htmlCode) {
-      parts.push('// ===== index.html =====')
-      parts.push(result.htmlCode)
-    }
+  msg.usage = {
+    promptTokens: result.promptTokens ?? undefined,
+    completionTokens: result.completionTokens ?? undefined,
+    totalTokens: result.totalTokens ?? undefined,
   }
-  return parts.join('\n\n')
 }
 
-// 将生成结果拼成 Markdown，供 AI 消息展示（含代码块，MarkdownView 高亮渲染）
-const buildMarkdownContent = (result: API.AiCodeGenResultVO): string => {
-  const parts: string[] = []
-  if (result.description) {
-    parts.push(result.description)
+// 按 path 去重插入文件（同一文件可能被 agent 重写覆盖，保持清单唯一）
+const upsertFile = (files: CodeFile[], file: CodeFile) => {
+  const idx = files.findIndex((f) => f.path === file.path)
+  if (idx >= 0) {
+    files[idx] = file
+  } else {
+    files.push(file)
   }
-  if (isVue.value) {
-    for (const f of result.files ?? []) {
+}
+
+// 从生成结果 VO 提取统一文件清单（vue 用 files；html/multi_file 拆成 index/css/js 三个文件）
+const filesFromResult = (result: API.AiCodeGenResultVO): CodeFile[] => {
+  const files: CodeFile[] = []
+  if (result.files && result.files.length > 0) {
+    for (const f of result.files) {
       if (f.path && f.content) {
-        parts.push('#### ' + f.path + '\n```js\n' + f.content + '\n```')
+        files.push({ path: f.path, content: f.content })
       }
     }
-    return parts.join('\n\n')
+    return files
   }
-  if (isMultiFile.value || result.cssCode || result.jsCode) {
-    if (result.htmlCode) {
-      parts.push('#### index.html\n```html\n' + result.htmlCode + '\n```')
+  if (result.htmlCode) {
+    files.push({ path: 'index.html', content: result.htmlCode })
+  }
+  if (result.cssCode) {
+    files.push({ path: 'css/styles.css', content: result.cssCode })
+  }
+  if (result.jsCode) {
+    files.push({ path: 'js/app.js', content: result.jsCode })
+  }
+  return files
+}
+
+// 从存库的 AI 消息 markdown（description + #### path + 代码块）解析出描述文本与文件清单，
+// 供历史消息回显时还原"文件列表 + 点击查看"的展示
+const parseMessageContent = (content: string): { description: string; files: CodeFile[] } => {
+  const files: CodeFile[] = []
+  const descParts: string[] = []
+  const blockRe = /####\s+(.+?)\s*\n```[a-zA-Z]*\n([\s\S]*?)```/g
+  let lastIndex = 0
+  let m: RegExpExecArray | null
+  while ((m = blockRe.exec(content))) {
+    if (m.index > lastIndex) {
+      descParts.push(content.slice(lastIndex, m.index))
     }
-    if (result.cssCode) {
-      parts.push('#### css/styles.css\n```css\n' + result.cssCode + '\n```')
-    }
-    if (result.jsCode) {
-      parts.push('#### js/app.js\n```javascript\n' + result.jsCode + '\n```')
-    }
+    files.push({ path: m[1].trim(), content: m[2] })
+    lastIndex = blockRe.lastIndex
+  }
+  descParts.push(content.slice(lastIndex))
+  return { description: descParts.join('').trim(), files }
+}
+
+// 文件大小格式化（字节 → KB）
+const formatSize = (bytes: number): string => {
+  if (bytes < 1024) {
+    return bytes + ' B'
+  }
+  return (bytes / 1024).toFixed(1) + ' KB'
+}
+
+// 点击对话消息里的文件清单 → 在右侧预览打开该文件（历史消息与当前预览不一致时以该消息文件集为准）
+const openFileFromMessage = (msg: ChatMessage, path: string) => {
+  if (!msg.files?.some((f) => f.path === path)) {
+    return
+  }
+  previewFiles.value = [...msg.files]
+  selectedFilePath.value = path
+  previewMode.value = 'code'
+}
+
+// 跳转到已部署的应用网站（deployUrl 由后端组装，域名 + deployKey）
+const openDeployedSite = () => {
+  if (app.value?.deployUrl) {
+    window.open(app.value.deployUrl, '_blank')
   } else {
-    if (result.htmlCode) {
-      parts.push('#### index.html\n```html\n' + result.htmlCode + '\n```')
-    }
+    message.warning('部署地址不可用')
   }
-  return parts.join('\n\n')
+}
+
+// 下载应用源码 zip（后端校验创建者权限并过滤排除敏感/构建文件）
+const handleDownloadCode = async () => {
+  if (!app.value?.id) return
+  try {
+    const res = await downloadCode({ id: appId.value as unknown as number })
+    const blob = res.data as Blob
+    // 后端异常时返回的是 JSON blob（如未生成/无权限），识别出来提示而不是当文件下载
+    if (blob && blob.type && blob.type.includes('json')) {
+      try {
+        const parsed = JSON.parse(await blob.text())
+        message.error(parsed.message || '下载失败')
+      } catch {
+        message.error('下载失败')
+      }
+      return
+    }
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${app.value.appName || 'app'}_${app.value.codeGenType || 'code'}.zip`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(url)
+    message.success('已开始下载')
+  } catch (e: any) {
+    message.error(e?.message || '下载失败')
+  }
 }
 
 const handleDeploy = async () => {
@@ -728,6 +770,17 @@ onUnmounted(() => {
           停止生成
         </a-button>
         <a-button
+          v-if="app?.deployKey"
+          @click="openDeployedSite"
+        >
+          <template #icon><LinkOutlined /></template>
+          打开网站
+        </a-button>
+        <a-button @click="handleDownloadCode">
+          <template #icon><DownloadOutlined /></template>
+          下载代码
+        </a-button>
+        <a-button
           type="primary"
           :loading="deploying"
           @click="handleDeploy"
@@ -764,7 +817,37 @@ onUnmounted(() => {
               </template>
             </a-avatar>
             <div class="msg-bubble" :class="{ 'msg-streaming': msg.status === 'streaming' }">
-              <MarkdownView v-if="msg.role === 'ai'" :content="msg.content" />
+              <template v-if="msg.role === 'ai'">
+                <details
+                  v-if="msg.reasoning"
+                  class="msg-reasoning"
+                  :open="msg.status === 'streaming'"
+                >
+                  <summary>思考过程</summary>
+                  <MarkdownView :content="msg.reasoning" />
+                </details>
+                <MarkdownView v-if="msg.content" :content="msg.content" />
+                <div v-if="msg.files && msg.files.length" class="msg-file-list">
+                  <div
+                    v-for="f in msg.files"
+                    :key="f.path"
+                    class="msg-file-item"
+                    title="点击在右侧查看完整代码"
+                    @click="openFileFromMessage(msg, f.path)"
+                  >
+                    <FileTextOutlined class="msg-file-icon" />
+                    <span class="msg-file-path">{{ f.path }}</span>
+                    <span class="msg-file-size">{{ formatSize(f.content.length) }}</span>
+                  </div>
+                </div>
+                <div v-if="msg.usage && msg.usage.totalTokens" class="msg-usage">
+                  消耗 {{ msg.usage.totalTokens }} tokens<span
+                    v-if="msg.usage.promptTokens != null"
+                  > · 输入 {{ msg.usage.promptTokens }}</span><span
+                    v-if="msg.usage.completionTokens != null"
+                  > · 输出 {{ msg.usage.completionTokens }}</span>
+                </div>
+              </template>
               <span v-else>{{ msg.content }}</span>
             </div>
           </div>
@@ -812,32 +895,31 @@ onUnmounted(() => {
         </div>
         <div class="preview-content">
           <template v-if="previewMode === 'code'">
-            <template v-if="isVue">
-              <div class="vue-code-layout">
-                <div class="vue-file-tree">
-                  <div v-if="vueProgress" class="vue-progress">{{ vueProgress }}</div>
-                  <div
-                    v-for="f in vueFiles"
-                    :key="f.path"
-                    class="vue-file-item"
-                    :class="{ active: f.path === selectedVuePath }"
-                    @click="selectVueFile(f.path ?? '')"
-                  >
-                    {{ f.path }}
-                  </div>
-                  <a-empty v-if="vueFiles.length === 0" :description="vueProgress || '暂无文件'" :image="false" />
+            <div class="vue-code-layout">
+              <div class="vue-file-tree">
+                <div v-if="vueProgress" class="vue-progress">{{ vueProgress }}</div>
+                <div
+                  v-for="f in previewFiles"
+                  :key="f.path"
+                  class="vue-file-item"
+                  :class="{ active: f.path === selectedFilePath }"
+                  @click="selectFile(f.path)"
+                >
+                  {{ f.path }}
                 </div>
-                <pre class="code-frame vue-code">{{ selectedVueContent }}</pre>
+                <a-empty v-if="previewFiles.length === 0" :description="vueProgress || '暂无文件'" :image="false" />
               </div>
-            </template>
-            <template v-else>
-              <pre v-if="formattedCode" class="code-frame">{{ formattedCode }}</pre>
+              <MarkdownView
+                v-if="selectedFileContent"
+                :content="selectedFileMarkdown"
+                class="preview-md"
+              />
               <div v-else class="preview-empty">
                 <a-empty
                   :description="previewLoading ? '正在生成代码，请稍候...' : '代码生成后在此展示'"
                 />
               </div>
-            </template>
+            </div>
           </template>
           <template v-else>
             <template v-if="previewDoc">
@@ -996,6 +1078,82 @@ onUnmounted(() => {
   background: #f5f5f5;
 }
 
+.msg-file-list {
+  margin-top: 8px;
+  border-top: 1px dashed #d9d9d9;
+  padding-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.msg-file-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  color: #1677ff;
+  background: #fff;
+  transition: background 0.2s;
+}
+
+.msg-file-item:hover {
+  background: #e6f4ff;
+}
+
+.msg-file-icon {
+  color: #8c8c8c;
+}
+
+.msg-file-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.msg-file-size {
+  font-size: 12px;
+  color: #999;
+  flex-shrink: 0;
+}
+
+.msg-usage {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #999;
+}
+
+.msg-reasoning {
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  background: #fafafa;
+  border: 1px solid #eee;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.msg-reasoning summary {
+  cursor: pointer;
+  color: #666;
+  user-select: none;
+  outline: none;
+}
+
+.msg-reasoning-text {
+  margin-top: 6px;
+  max-height: 180px;
+  overflow-y: auto;
+  color: #888;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .stream-text {
   margin: 0;
   font-size: 12px;
@@ -1090,6 +1248,16 @@ onUnmounted(() => {
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-all;
+}
+
+.preview-md {
+  height: 100%;
+  overflow: auto;
+  padding: 16px;
+}
+
+.preview-md :deep(pre) {
+  margin: 0;
 }
 
 .preview-empty {

@@ -520,6 +520,10 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         }
         AppVO appVO = new AppVO();
         BeanUtil.copyProperties(app, appVO);
+        // 已部署应用拼出访问地址，供前端"打开网站"按钮使用
+        if (StrUtil.isNotBlank(app.getDeployKey())) {
+            appVO.setDeployUrl(codeFileWriteService.getDomain() + "/" + app.getDeployKey());
+        }
         return appVO;
     }
 

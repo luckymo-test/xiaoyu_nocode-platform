@@ -29,8 +29,9 @@ spring:
       chat:
         options:
           model: deepseek-v4-flash
-          # 调大输出上限，避免长 HTML 被截断导致 JSON 解析失败
-          max-tokens: 8192
+          # 调大输出上限：deepseek-v4-flash 是推理模型，推理 token 也占输出预算，
+          # 8192 时常截断导致工具参数 JSON 解析失败；16384 已实测 beta 接口接受（上限更高）
+          max-tokens: 16384
 server:
   port: 8124
   servlet:

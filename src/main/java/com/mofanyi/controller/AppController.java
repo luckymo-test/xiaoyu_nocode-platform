@@ -20,17 +20,23 @@ import com.mofanyi.model.vo.AppVO;
 import com.mofanyi.model.vo.AiCodeGenResultVO;
 import com.mofanyi.service.AppService;
 import com.mofanyi.service.UserService;
+import com.mofanyi.service.projectDownloadService;
 import com.mybatisflex.core.paginate.Page;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -47,6 +53,9 @@ public class AppController {
 
     @Autowired
     private UserService userService;
+
+    @Autowired
+    private projectDownloadService projectDownloadService;
 
     /**
      * 创建应用
@@ -180,6 +189,21 @@ public class AppController {
         userService.getLoginUser(request);
         AiCodeGenResultVO codeVO = appService.getAppCode(id);
         return ResultUtils.success(codeVO);
+    }
+
+    /**
+     * 下载应用源码（zip）。仅创建者可下载，下载的是生成目录（源代码）而非部署目录。
+     */
+    @GetMapping("/download/code")
+    public ResponseEntity<StreamingResponseBody> downloadCode(long id, HttpServletRequest request) {
+        ThrowUtils.throwIf(id <= 0, ErrorCode.PARAMS_ERROR);
+        projectDownloadService.DownloadInfo info = projectDownloadService.validate(id, request);
+        String encoded = URLEncoder.encode(info.filename(), StandardCharsets.UTF_8).replace("+", "%20");
+        return ResponseEntity.ok()
+                .contentType(MediaType.parseMediaType("application/zip"))
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                        "attachment; filename=\"code.zip\"; filename*=UTF-8''" + encoded)
+                .body(out -> projectDownloadService.writeZip(info, out));
     }
 
     /**

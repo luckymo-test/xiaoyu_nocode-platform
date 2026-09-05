@@ -2,7 +2,7 @@
 
 > 小玉零代码平台（xiaoyu_zerocode）开发过程中遇到的问题与解决方案。
 > 按主题分类，每条包含：现象 → 原因 → 解决。
-> 第一~六章为后端（Spring Boot + Spring AI + MyBatis-Flex），第七章为前端（Vue 3 + Ant Design Vue）。
+> 第一~六章为后端（Spring Boot + Spring AI + MyBatis-Flex），第七章为前端（Vue 3 + Ant Design Vue），第八章为对话记忆与历史（Redis + MySQL 双写），第九章为 Vue3 工程生成模式。
 
 ---
 
@@ -50,6 +50,18 @@ curl -X POST "http://localhost:8124/api/app/add" -H "Content-Type: application/j
 **原因**：登录命令没执行成功或 cookie 文件未生成（之前命令在别的目录跑）。
 
 **解决**：先确认登录命令成功且 `-c cookies.txt` 落在当前工作目录；用 `curl -b cookies.txt "http://localhost:8124/api/user/get/login"` 验证登录态。
+
+### 48. 后台 `mvn spring-boot:run` 进程可能意外退出（BUILD FAILURE）
+
+**现象**：用 `mvn spring-boot:run` 后台跑后端，一段时间后任务以 `BUILD FAILURE ... Process terminated with exit code: 1` 退出，后端 8124 端口无监听；此时 `npm run openapi2ts` 报 `ECONNREFUSED`、浏览器接口全挂。
+
+**原因**：`mvn spring-boot:run` 把应用跑在 Maven 进程内，**任何原因导致进程终止（终端关闭、devtools 重启冲突、OOM、Ctrl-C 等）都会连带结束**；日志末尾只看到 Maven 报退出码，真正的终止原因要看更早的输出。
+
+**解决/注意**：
+- 检测：`netstat -ano | grep 8124` 或 `curl` 探活；后台任务日志看是否 `BUILD FAILURE`
+- 恢复：重新 `mvn spring-boot:run`（或改用 IDE 启动，更可控）
+- 依赖后端接口的工具（openapi2ts、浏览器验证）都要先确认后端在跑
+**经验**：`mvn spring-boot:run` 适合临时跑、不适合当常驻服务；关键开发会话里定期探活，后端没了先重启再继续（openapi2ts 连不上通常就是后端没起，别先怀疑配置）。
 
 ---
 
@@ -230,6 +242,49 @@ if (StrUtil.isNotBlank(searchText)) {
 ```
 `QueryCondition.or(QueryCondition)` 是明确的链式 API，无重载歧义。**经验**：MyBatis-Flex 条件构造优先用 `QueryCondition`/`QueryColumn` 显式对象，lambda 写法在有重载时会踩类型推断坑。
 
+### 37. QueryCondition 传字符串操作符拼出非法 SQL（"lt"/"eq" → 50000）
+
+**现象**：对话历史游标分页 `/chatHistory/list/page/vo` 带 `beforeCreateTime` 时返回 `{"code":50000,"message":"系统错误"}`；不带游标参数时正常。
+
+**原因**：`QueryCondition.create(new QueryColumn("createTime"), "lt", value)` 的字符串操作符 `"lt"` 被 MyBatis-Flex 1.11.1 **原样拼接到 SQL**（不映射成 `<`），生成 `` `createTime`lt'2026-08-10 09:43:49' `` 非法 SQL，执行抛异常。反编译 jar 的字节码确认：`create(QueryColumn, String, Object)` 只是把 String 存进 `logic` 字段，SQL 拼装时直接输出该字符串。**`"like"` 恰好是合法 SQL 关键字，所以 `AppServiceImpl` 的 searchText 用同样写法碰巧能用，掩盖了这个坑。**
+
+**排查要点**：
+1. 区分"反序列化失败"和"SQL 错误"：`beforeCreateTime=12345`（非法类型）→ 50000（反序列化失败）；`appId=0` + 合法时间 → 40000（反序列化成功、业务校验失败）。反序列化成功仍 50000 → 问题在 SQL 层。
+2. 反编译 jar + 写最小 Java probe 调 `queryWrapper.toSQL()` 打印实际 SQL，一眼看出 `` `createTime`lt'...' `` 少了空格/操作符。
+
+**解决**：改用 `SqlOperator` 枚举：
+```java
+QueryCondition timeLessCond = QueryCondition.create(new QueryColumn("createTime"), SqlOperator.LT, beforeCreateTime);
+QueryCondition timeEqCond  = QueryCondition.create(new QueryColumn("createTime"), SqlOperator.EQUALS, beforeCreateTime);
+QueryCondition idLessCond  = QueryCondition.create(new QueryColumn("id"), SqlOperator.LT, beforeId);
+```
+**经验**：MyBatis-Flex 条件操作符一律用 `SqlOperator` 枚举，不要传字符串——只有恰好等于 SQL 关键字的字符串（`like`）才碰巧能用，`lt`/`eq`/`gt` 这类一律踩坑。
+
+### 44. 分组分页聚合查询：`pageAs` + `groupBy` 返回自定义 VO
+
+**需求**：对话管理页要"一个应用一行"，展示每个应用的消息数、最近对话时间。即 `chat_history` 按 `appId` 分组聚合、分页、返回自定义 VO（`ChatAppVO`）。
+
+**方案**（[ChatHistoryServiceImpl.java](src/main/java/com/mofanyi/service/impl/ChatHistoryServiceImpl.java)）：
+```java
+QueryWrapper qw = QueryWrapper.create()
+        .select("appId", "count(*) as messageCount", "max(createTime) as lastCreateTime")
+        .from(ChatHistory.class)
+        .groupBy("appId")
+        .orderBy("lastCreateTime", false);
+Page<ChatAppVO> page = this.pageAs(Page.of(pageNum, pageSize), qw, ChatAppVO.class);
+```
+关键点：
+- `pageAs(Page, QueryWrapper, VO.class)` 分组分页由框架自动处理（count 用子查询），无需手写 count
+- **字段别名（`as messageCount`）必须与 VO 驼峰字段名一致**，`pageAs` 才能映射成功（`messageCount` ↔ `messageCount`）
+
+**补关联字段防 N+1**：聚合结果里没有 `appName`（在 app 表），逐条查会 N+1。改为一次 `IN` 批量查再组装：
+```java
+Map<Long, App> appMap = appMapper.selectListByIds(appIds).stream()
+        .collect(Collectors.toMap(App::getId, a -> a, (a, b) -> a));
+for (ChatAppVO vo : list) { App app = appMap.get(vo.getAppId()); if (app != null) { vo.setAppName(app.getAppName()); ... } }
+```
+**经验**：MyBatis-Flex 聚合 + 分页 + 自定义 VO 一条 `pageAs` 搞定；关联表补字段一律批量 `IN` 查询再 map，别写循环单查。
+
 ---
 
 ## 六、测试
@@ -403,9 +458,239 @@ npm i -D @types/markdown-it
 1. **后端** [AiCodeGeneratorFacade.java](src/main/java/com/mofanyi/core/AiCodeGeneratorFacade.java)：两个流式方法的 error 分支，**先尝试用已累积的 token 容错解析并落盘**（保住已生成的部分代码），解析不出才标记失败。新增 `tryRecoverHtml` / `tryRecoverMultiFile` 方法。
 2. **前端** [AppGeneratePage.vue](xiaoyuZeroCode-front/src/views/app/AppGeneratePage.vue)：新增 `friendlyError` 函数，把 `connection reset` 等网络错误映射为"**生成失败：网络连接不稳定，请重试**"，不再把技术堆栈抛给用户。
 
+### 45. 预览工具（preview_*）与已运行的 dev server 冲突（孤儿 vite 进程占端口）
+
+**现象**：`preview_start` 报 `Port 5173 is in use by "node.exe" (not a preview server)`，无法启动受管理的 dev server。
+
+**原因**：之前用别的方式（Bash 直接起 vite / 残留进程）启动的前端 dev server 仍在运行，但**预览管理器不跟踪它**——preview_* 工具只能接管自己通过 `preview_start` 起的 server。
+
+**解决**：定位并杀掉占用端口的孤儿进程，再 `preview_start`：
+```bash
+# 定位占用进程
+powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object {$_.CommandLine -match 'vite'} | Select ProcessId, CommandLine | Format-List"
+# 杀掉（确认是 vite 后再停）
+powershell -NoProfile -Command "Stop-Process -Id <PID> -Force"
+```
+**经验**：前端 dev server 尽量统一用 `preview_start` 启动，避免脱离预览管理；端口被占时先 `Get-CimInstance` 确认占用进程是 vite 再停，别误杀其他服务。
+
+### 47. 浏览器验证 admin 权限页：HttpOnly cookie 无法切会话，临时改库角色
+
+**现象**：浏览器登录的是普通用户（`dev_test_2026`），访问 `/admin/chat` 被路由守卫拦到"无权限访问"，无法用浏览器验证 admin 页。
+
+**原因**：登录态 session 是 **HttpOnly cookie**，`document.cookie = 'SESSION=xxx'` 无法覆盖（HttpOnly 禁止 JS 读写）；又没有 admin 账号密码可登录。
+
+**解决**：临时把测试账号提升为 admin，验证完立刻恢复：
+```bash
+# 验证前提权
+node -e "const m=require('<mysql2>');(async()=>{const c=await m.createConnection({host:'localhost',user:'root',password:'...',database:'xiaoyu_zerocode'});await c.query(\"UPDATE user SET userRole='admin' WHERE userAccount='dev_test_2026'\");await c.end()})()"
+# 重新登录/刷新让后端返回新角色（角色在登录时写入 session）
+# 验证完恢复
+# UPDATE user SET userRole='user' WHERE userAccount='dev_test_2026'
+```
+**注意**：改角色后**必须重新登录**（或刷新页面触发重新 `fetchLoginUser`），否则 session 里缓存的还是旧角色。
+**经验**：浏览器无法绕过 HttpOnly cookie 换会话；临时改库角色 + 验证后恢复是可靠的浏览器验证手段，但记得收尾恢复，别把测试账号留在 admin 角色。
+
 ---
 
-## 排查经验总结
+## 八、对话记忆与历史（Redis ChatMemory + MySQL 双写）
+
+### 38. 后端生成流程不落库 chat_history → 部署后回来重新生成
+
+**现象**：创建应用并部署后，重新进入该应用对话页，每次都重新调用 AI 生成，卡几十秒；已生成的代码没被展示。
+
+**原因**：`ChatHistoryService.saveMessage(...)` 接口和实现都已写好，但 AI 生成链路（`AiChatController` → `AiCodeGeneratorFacade`）**从未调用它**，`chat_history` 表从无数据。前端逻辑是"自己的 app 且无对话历史 → 自动发 initPrompt"，历史永远为空 → 每次进页面都重新生成；且历史 < 2 条不触发网站展示分支，`getAppCode` 读到的已有代码也被跳过。
+
+**解决**：AI 生成链路双写落库（详见本章）：
+1. 生成前 `chatHistoryService.saveMessage(appId, userId, message, "user", null)` 拿 userMsgId
+2. 完成后 `saveMessage(appId, userId, aiContent, "assistant", userMsgId)`（aiContent 拼成 description + 代码块 Markdown，与前端展示格式一致）
+3. 失败 `saveMessage(..., "error", userMsgId)`（截断 500 字符防堆栈超长）
+前端自动判断（有历史不重发）随即生效。
+
+### 39. Spring AI 官方没有 Redis ChatMemoryRepository
+
+**需求**：用 Redis 做 AI 对话记忆，但官方文档（chat-memory.adoc）列出的 `ChatMemoryRepository` 实现只有 InMemory/Jdbc/Cassandra/Neo4j/CosmosDB/Mongo，**没有 Redis**。
+
+**解决**：自研实现，接口仅 4 个方法，用 `StringRedisTemplate` + JSON（[RedisChatMemoryRepository.java](src/main/java/com/mofanyi/config/RedisChatMemoryRepository.java)）：
+- key = `spring:ai:chat:memory:{conversationId}`（本项目 conversationId = appId）
+- 值 = JSON 数组 `[{"type":"user","text":"..."},{"type":"assistant","text":"..."}]`
+- `findConversationIds()`：SCAN 前缀 `spring:ai:chat:memory:*`，**勿用 KEYS**（大数据量阻塞 Redis）
+- `findByConversationId()`：GET + 反序列化 → 重建 `Message`
+- `saveAll()`：全量覆盖 SET（`MessageWindowChatMemory` 是整读整写，每次保存裁剪后的完整窗口）
+- `deleteByConversationId()`：DEL
+
+**注意**：`Message` 是抽象多态类型，直接 Jackson 序列化麻烦。用自定义 record `{type,text}`（type 存 `MessageType.name().toLowerCase()`），反序列化时按 type 重建 `UserMessage`/`AssistantMessage`/`SystemMessage`。
+
+配置（[ChatMemoryConfig.java](src/main/java/com/mofanyi/config/ChatMemoryConfig.java)）：
+```java
+@Bean
+public ChatMemory chatMemory(RedisChatMemoryRepository repo) {
+    return MessageWindowChatMemory.builder()
+            .chatMemoryRepository(repo)
+            .maxMessages(20)   // 最近 20 条消息窗口
+            .build();
+}
+```
+
+### 40. MessageChatMemoryAdvisor 会把完整 system prompt 存进记忆
+
+**现象**：挂上 `MessageChatMemoryAdvisor` 后，Redis 里存的记忆第一条是**完整 system prompt 文本**（作为 user 消息），而非真实对话。窗口被大量重复的 system prompt 占用，后续对话上下文被污染；且 AI 回复不会自动进记忆。
+
+**原因**：advisor 默认把发给模型的**整个 user prompt**（system prompt + 当前消息拼接后的长文本）存入记忆。
+
+**解决**：**不用 advisor**，在 `AiCodeGeneratorServiceImpl` 手动读写记忆：
+```java
+// 调用前：读历史注入 prompt（作为前置 messages）
+List<Message> history = chatMemory.get(String.valueOf(appId));
+chatClient.prompt().system(systemPrompt).messages(history).user(fullPrompt).call()...
+// 调用后：写入本次对话
+chatMemory.add(String.valueOf(appId), List.of(new UserMessage(msg), new AssistantMessage(reply)));
+```
+这样记忆里只存真实对话，干净且可控。**经验**：Spring AI 的 memory advisor 默认存整个 user prompt，想只存真实对话要手动 `get`/`add`。
+
+### 41. 流式生成时对话记忆的写入时机
+
+**需求**：流式生成时 `Flux<String>` 在 Reactor 内异步执行，无法在返回前同步写入记忆；且若在 Flux 构造前先写 user 消息、再读 `history`，会把自己重复注入 prompt。
+
+**解决**：先读历史（不含本次）→ 再写本次 user 消息 → Flux 里攒 token 文本，`doOnComplete` 写 assistant 消息：
+```java
+List<Message> hist = history(appId);      // 1. 先读，不含本次
+addUserMessage(appId, userMessage);       // 2. 再写本次 user
+return chatClient.prompt().system(...).messages(hist).user(...).stream().content()
+    .doOnNext(token -> raw.append(token))                 // 3. 攒流式文本
+    .doOnComplete(() -> addAssistantMessage(appId, raw.toString()));  // 4. 完成写 assistant
+```
+非流式则调用完成后一次性 `add(user + assistant)`。记忆写入失败不影响生成主流程（try/catch 吞掉）。
+
+### 42. Redis `Cursor` try-with-resources 编译报 unreported IOException
+
+**现象**：`try (Cursor<byte[]> cursor = connection.scan(...)) { ... } catch (IOException e)` 编译报 `未报告的异常IOException; 必须对其进行捕获或声明以便抛出`。
+
+**原因**：Spring Data 的 `Cursor` 同时继承 `AutoCloseable.close() throws Exception` 和 `Closeable.close() throws IOException`，javac 分析资源关闭路径时按**最宽的 `Exception`** 处理；且 `scan()` 初始化表达式抛的检查异常不会被**同一 try** 的 catch 捕获。用最小 Java 测试确认：`catch (Exception)` 能过，`catch (IOException)` 报错。
+
+**解决**：外层再包一层 try 捕获 `Exception`：
+```java
+try {
+    try (Cursor<byte[]> cursor = connection.scan(ScanOptions.scanOptions().match(KEY_PREFIX + "*").count(100).build())) {
+        while (cursor.hasNext()) { ... }
+    }
+} catch (Exception e) {
+    throw new IllegalStateException("扫描对话记忆失败", e);
+}
+```
+
+### 43. 老版本 Redis 连不上（node redis 客户端报 HELLO 3）
+
+**现象**：验证 Redis 记忆时，node 官方 `redis` 客户端 `connect()` 报 `ERR unknown command 'HELLO', with args beginning with: '3'`；`redis-cli` 本机也没装。
+
+**原因**：本机 Redis 版本较老，不支持 RESP3 的 `HELLO` 握手，node 官方客户端（默认走 RESP3）连不上。
+
+**解决**：用原生 RESP 协议经 net socket 直接发命令验证（也可绕开客户端版本问题）：
+```bash
+node -e "const n=require('net');const s=n.connect(6379,'127.0.0.1',()=>{s.write('GET spring:ai:chat:memory:123\r\n');s.end()});s.on('data',d=>console.log(d.toString().slice(0,200)));setTimeout(()=>process.exit(0),2000)"
+```
+
+### 46. 同 app 并发写 Redis 记忆的读-改-写竞态（隐患）
+
+**现象/分析**：反编译 `MessageWindowChatMemory.add()` 字节码发现它执行的是**非原子的三步**：
+```
+1. findByConversationId(appId)   ← 读当前窗口
+2. process(历史, 新消息)          ← 拼接 + 裁剪到 maxMessages
+3. saveAll(appId, 结果)          ← 全量写回 Redis
+```
+若**同一个 app** 的两个请求并发 `add`（如多端同时发消息），A、B 都读到同一份旧窗口，B 的后写会**覆盖 A 的写入**，导致丢消息（经典的 read-modify-write 竞态）。
+
+**影响评估**：
+- 不同 app 之间安全（key 不同，`spring:ai:chat:memory:{appId}` 天然隔离）
+- 当前前端有 `generating` 状态禁止同一页面重复发送，单用户单应用几乎不触发
+- chat_history（MySQL）双写不受影响，前端展示靠 MySQL，**用户可见影响很小**——所以这是隐患而非已暴露 bug
+
+**解决方向**（如需加固）：按 appId 分段锁，只串行化同 app 的写，不同 app 仍并行：
+```java
+private final ConcurrentHashMap<String, Object> appLocks = new ConcurrentHashMap<>();
+
+private void remember(Long appId, String userMessage, String aiContent) {
+    String conversationId = String.valueOf(appId);
+    synchronized (appLocks.computeIfAbsent(conversationId, k -> new Object())) {
+        chatMemory.add(conversationId, List.of(new UserMessage(userMessage), new AssistantMessage(aiContent)));
+    }
+}
+```
+
+---
+
+## 九、Vue3 工程生成模式
+
+### 49. Vue 部署后页面空白（vite 构建资源绝对路径）
+
+**现象**：部署 vue 应用后访问 `http://localhost/{deployKey}/`，页面空白。浏览器 F12 看 `/assets/index-xxx.js` 404。
+
+**原因**：vite 构建产物默认资源是**绝对路径** `/assets/index-xxx.js`（root-relative）。应用部署在 `/{deployKey}/` 子路径，nginx root 指向 `deploy/` 目录，浏览器请求 `/assets/...` 落到 `deploy/assets/`（不存在）→ 404 → 资源加载失败 → 空白。curl 实测 `/assets/...` 404、`/{deployKey}/assets/...` 200，坐实根因。
+
+**解决**：`vite.config.js` 设置 `base: './'`，让构建产物资源变**相对路径** `./assets/index-xxx.js`：
+```js
+export default defineConfig({ base: './', plugins: [vue()] })
+```
+部署到任意子路径都能正常加载。已在 `codegen_vue_prompt.txt` 里强制要求生成该配置。
+
+### 50. 部署 done 事件发裸 URL → 前端"解析生成结果失败"
+
+**现象**：vue 部署成功后前端报 `解析生成结果失败: http://localhost/xxx`，不打开新窗口。
+
+**原因**：前端 `sse.ts` 对 SSE 的 `done` 事件**统一 `JSON.parse(event.data)`**（生成接口的 done 发 VO JSON）。但部署接口 `/app/deploy/stream` 的 done 发的是**裸 URL 字符串**，不是 JSON → 解析失败。
+
+**解决**：后端 `/app/deploy/stream` 的 done 改为发 JSON 对象 `{"url":"..."}`，与生成接口 done 格式一致；前端 onDone 从 `result.url` 取：
+```java
+send(emitter, "done", java.util.Map.of("url", url));
+```
+**经验**：SSE 的 `done`/`error` 事件 data 格式要在前后端对齐——要么都 JSON，要么前端按接口区分解析。
+
+### 51. 修改对话重新生成后，预览/部署仍是旧页面
+
+**现象**：vue 应用生成后预览正常；要求 AI 修改（如改绿色），代码确实重新生成了，但页面预览/部署**没有变化**，还是旧样式。
+
+**原因**：`getVuePreview` 只在 **dist 不存在**时才构建。修改重新生成只更新了源码文件，dist 仍存在（旧构建），所以预览直接返回旧 dist。
+
+**解决**：**vue 每次生成完成后失效 dist**——源码更新后删除 dist，下次预览/部署自动重建：
+- `CodeFileWriteService.deleteVueDist(appId)`：删 `vue_{appId}/dist`
+- `AiCodeGeneratorFacade` 两处 vue 生成完成（`generateVueProject` / `streamGenerateVueProject` onDone）后调它
+```java
+codeFileWriteService.deleteVueDist(appId);
+```
+**经验**：构建产物（dist）是源码的"缓存"，源码更新必须让缓存失效，否则预览/部署一直读旧产物。
+
+### 52. `Executors.newCachedThreadPool()` 不受 Spring 管理
+
+**现象**：`AiCodeGeneratorFacade` 用 `static final ExecutorService VUE_EXECUTOR = Executors.newCachedThreadPool()` 跑 vue 生成——无界线程池（任务多时线程爆炸）、不受 Spring 管理（无法配置/优雅关闭）。
+
+**解决**：线程池 Spring 化：
+1. `ThreadPoolProperties`：`@ConfigurationProperties(prefix="thread-pool.vue")` 绑定 yml（core/max/keepAlive/queue/threadNamePrefix）
+2. `ThreadPoolConfig`：`@Bean ThreadPoolExecutor`，直接 `new ThreadPoolExecutor(core, max, keepAlive, TimeUnit.SECONDS, new LinkedBlockingQueue<>(queue), threadFactory, new ThreadPoolExecutor.CallerRunsPolicy())`，自定义 daemon 线程工厂 `vue-gen-N`
+3. `AiCodeGeneratorFacade` 构造器注入 `ThreadPoolExecutor` Bean，删静态常量
+
+**经验**：Java 并发工具（线程池）在 Spring 项目里要用 Bean 管理，`Executors.newCachedThreadPool()` 的无界性质 + 非托管是隐患。拒绝策略 `CallerRunsPolicy`（队列满时调用线程执行，不丢任务）。
+
+### 53. vue 对话消息"每生成一个文件整块渲染"，无流式打字机效果
+
+**现象**：vue 模式生成时，AI 消息区每写完一个文件就**整块瞬间出现**该文件代码，用户要的是像 html 模式那样逐段流式显示。
+
+**原因**：vue agent 是**逐文件生成**（SSE `agent_progress` 每次携带一个完整文件内容），前端 `onAgentProgress` 直接 `push` + `join` 整段刷新，无打字机过程感。
+
+**解决**：前端实现**打字机 reveal**——收到文件入队，定时器逐段推进到消息区：
+```ts
+const revealQueue: { path: string; content: string }[] = []
+let revealTimer = setInterval(() => {
+  if (currentTarget) {
+    currentPos = Math.min(currentTarget.length, currentPos + REVEAL_CHUNK)
+    // 显示 currentTarget.slice(0, currentPos)，放完 push 进已显示列表，取队列下一个
+  }
+}, REVEAL_INTERVAL)
+```
+- `REVEAL_CHUNK`（每 tick 追加字符）/ `REVEAL_INTERVAL`（tick 间隔）控制速度
+- 一个文件放完自动衔接下一个；队列空 + 收到 done → 补 description 前缀、更新文件树、触发构建预览
+- `onError`/`onClose` 清定时器
+
+**验证**：浏览器采样消息长度渐进增长（`1242→1388→1532…→8083`，每 150ms +约140 字符），确认逐段 reveal 生效。
+**注意**：vue agent 逐文件生成本身很快（单文件<1s），打字机只是"表演式"把已生成内容逐段放出，实现流式观感——无法做到 html 模式那种逐 token 的真实流式（那是 token 流，vue 是文件流）。
 
 - **50000 系统错误** 先看 IDEA 控制台完整堆栈（`GlobalExceptionHandler` 会打 `log.error("RuntimeException", e)`），比猜快得多。
 - **接口 50000 先排除中文编码**（Windows curl 常见），用英文 JSON 复测能快速区分"业务 bug"和"编码问题"。
@@ -415,3 +700,208 @@ npm i -D @types/markdown-it
 - **Vue 里"数据变了但界面不刷新"** 优先怀疑响应式丢失（普通对象/非 reactive 赋值、ref 模板解包误用 `.value`）。
 - **流式/打字机"看不到中间过程"** 用密集采样（`setInterval` 每 400ms 记录 DOM 状态）确认是数据没到还是渲染被合并，再对症下药。
 - **`Connection reset` / `Connection closed`（AI 流式）** 多为 DeepSeek 服务端/网络偶发断连（搜索确认：网关 600s 上限、高峰期主动断开），非代码 bug。防御：后端 error 分支先用已累积 token 容错解析兜底，前端把网络错误映射为"网络连接不稳定，请重试"友好文案。**注意** beta 接口（`/beta`）才能支持 max_tokens 8192，普通接口只认 4096。
+- **MyBatis-Flex 条件操作符**一律用 `SqlOperator` 枚举，字符串 `"lt"`/`"eq"`/`"gt"` 会原样拼 SQL 报 50000；`"like"` 碰巧是 SQL 关键字才没暴露（见 37）。
+- **50000 先分「反序列化失败」vs「SQL 错误」**：故意传非法类型（如时间字段传数字）看是否仍 50000；再传会走业务校验的参数（如 `appId=0` → 40000）确认反序列化成功，即可把问题定位到 SQL 层。
+- **排查 ORM 生成的 SQL**：javap 反编译 jar + 写最小 Java probe 调 `queryWrapper.toSQL()` 打印实际 SQL，比猜快得多（见 37）。
+- **Spring AI 的 memory advisor 默认存整个 user prompt**（含 system prompt），想只存真实对话要手动 `chatMemory.get`/`add`（见 40）。
+- **对话记忆双写思路**：Redis 存 AI 上下文窗口（20 条），MySQL `chat_history` 存完整历史（前端展示 + 判断是否重生成），两者独立、互不依赖。改对话功能时先确认这两层各自的写入时机。
+- **老版本 Redis（不支持 HELLO 3）** node 官方 redis 客户端连不上，可用原生 RESP 经 net socket 发命令验证 key 值（见 43）。
+- **操作 MySQL 验证/造数**：本机没装 mysql 客户端时，可临时 `npm install mysql2` 到临时目录，用 Node 脚本连库查数/造数/清理（项目密码在 `application-location.yml`）。比 curl 调接口直接、能看原始表数据。
+- **浏览器验证 admin 页**：HttpOnly cookie 无法 JS 切换会话，临时 `UPDATE user SET userRole='admin'` 提权验证，验证后恢复；改角色后要重新登录才生效（见 47）。
+- **preview 工具只能接管自己起的 server**：孤儿 vite 进程占端口时，`Get-CimInstance` 定位 PID 后 `Stop-Process -Force`，再 `preview_start`（见 45）。
+- **vite 部署到子路径空白**：构建产物资源绝对路径 `/assets/...` 在子路径 404，`vite.config.js` 设 `base: './'`（见 49）。
+- **SSE done 事件格式要对齐前后端**：要么都 JSON，要么前端按接口区分解析；裸字符串被统一 `JSON.parse` 必炸（见 50）。
+- **构建产物（dist）是源码缓存**：源码更新必须删 dist 失效，否则预览/部署读旧产物（见 51）。
+- **Spring 项目线程池要用 Bean 管理**：`Executors.newCachedThreadPool()` 无界+非托管是隐患，改 `ThreadPoolExecutor` Bean + `@ConfigurationProperties`（见 52）。
+- **验证打字机/流式是否真在工作**：用 `setInterval` 高频采样 DOM 内容长度，看是否渐进增长（多个不同非零值且递增）；若直接跳变则是整块渲染，若不变则是数据没到（见 53）。
+
+---
+
+## 十、AI 代码生成通用 Agent 与图片功能
+
+### 54. 前端流式打字机 O(n²) 卡死 → 改整文件显示 + 进度条
+
+**现象**：多文件流式生成时，文件生成完毕、后端状态 done，但前端**卡在"生成中"数分钟**，预览界面不结束。
+
+**原因**：打字机逐字符 reveal 每 tick（10ms）执行 `completedText + currentTarget.slice(0, currentPos)` 重建完整字符串。文件多、内容大时（如 4 文件 26KB），每 tick 拼接累计的 completedText + MarkdownView 全量重渲染 → **O(n²) 性能爆炸**，越来越慢永远显示不完。
+
+**解决**：放弃逐字符打字机，改为**每个文件整块显示**，文件间用 80ms 间隔维持"逐文件流式"观感；同时新增 `genProgress` 进度条（"正在生成 index.html…（第 2 个文件）"）传达生成进度，避免用户误判为卡死。
+```ts
+// 整文件块一次显示，不再逐字符 slice
+const agentTick = () => {
+  if (revealQueue.length > 0) {
+    const next = revealQueue.shift()!
+    completedText = (completedText ? completedText + '\n\n' : '')
+      + `#### ${next.path}\n\`\`\`html\n${next.content}\n\`\`\``
+    aiMsg.content = completedText
+    return
+  }
+  clearInterval(revealTimer!)
+  revealTimer = null
+  if (donePayload) finishAgent()
+}
+```
+**注意**：html/multi_file 与 vue 两个分支都要同样处理；`currentTarget/currentPos/REVEAL_CHUNK` 等变量一并清理。
+
+### 55. 前后端 SSE 事件名不匹配 → 流式输出失效
+
+**现象**：html/multi_file 流式生成时，前端聊天框**没有任何流式内容**（不像 vue 模式能逐文件显示）。
+
+**原因**：改造后前端 html/multi 分支只监听 `onAgentProgress`（对应 SSE `agent_progress` 事件），但后端 `/chat/stream`、`/chat/multi/stream` 的 `onToken` 仍发 **`token`** 事件（只有 vue 的 `/chat/vue/stream` 发 `agent_progress`）——事件名不匹配，前端收不到进度。
+
+**解决**：`AiChatController` 里 html/multi 的 SSE 事件名 `token` → `agent_progress`，与 vue 一致：
+```java
+token -> send(emitter, "agent_progress", token)  // 原来是 "token"
+```
+
+### 56. html 单文件生成被 max_tokens 截断 → 拆 css/js 分文件写
+
+**现象**：html 模式生成长页面时，writeFile 工具参数 JSON 被截断，报 `Conversion from JSON to WriteFileRequest failed`（`Unexpected end-of-input`）。
+
+**原因**：html 单文件模式让模型把整个页面（含内联 CSS/JS）写进一个 `index.html`，DeepSeek 单次输出上限（beta 接口 max_tokens 8192）不足，tool call 参数被截断。multi_file/vue 拆文件所以不截断。
+
+**解决**：html 模式 prompt 改为允许拆分 `index.html` + `css/styles.css` + `js/app.js`（内容长时必须拆分，防止截断）；后端 `CodeFileWriteService.readProjectCode` 对 HTML 类型也带出 cssCode/jsCode；前端 `buildPreviewDoc`/`buildFormattedCode` 对 html 有 css/js 时也内联展示（否则外链相对路径在 srcdoc iframe 中失效）。
+
+### 57. 模型不调用 searchImage（配图率低）→ 换 deepseek-v4-flash
+
+**现象**：明确要求"带图片"的页面，模型（deepseek-chat）**始终不调用 searchImage**，页面无图或用 `image: ""`/emoji/CSS 渐变占位。
+
+**原因**：deepseek-chat 对工具调用的积极性弱，即使 prompt 明确"涉及图片必须调用 searchImage"也不执行。属模型行为限制。
+
+**解决**：模型换 **deepseek-v4-flash**（API 提示支持的模型名是 `deepseek-v4-pro`/`deepseek-v4-flash`，不是 `deepseek-4-flash`）。v4-flash function calling 正常且主动：curl 实测中文提示词"请务必调用图片搜索工具"时返回 `tool_calls` 并嵌入真实图片 URL。
+```yaml
+spring:
+  ai:
+    openai:
+      base-url: https://api.deepseek.com/beta
+      chat:
+        options:
+          model: deepseek-v4-flash
+```
+**注意**：
+- v4-flash 是推理模型（响应含 `reasoning_content`），复杂 prompt 下偶发 `event:error`（某次英文 MUST 指令报错），中文明确指令更稳。
+- 提示词关键：**中文 + "请务必调用图片搜索工具"** + 明确图片用途（相册/产品卡片/背景），比英文/模糊措辞有效。
+- 换模型零成本：改 `spring.ai.openai` 配置即可（OpenAI 兼容端点），不用改代码。
+
+### 58. Pexels API key 偶发 401 Invalid → 瞬时风控，重试恢复
+
+**现象**：searchImage/补图突然全部拿不到图（`{"status":401,"code":"Unauthorized","message":"Invalid API key"}`），页面无图。
+
+**原因**：Pexels 侧瞬时风控/限流，key 本身未失效（重试后恢复）。曾误判为 key 被禁。
+
+**解决**：先 `curl -H "Authorization: Bearer <key>" https://api.pexels.com/v1/search?query=test` 确认；多次重试后恢复即非 key 问题，继续用。真失效才需到 Pexels 控制台重新生成。
+
+### 59. 生成后强制补图 autoFillImages（模型漏写图时兜底）
+
+**现象**：模型生成页面时没调 searchImage，代码里 `<img src="">`、`image: ""`、占位图（picsum/placeholder）、emoji 字段（`emoji: '☕'`）代替真实图片。
+
+**解决**：`VueProjectAgent.generate` 在 `runToolLoop` 后新增 `autoFillImages(type, appId, userMessage)`：
+1. 扫描代码文件（html/css/js/vue/json）
+2. 正则替换三类缺图信号：
+   - JS 数据数组空 `image/img/src/url/cover` 字段 → 填入 COS 真实图
+   - `<img src="">` 或占位服务 src（picsum/placeholder）→ 替换真实图
+   - `emoji/icon` 字段 → 替换为内嵌 `<img class="autofill-img">`（自动注入 CSS）
+3. 复用 `PexelsClient.searchImages` + `downloadAndUpload`（上传 COS）+ `saveAppImage`（落库）
+4. 失败兜底：补图异常仅记日志，不影响生成主流程
+
+**设计边界**：补图只能替换"模型已写出的空/占位图片字段"，对"模型完全不写图片结构"的页面（纯 CSS/渐变布局、`image: makeSvgImage(...)` 函数调用）无法注入——正则不匹配函数调用，跳过。如需覆盖需主动往 hero/卡片注入图片（改动布局，有破坏风险，暂缓）。
+
+### 60. 嵌入图片落库：新建 app_image 关联表（1:N）
+
+**现象**：生成的页面嵌入了多张图片，需要记录"这个应用用了哪些图"（管理、清理 COS、展示用）。
+
+**原因**：一个应用多张图片是 1:N 关系，`app` 表加字段存多张（JSON/逗号分隔）是反模式，不好查询/清理。
+
+**解决**：新建关联表 `app_image`（appId + imageUrl + imageType + sortOrder），searchImage 上传成功和补图时都落库；应用删除时级联清理。生成开始时先 `deleteByAppId` 清旧记录，避免重复插入；sortOrder 基于 DB 计数累加，多次 searchImage 调用不重号。
+```sql
+create table if not exists app_image (
+  id bigint auto_increment primary key,
+  appId bigint not null comment '应用id',
+  imageUrl varchar(512) not null comment '图片 COS URL',
+  imageType varchar(32) null comment '用途: main/embed',
+  sortOrder int default 0 null comment '排序',
+  createTime datetime default CURRENT_TIMESTAMP null,
+  updateTime datetime default CURRENT_TIMESTAMP on update CURRENT_TIMESTAMP null,
+  isDelete tinyint default 0 not null,
+  INDEX idx_appId (appId)
+) comment '应用嵌入图片' collate = utf8mb4_unicode_ci;
+```
+
+### 61. 前端 `request.ts` BASE_URL 硬编码 → 改 vite proxy
+
+**现象**：`BASE_URL = 'http://localhost:8124/api'` 写死后端地址，部署到服务器无法工作；vite.config proxy target 配错（8080）且未生效。
+
+**解决**：`request.ts` 改 `import.meta.env.VITE_API_BASE_URL || '/api'`，开发走 vite proxy（修正 target 为 8124）；部署用 `.env` 的 `VITE_API_BASE_URL` 覆盖。`utils/sse.ts` 复用 BASE_URL，SSE 也自动走 proxy。前后端同源，CORS 不再依赖。
+
+### 62. 本机路径硬编码 → 环境变量可覆盖
+
+**现象**：`application.yml`/`application-location.yml` 里的 node 路径、driver 路径、tmp/deploy 目录写死本机路径，换机器/环境要改。
+
+**解决**：改 `${ENV_VAR:default}` 形式，默认值保留，环境变量可覆盖：
+```yaml
+codegen:
+  file:
+    tmp-root: ${CODEGEN_TMP_ROOT:D:\IDEAproject\xiaoyu_zerocode\tmp}
+screenshot:
+  driver-path: "${SCREENSHOT_DRIVER_PATH:C:\\Users\\莫凡毅\\.cache\\...}"
+```
+注意：Windows 路径里反斜杠在 yml 双引号中要转义（`\\`），SnakeYAML 会解析回单反斜杠（已实测验证）。
+
+---
+
+## 十一、并发与线程规范
+
+### 63. 建线程优先用虚拟线程；写代码要考虑并发问题
+
+**规范**：
+
+1. **需要额外线程时，优先用 JDK 21 虚拟线程 `Thread.ofVirtual()`，不要 `new Thread(...)`。** 虚拟线程创建成本极低、不占平台线程，适合大量短生命周期、阻塞型任务（如读进程 stdout/stderr、IO 等待），且 `join(3000)` 超时语义不变：
+   ```java
+   // 优先：虚拟线程
+   Thread t = Thread.ofVirtual().name("task").start(() -> doSomething());
+   t.join(3000);
+   // 避免：每任务 new Thread，并发量大时有创建开销且无法优雅回收
+   // Thread t = new Thread(() -> doSomething()); t.start();
+   ```
+
+2. **有"复用/限流"需求才用 Spring 管理的 `ThreadPoolExecutor` Bean（见 #52），且注意两个坑：**
+   - 拒绝策略是 CallerRunsPolicy 时会回退到调用线程执行（可能阻塞调用方）；
+   - 池线程被长阻塞 I/O（如 `readLine()` 等进程输出）占满时会**饿死排队任务**——不要把读进程输出这类长阻塞任务塞进小池子。
+
+3. **并发场景主动检查共享资源竞争：**
+   - 同一文件/目录并发写会互相覆盖（如同一 appId 的 `dist`/`node_modules`），要按资源加锁或信号量限制并发；
+   - 非线程安全的容器（`StringBuilder`/`ArrayList` 等）跨线程共享，必须保证 happens-before（`join`/`Future.get`/同步器）后再读，否则有数据竞争；
+   - 超时/异常路径要收尾：杀进程后要 join 读线程或确保流被关闭，避免后台线程残留。
+
+**背景**：VueBuildService 曾用 `new Thread` 读 npm 进程 stdout/stderr；高并发下改成虚拟线程更稳，且明确不使用共享的 vue 线程池（见 #52 讨论，读进程输出这种长阻塞任务会饿死池里的生成任务）。
+
+---
+
+## 十二、AI 输出透传：思考过程与 token 用量
+
+### 64. Spring AI 1.1.8 用 `chatModel.stream()` 透出 reasoning_content；`call()` 不透出
+
+**现象**：想让前端流式展示 AI 思考过程 + token 用量，但 `chatModel.call()` 拿不到思考内容。
+
+**原因**（反编译 spring-ai-openai 1.1.8 确认）：
+- DTO 层解析 `reasoning_content` → `ChatCompletionMessage.reasoningContent`；
+- **只有流式路径** `OpenAiChatModel` 的 `lambda$internalStream$5` 会把它写进 AssistantMessage 的 metadata（键 `"reasoningContent"`）；非流式 `buildGeneration` 只放 audioId/logprobs，不透出；
+- 流式请求会设置 `stream_options.include_usage`，所以 `done` 最后一份 chunk 的 metadata 带 usage。
+
+**解决**：`VueProjectAgent.runToolLoop` 把 `chatModel.call()` 换成自写的 `streamAndAggregate()`（`chatModel.stream()` + `collectList().block()`），逐 chunk：只拼**非工具调用块**的文本（避免工具参数混入 content）、从 `out.getMetadata().get("reasoningContent")` 转发思考增量、保留最后一份 metadata 供 usage 累加。SSE 新增 `reasoning` 事件（逐段文本增量）。**实测**：一次真实生成 540 条 reasoning 事件、agent_progress 逐文件正常、done 带 `totalTokens`，核心生成流程未回归。
+
+**注意**：
+- 框架会在 stream 内部自动执行工具（writeFile/finish），agent_progress 仍由工具回调触发，本改动不破坏该链路；
+- 若某 provider 不返回 usage，`promptTokens/completionTokens` 为空即可，前端按 totalTokens 存在才展示。
+
+### 65. deepseek-v4-flash 的 max_tokens 上限已不是 8192（#34 过时）
+
+**现象**：工具调用参数 JSON 在 `content` 字段中途截断（约 24KB 处缺收尾引号），Jackson 解析失败导致整次生成失败。
+
+**原因**：`deepseek-v4-flash` 是推理模型，**推理 token 也占输出预算**，`max-tokens: 8192` 下推理+正文不够用；deepseek-v4 这一代上限已提升。
+
+**解决**：
+1. `application.yml` 的 `max-tokens` 从 8192 提到 **16384**（实测 beta 接口接受 16384 与 32768，均 HTTP 200）；
+2. `VueProjectAgent.runToolLoop` 给 `chatModel` 调用加**异常兜底**：参数截断/解析失败时提示模型拆小文件重试（每次 writeFile 内容 ≤3000 字符），连续 3 次异常才终止，避免整次生成失败。
+
+**背景**：#34 记录的"max_tokens 上限 8192 需 beta 接口"只对当时的 deepseek 模型成立，现模型已支持更高。

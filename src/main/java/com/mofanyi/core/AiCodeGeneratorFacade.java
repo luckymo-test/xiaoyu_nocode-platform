@@ -59,9 +59,11 @@ public class AiCodeGeneratorFacade {
         checkGenerateParams(userMessage, appId);
         appService.updateGenerateStatus(appId, AppGenerateStatusEnum.GENERATING.getValue());
         try {
-            vueProjectAgent.generate(CodeGenTypeEnum.HTML, appId, userMessage, null);
+            VueProjectAgent.GenerateResult result = vueProjectAgent.generate(CodeGenTypeEnum.HTML, appId, userMessage, null);
             appService.updateGenerateStatus(appId, AppGenerateStatusEnum.DONE.getValue());
-            return readResult(CodeGenTypeEnum.HTML, appId);
+            AiCodeGenResultVO vo = readResult(CodeGenTypeEnum.HTML, appId);
+            applyUsage(vo, result);
+            return vo;
         } catch (RuntimeException e) {
             appService.updateGenerateStatus(appId, AppGenerateStatusEnum.FAILED.getValue());
             throw e;
@@ -79,9 +81,11 @@ public class AiCodeGeneratorFacade {
         checkGenerateParams(userMessage, appId);
         appService.updateGenerateStatus(appId, AppGenerateStatusEnum.GENERATING.getValue());
         try {
-            vueProjectAgent.generate(CodeGenTypeEnum.MULTI_FILE, appId, userMessage, null);
+            VueProjectAgent.GenerateResult result = vueProjectAgent.generate(CodeGenTypeEnum.MULTI_FILE, appId, userMessage, null);
             appService.updateGenerateStatus(appId, AppGenerateStatusEnum.DONE.getValue());
-            return readResult(CodeGenTypeEnum.MULTI_FILE, appId);
+            AiCodeGenResultVO vo = readResult(CodeGenTypeEnum.MULTI_FILE, appId);
+            applyUsage(vo, result);
+            return vo;
         } catch (RuntimeException e) {
             appService.updateGenerateStatus(appId, AppGenerateStatusEnum.FAILED.getValue());
             throw e;
@@ -120,17 +124,41 @@ public class AiCodeGeneratorFacade {
         appService.updateGenerateStatus(appId, AppGenerateStatusEnum.GENERATING.getValue());
         vueThreadPoolExecutor.execute(() -> {
             try {
-                vueProjectAgent.generate(type, appId, userMessage, (path, size, content) ->
-                        callback.onToken("{\"path\":" + toJsonString(path)
-                                + ",\"content\":" + toJsonString(content) + "}"));
+                VueProjectAgent.GenerateResult result = vueProjectAgent.generate(type, appId, userMessage,
+                        new VueProjectAgent.VueProgressListener() {
+                            @Override
+                            public void onFileWritten(String path, int size, String content) {
+                                callback.onToken("{\"path\":" + toJsonString(path)
+                                        + ",\"content\":" + toJsonString(content) + "}");
+                            }
+
+                            @Override
+                            public void onReasoning(String reasoning) {
+                                callback.onReasoning(reasoning);
+                            }
+                        });
                 appService.updateGenerateStatus(appId, AppGenerateStatusEnum.DONE.getValue());
-                callback.onDone(readResult(type, appId));
+                AiCodeGenResultVO vo = readResult(type, appId);
+                applyUsage(vo, result);
+                callback.onDone(vo);
             } catch (RuntimeException e) {
                 appService.updateGenerateStatus(appId, AppGenerateStatusEnum.FAILED.getValue());
                 log.error("[agent] 生成失败，type={}, appId={}", type, appId, e);
                 callback.onError(e);
             }
         });
+    }
+
+    /**
+     * 把 agent 返回的 token 用量挂到结果 VO 上（前端展示元信息）
+     */
+    private void applyUsage(AiCodeGenResultVO vo, VueProjectAgent.GenerateResult result) {
+        if (vo == null || result == null || result.getUsage() == null) {
+            return;
+        }
+        vo.setPromptTokens(result.getUsage().promptTokens());
+        vo.setCompletionTokens(result.getUsage().completionTokens());
+        vo.setTotalTokens(result.getUsage().totalTokens());
     }
 
     /**
@@ -169,11 +197,13 @@ public class AiCodeGeneratorFacade {
         checkGenerateParams(userMessage, appId);
         appService.updateGenerateStatus(appId, AppGenerateStatusEnum.GENERATING.getValue());
         try {
-            vueProjectAgent.generate(CodeGenTypeEnum.VUE, appId, userMessage, null);
+            VueProjectAgent.GenerateResult result = vueProjectAgent.generate(CodeGenTypeEnum.VUE, appId, userMessage, null);
             appService.updateGenerateStatus(appId, AppGenerateStatusEnum.DONE.getValue());
             // 源码更新后失效旧构建产物，下次预览/部署重新构建
             codeFileWriteService.deleteVueDist(appId);
-            return readResult(CodeGenTypeEnum.VUE, appId);
+            AiCodeGenResultVO vo = readResult(CodeGenTypeEnum.VUE, appId);
+            applyUsage(vo, result);
+            return vo;
         } catch (RuntimeException e) {
             appService.updateGenerateStatus(appId, AppGenerateStatusEnum.FAILED.getValue());
             throw e;
@@ -193,16 +223,27 @@ public class AiCodeGeneratorFacade {
         appService.updateGenerateStatus(appId, AppGenerateStatusEnum.GENERATING.getValue());
         vueThreadPoolExecutor.execute(() -> {
             try {
-                vueProjectAgent.generate(CodeGenTypeEnum.VUE, appId, userMessage, (path, size, content) -> {
-                    // 每个文件写入时推送完整内容（供前端流式展示代码，逐文件出现）
-                    // 格式为 JSON 对象字符串 {"path":"...","content":"..."}
-                    callback.onToken("{\"path\":" + toJsonString(path)
-                            + ",\"content\":" + toJsonString(content) + "}");
-                });
+                VueProjectAgent.GenerateResult result = vueProjectAgent.generate(CodeGenTypeEnum.VUE, appId, userMessage,
+                        new VueProjectAgent.VueProgressListener() {
+                            @Override
+                            public void onFileWritten(String path, int size, String content) {
+                                // 每个文件写入时推送完整内容（供前端流式展示代码，逐文件出现）
+                                // 格式为 JSON 对象字符串 {"path":"...","content":"..."}
+                                callback.onToken("{\"path\":" + toJsonString(path)
+                                        + ",\"content\":" + toJsonString(content) + "}");
+                            }
+
+                            @Override
+                            public void onReasoning(String reasoning) {
+                                callback.onReasoning(reasoning);
+                            }
+                        });
                 appService.updateGenerateStatus(appId, AppGenerateStatusEnum.DONE.getValue());
                 // 源码更新后失效旧构建产物，下次预览/部署重新构建
                 codeFileWriteService.deleteVueDist(appId);
-                callback.onDone(readResult(CodeGenTypeEnum.VUE, appId));
+                AiCodeGenResultVO vo = readResult(CodeGenTypeEnum.VUE, appId);
+                applyUsage(vo, result);
+                callback.onDone(vo);
             } catch (RuntimeException e) {
                 appService.updateGenerateStatus(appId, AppGenerateStatusEnum.FAILED.getValue());
                 log.error("[agent] 生成失败，type={}, appId={}", CodeGenTypeEnum.VUE, appId, e);

@@ -83,6 +83,7 @@ public class AiChatController {
         SseEmitter emitter = new SseEmitter(300_000L);
         aiCodeGeneratorFacade.streamGenerateHtmlProject(message, appId, new StreamCallback(
                 token -> send(emitter, "agent_progress", token),
+                reasoning -> send(emitter, "reasoning", reasoning),
                 vo -> {
                     send(emitter, "done", vo);
                     emitter.complete();
@@ -104,6 +105,7 @@ public class AiChatController {
         SseEmitter emitter = new SseEmitter(300_000L);
         aiCodeGeneratorFacade.streamGenerateMultiFileProject(message, appId, new StreamCallback(
                 token -> send(emitter, "agent_progress", token),
+                reasoning -> send(emitter, "reasoning", reasoning),
                 vo -> {
                     send(emitter, "done", vo);
                     emitter.complete();
@@ -144,6 +146,7 @@ public class AiChatController {
         SseEmitter emitter = new SseEmitter(300_000L);
         aiCodeGeneratorFacade.streamGenerateVueProject(message, appId, new StreamCallback(
                 token -> send(emitter, "agent_progress", token),
+                reasoning -> send(emitter, "reasoning", reasoning),
                 vo -> {
                     send(emitter, "done", vo);
                     emitter.complete();
