@@ -901,7 +901,23 @@ screenshot:
 **原因**：`deepseek-v4-flash` 是推理模型，**推理 token 也占输出预算**，`max-tokens: 8192` 下推理+正文不够用；deepseek-v4 这一代上限已提升。
 
 **解决**：
-1. `application.yml` 的 `max-tokens` 从 8192 提到 **16384**（实测 beta 接口接受 16384 与 32768，均 HTTP 200）；
+1. `application.yml` 的 `max-tokens` 从 8192 提到 **32768**（实测 beta 接口接受 16384 与 32768，均 HTTP 200；可视化修改/生成本身会"过度思考"烧掉大量输出预算，32768 才能给"推理 + 工具调用 + 大文件写回"留足空间）；
 2. `VueProjectAgent.runToolLoop` 给 `chatModel` 调用加**异常兜底**：参数截断/解析失败时提示模型拆小文件重试（每次 writeFile 内容 ≤3000 字符），连续 3 次异常才终止，避免整次生成失败。
 
 **背景**：#34 记录的"max_tokens 上限 8192 需 beta 接口"只对当时的 deepseek 模型成立，现模型已支持更高。
+
+### 66. 图片搜索"失败"是 Pexels 鉴权前缀写错 + 生成慢是推理烧时（实测打点）
+
+**现象**：多文件流式生成越到后面越卡甚至卡死（实测两次都 >5min 撞 SSE 300s 超时 `AsyncRequestTimeoutException`，done/历史发不出去）；页面 0 张图、全程无图片报错。
+
+**根因 1 —— 图片**：`PexelsClient` 发的是 `Authorization: Bearer <key>`，而 **Pexels 要求 `Authorization: <key>`（不带 Bearer）** → 返回 `401 Invalid API key`；旧代码不检查状态码、静默返回空列表 → searchImage 告诉模型"未找到图" → 模型按 prompt 兜底用纯色/渐变 → 0 张图且无日志。
+**修复**：去掉 `"Bearer "` 前缀 + `searchImages` 检查 HTTP 状态码，非 2xx 打 `warn`（不再静默）。实测 searchImage 恢复正常，产物 scan 到 8 个图 URL。
+
+**根因 2 —— 慢**：`deepseek-v4-flash` 是推理模型，工具循环每轮都先产出大量 reasoning 再调用工具。加打点后实测：**一个小 html 单次流式调用 reasoning≈9228 字符、耗时 136s**；多文件轮次更多 → 总时长超 5 分钟。叠加框架 tool-loop 每轮重发含全部已写文件的完整历史，上下文越滚越大。
+**修复（本轮）**：
+- `AiChatController` 各 SSE `SseEmitter` 超时 300s → **600s**（慢生成不再被掐断）；
+- `VueProjectAgent` 加打点：`[agent] 单次流式调用完成：reasoning=?字符 text=?字符 耗时=?ms`、`tool-loop 结束 … 总耗时=?ms`、`[searchImage] 被调用/无结果`，后续可据此量化 A1(推理) vs A2(上下文) 占比。
+
+**待定方向（未做，需确认）**：prompt 抑制过度推理 / 工具循环换更快模型 / 自管 tool-loop 裁剪历史（根治上下文膨胀）。
+
+**注意**：前端 reasoning 曾用 `MarkdownView` 对整串增量全量重渲染导致 O(n²) 卡死，已改为"本地 buffer 攒、完成时一次性赋值 + 纯文本折叠展示"。

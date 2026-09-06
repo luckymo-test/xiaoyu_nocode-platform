@@ -1,9 +1,30 @@
 ### CUSTOM ###
-application-local.yml
+# 本机配置：含绝对路径/密钥，不入库
+application-location.yml
+*.local.yml
+
+# 敏感文件（cookie）
+admin_cookies.txt
+cookies.txt
+
+# IDE 本地配置（整目录）
+.idea/
+
+# Claude Code 本机会话配置（权限/密钥）
+.claude/settings.local.json
+
+# 构建产物与依赖
 target/
 !.mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/
+node_modules/
+dist/
+*.tsbuildinfo
+
+# 生成/部署的临时目录（运行时产物）
+tmp/
+deploy/
 
 ### IntelliJ IDEA ###
 .idea/modules.xml

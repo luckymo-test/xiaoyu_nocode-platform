@@ -1,0 +1,61 @@
+# 本机配置模板（不入库）
+# 复制本文件为 application-location.yml 并填入真实密钥后使用：
+#   cp application-location.yml.example application-location.yml
+# application.yml 已激活 profile=location，缺少该文件时应用无法连接数据库。
+# 路径类配置保留 ${ENV_VAR:default} 形式，可用环境变量覆盖（见 development-notes.md #62）。
+
+spring:
+  # 数据源配置
+  datasource:
+    url: jdbc:mysql://localhost:3306/xiaoyu_zerocode
+    username: root
+    password: your_mysql_password
+# Vue3 工程构建用的 node/npm 路径
+codegen:
+  node:
+    # node 可执行文件绝对路径（含空格用引号包住）
+    command: "${NODE_COMMAND:D:\\computer tools\\nodejs\\node.exe}"
+    # npm-cli.js 绝对路径
+    npmCli: "${NPM_CLI:D:\\computer tools\\nodejs\\node_modules\\npm\\bin\\npm-cli.js}"
+# 线程池配置
+thread-pool:
+  # Vue 工程生成线程池（Spring 容器管理，ThreadPoolExecutor Bean）
+  vue:
+    # 核心线程数
+    core-pool-size: 2
+    # 最大线程数
+    max-pool-size: 4
+    # 非核心线程空闲存活时间（秒）
+    keep-alive-seconds: 60
+    # 任务队列容量
+    queue-capacity: 200
+    # 线程名前缀
+    thread-name-prefix: "vue-gen-"
+  # 封面截图线程池
+  screenshot:
+    core-pool-size: 1
+    max-pool-size: 2
+    keep-alive-seconds: 60
+    queue-capacity: 50
+    thread-name-prefix: "screenshot-"
+# 对象存储配置（需要从腾讯云获取）
+cos:
+  client:
+    host: https://yun-picture-1419359718.cos.ap-shanghai.myqcloud.com
+    secretId: your_cos_secret_id
+    secretKey: your_cos_secret_key
+    region: ap-shanghai
+    bucket: yun-picture-1419359718
+# 封面截图配置
+screenshot:
+  browser: edge
+  # 本地 driver 路径，优先使用，绕过 Selenium Manager 联网下载（离线环境必备）
+  driver-path: "${SCREENSHOT_DRIVER_PATH:C:\\Users\\莫凡毅\\.cache\\selenium\\msedgedriver\\win64\\151.0.4129.72\\msedgedriver.exe}"
+  tmp-dir: "${SCREENSHOT_TMP_DIR:D:\\IDEAproject\\xiaoyu_zerocode\\tmp\\cover}"
+  original-folder: app-cover/original
+  compressed-folder: app-cover/compressed
+# Pexels 免费图库 API（按语义搜索图片嵌入生成的网页）
+pexels:
+  api-key: your_pexels_api_key
+  # 每次搜索返回的最大图片数
+  page-size: 5
