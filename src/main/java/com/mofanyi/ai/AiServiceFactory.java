@@ -29,6 +29,11 @@ public class AiServiceFactory {
         return loadPrompt("prompt/codegen_vue_fix_prompt.txt");
     }
 
+    @Bean
+    public String modifyPrompt() {
+        return loadPrompt("prompt/codegen_modify_prompt.txt");
+    }
+
     private String loadPrompt(String path) {
         try {
             ClassPathResource resource = new ClassPathResource(path);

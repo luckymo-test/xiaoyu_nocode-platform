@@ -2,6 +2,7 @@ package com.mofanyi.core;
 
 import cn.hutool.core.util.StrUtil;
 import cn.hutool.http.HttpRequest;
+import cn.hutool.http.HttpResponse;
 import cn.hutool.http.HttpUtil;
 import cn.hutool.json.JSONArray;
 import cn.hutool.json.JSONObject;
@@ -55,17 +56,26 @@ public class PexelsClient {
             return images;
         }
         String body;
+        int status;
         try {
-            body = HttpRequest.get(SEARCH_URL)
-                    .header("Authorization", "Bearer " + apiKey)
+            HttpResponse resp = HttpRequest.get(SEARCH_URL)
+                    // Pexels 要求 Authorization: <api_key>，不带 "Bearer " 前缀（否则 401 Invalid API key）
+                    .header("Authorization", apiKey)
                     .form("query", query)
                     .form("orientation", orientation == null || orientation.isBlank() ? null : orientation)
                     .form("per_page", pageSize)
                     .timeout(10_000)
-                    .execute()
-                    .body();
+                    .execute();
+            status = resp.getStatus();
+            body = resp.body();
         } catch (Exception e) {
-            log.warn("Pexels 搜索失败，query={}", query, e);
+            log.warn("Pexels 搜索请求异常，query={}", query, e);
+            return images;
+        }
+        if (status < 200 || status >= 300) {
+            // 401/403/429/5xx 等：不静默，打日志便于排查（此前直接返回空且无日志）
+            log.warn("Pexels 搜索失败 status={} query={} body={}",
+                    status, query, StrUtil.maxLength(body == null ? "" : body, 200));
             return images;
         }
         try {

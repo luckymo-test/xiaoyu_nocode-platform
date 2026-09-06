@@ -11,6 +11,7 @@ import com.mofanyi.entity.User;
 import com.mofanyi.exception.ErrorCode;
 import com.mofanyi.exception.ThrowUtils;
 import com.mofanyi.model.enums.ChatMessageTypeEnum;
+import com.mofanyi.model.enums.CodeGenTypeEnum;
 import com.mofanyi.model.vo.AiCodeGenResultVO;
 import com.mofanyi.service.AppService;
 import com.mofanyi.service.ChatHistoryService;
@@ -20,6 +21,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -80,7 +82,7 @@ public class AiChatController {
                                  @RequestParam(defaultValue = "你好，请简单介绍一下你自己") String message,
                                  HttpServletRequest request) {
         ChatHistory userMsg = saveUserMessage(appId, message, request);
-        SseEmitter emitter = new SseEmitter(300_000L);
+        SseEmitter emitter = new SseEmitter(600_000L);
         aiCodeGeneratorFacade.streamGenerateHtmlProject(message, appId, new StreamCallback(
                 token -> send(emitter, "agent_progress", token),
                 reasoning -> send(emitter, "reasoning", reasoning),
@@ -102,7 +104,7 @@ public class AiChatController {
                                       @RequestParam(defaultValue = "你好，请简单介绍一下你自己") String message,
                                       HttpServletRequest request) {
         ChatHistory userMsg = saveUserMessage(appId, message, request);
-        SseEmitter emitter = new SseEmitter(300_000L);
+        SseEmitter emitter = new SseEmitter(600_000L);
         aiCodeGeneratorFacade.streamGenerateMultiFileProject(message, appId, new StreamCallback(
                 token -> send(emitter, "agent_progress", token),
                 reasoning -> send(emitter, "reasoning", reasoning),
@@ -143,7 +145,7 @@ public class AiChatController {
                                     @RequestParam(defaultValue = "你好，请简单介绍一下你自己") String message,
                                     HttpServletRequest request) {
         ChatHistory userMsg = saveUserMessage(appId, message, request);
-        SseEmitter emitter = new SseEmitter(300_000L);
+        SseEmitter emitter = new SseEmitter(600_000L);
         aiCodeGeneratorFacade.streamGenerateVueProject(message, appId, new StreamCallback(
                 token -> send(emitter, "agent_progress", token),
                 reasoning -> send(emitter, "reasoning", reasoning),
@@ -158,6 +160,63 @@ public class AiChatController {
                     saveErrorMessage(appId, userMsg, error);
                 }));
         return emitter;
+    }
+
+    /**
+     * 可视化修改：给定点选元素上下文 + 用户意图，让 agent 精确定位源码并最小改动（SSE 逐文件返回）。
+     * 仅应用创建者可修改；当前支持 html / multi_file（vue 用构建产物预览，暂不支持）。
+     */
+    @GetMapping(value = "/modify/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter modifyStream(@RequestParam Long appId,
+                                   @RequestParam(defaultValue = "") String elementContext,
+                                   @RequestParam String instruction,
+                                   HttpServletRequest request) {
+        ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
+        ThrowUtils.throwIf(StrUtil.isBlank(instruction), ErrorCode.PARAMS_ERROR, "修改意图不能为空");
+        User loginUser = userService.getLoginUser(request);
+        App app = appService.getById(appId);
+        ThrowUtils.throwIf(app == null, ErrorCode.NOT_FOUND_ERROR);
+        ThrowUtils.throwIf(!app.getUserId().equals(loginUser.getId()),
+                ErrorCode.NO_AUTH_ERROR, "只能修改自己的应用");
+        CodeGenTypeEnum type = CodeGenTypeEnum.getEnumByValue(app.getCodeGenType());
+        ThrowUtils.throwIf(type == CodeGenTypeEnum.VUE,
+                ErrorCode.PARAMS_ERROR, "Vue3 工程暂不支持可视化修改");
+        // 防止超大上下文/意图刷爆 token，兜底截断
+        String ctx = elementContext == null ? "" : StrUtil.maxLength(elementContext, 2000);
+        String inst = StrUtil.maxLength(instruction, 500);
+        SseEmitter emitter = new SseEmitter(600_000L);
+        aiCodeGeneratorFacade.streamModifyProject(type, appId, ctx, inst, new StreamCallback(
+                token -> send(emitter, "agent_progress", token),
+                reasoning -> send(emitter, "reasoning", reasoning),
+                vo -> {
+                    send(emitter, "done", vo);
+                    emitter.complete();
+                },
+                error -> {
+                    send(emitter, "error", error.getMessage());
+                    emitter.complete();
+                }));
+        return emitter;
+    }
+
+    /**
+     * 撤销可视化修改：写回修改前的文件快照。仅创建者；body 为文件 Map（path -> content）。
+     */
+    @PostMapping("/modify/undo")
+    public BaseResponse<AiCodeGenResultVO> undoModify(@RequestParam Long appId,
+                                                      @RequestBody java.util.Map<String, String> files,
+                                                      HttpServletRequest request) {
+        ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
+        User loginUser = userService.getLoginUser(request);
+        App app = appService.getById(appId);
+        ThrowUtils.throwIf(app == null, ErrorCode.NOT_FOUND_ERROR);
+        ThrowUtils.throwIf(!app.getUserId().equals(loginUser.getId()),
+                ErrorCode.NO_AUTH_ERROR, "只能修改自己的应用");
+        CodeGenTypeEnum type = CodeGenTypeEnum.getEnumByValue(app.getCodeGenType());
+        ThrowUtils.throwIf(type == CodeGenTypeEnum.VUE,
+                ErrorCode.PARAMS_ERROR, "Vue3 工程暂不支持可视化修改");
+        AiCodeGenResultVO vo = aiCodeGeneratorFacade.restoreSource(type, appId, files);
+        return ResultUtils.success(vo);
     }
 
     /**

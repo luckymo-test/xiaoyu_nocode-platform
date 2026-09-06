@@ -30,8 +30,8 @@ spring:
         options:
           model: deepseek-v4-flash
           # 调大输出上限：deepseek-v4-flash 是推理模型，推理 token 也占输出预算，
-          # 8192 时常截断导致工具参数 JSON 解析失败；16384 已实测 beta 接口接受（上限更高）
-          max-tokens: 16384
+          # 8192/16384 下过度思考或写大文件时仍会截断；32768 已实测 beta 接口接受
+          max-tokens: 32768
 server:
   port: 8124
   servlet:

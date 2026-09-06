@@ -118,3 +118,20 @@ export async function stopGenerate(
     ...(options || {}),
   });
 }
+
+/** 撤销可视化修改：写回修改前的文件快照 POST /ai/modify/undo */
+export async function undoAiModify(
+  body: Record<string, string>,
+  params: { appId: number | string },
+  options?: { [key: string]: any }
+) {
+  return request<API.BaseResponseAiCodeGenResultVO>("/ai/modify/undo", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    params,
+    data: body,
+    ...(options || {}),
+  });
+}

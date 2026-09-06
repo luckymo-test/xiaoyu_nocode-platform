@@ -61,3 +61,25 @@ export function streamGenerateVueProject(
     callbacks,
   )
 }
+
+/**
+ * 可视化修改：给定点选元素上下文 + 修改意图，让 AI 精确定位源码改动。
+ * 对应后端 GET /ai/modify/stream（SSE，agent_progress/reasoning/done/error）。
+ * 仅应用创建者可调用；html / multi_file 支持。
+ */
+export function streamModifyProject(
+  appId: number | string,
+  elementContext: string,
+  instruction: string,
+  callbacks: SseCallbacks,
+): SseConnection {
+  return createSseConnection(
+    '/ai/modify/stream',
+    {
+      appId,
+      elementContext,
+      instruction,
+    },
+    callbacks,
+  )
+}

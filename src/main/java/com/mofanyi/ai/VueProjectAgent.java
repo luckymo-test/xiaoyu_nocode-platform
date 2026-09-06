@@ -63,6 +63,7 @@ public class VueProjectAgent {
     private final String multiFilePrompt;
     private final String vuePrompt;
     private final String vueFixPrompt;
+    private final String modifyPrompt;
     private final CodeFileWriteService codeFileWriteService;
     private final ChatMemory chatMemory;
     private final PexelsClient pexelsClient;
@@ -75,6 +76,7 @@ public class VueProjectAgent {
                            String multiFilePrompt,
                            @Qualifier("vuePrompt") String vuePrompt,
                            @Qualifier("vueFixPrompt") String vueFixPrompt,
+                           @Qualifier("modifyPrompt") String modifyPrompt,
                            CodeFileWriteService codeFileWriteService,
                            ChatMemory chatMemory,
                            PexelsClient pexelsClient,
@@ -86,6 +88,7 @@ public class VueProjectAgent {
         this.multiFilePrompt = multiFilePrompt;
         this.vuePrompt = vuePrompt;
         this.vueFixPrompt = vueFixPrompt;
+        this.modifyPrompt = modifyPrompt;
         this.codeFileWriteService = codeFileWriteService;
         this.chatMemory = chatMemory;
         this.pexelsClient = pexelsClient;
@@ -469,6 +472,55 @@ public class VueProjectAgent {
     }
 
     /**
+     * 可视化修改：给定被选中元素的上下文（选择器/标签/文本/结构摘要）+ 用户修改意图，
+     * 让 agent 通过 readFile/writeFile 精确定位源码并最小改动。
+     *
+     * @param type           代码生成类型（当前支持 html / multi_file，vue 用构建产物做预览暂不支持）
+     * @param appId          应用 id
+     * @param elementContext 前端点选生成的元素上下文，可为空串（表示按整页意图改）
+     * @param instruction    用户自然语言修改意图
+     * @param usage          [prompt, completion] token 累加器，可为 null
+     * @param listener       进度回调（每写一个文件触发一次），可为 null
+     * @return 实际被改动的文件（path -> 新内容）
+     */
+    public Map<String, String> modifyGeneratedSite(CodeGenTypeEnum type, Long appId, String elementContext,
+                                                   String instruction, long[] usage, VueProgressListener listener) {
+        ThrowUtils.throwIf(type == null, ErrorCode.PARAMS_ERROR);
+        ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
+        ThrowUtils.throwIf(StrUtil.isBlank(instruction), ErrorCode.PARAMS_ERROR, "修改意图不能为空");
+
+        Map<String, String> files = new LinkedHashMap<>();
+        AtomicBoolean finished = new AtomicBoolean(false);
+        AtomicReference<String> description = new AtomicReference<>("");
+        List<Message> messages = new ArrayList<>();
+        messages.add(new SystemMessage(modifyPrompt));
+        String ctx = StrUtil.isBlank(elementContext) ? "（无具体元素，基于整体需求修改）" : elementContext;
+        messages.add(new UserMessage("用户想修改当前页面。\n\n【目标元素上下文】\n" + ctx
+                + "\n\n【用户修改意图】\n" + instruction
+                + "\n\n【当前工程文件清单】\n" + buildFileIndex(type, appId)
+                + "\n\n请先 readFile 读取涉及的文件，定位目标元素对应代码段，最小改动后用 writeFile 覆盖，改完调用 finish。"));
+        runToolLoop(type, appId, messages, files, finished, description, usage, listener);
+        return files;
+    }
+
+    /**
+     * 还原源码：把给定的文件快照写回工程（供可视化修改的"撤销"）。逐个路径校验 + 覆盖。
+     */
+    public void restoreFiles(CodeGenTypeEnum type, Long appId, Map<String, String> files) {
+        ThrowUtils.throwIf(type == null, ErrorCode.PARAMS_ERROR);
+        ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
+        ThrowUtils.throwIf(files == null || files.isEmpty(), ErrorCode.PARAMS_ERROR, "还原内容为空");
+        ThrowUtils.throwIf(files.size() > 100, ErrorCode.PARAMS_ERROR, "还原文件数量过多");
+        for (Map.Entry<String, String> e : files.entrySet()) {
+            if (e.getKey() == null || e.getValue() == null) {
+                continue;
+            }
+            validatePath(e.getKey());
+            codeFileWriteService.saveProjectFile(type, appId, e.getKey(), e.getValue());
+        }
+    }
+
+    /**
      * 手动 tool-calling 循环：每轮把历史消息发给模型，若返回工具调用则执行并拼回结果继续，
      * 直到模型不再调工具或达最大轮数。
      */
@@ -477,13 +529,17 @@ public class VueProjectAgent {
                              VueProgressListener listener) {
         List<ToolCallback> toolCallbacks = List.of(
                 buildWriteFileTool(type, appId, files, listener),
+                buildReadFileTool(type, appId),
                 buildSearchImageTool(appId),
                 buildFinishTool(finished, description));
         var options = DefaultToolCallingChatOptions.builder().toolCallbacks(toolCallbacks).build();
 
         // 连续异常计数：模型返回被截断（工具参数 JSON 不完整）等可恢复错误时重试，连续多次失败才终止
         int consecutiveFailures = 0;
+        long loopStart = System.currentTimeMillis();
+        int stepCount = 0;
         for (int step = 0; step < MAX_STEPS; step++) {
+            stepCount++;
             ChatResponse resp;
             try {
                 // 用流式调用聚合，以便拿到模型思考过程（reasoning_content）增量
@@ -530,6 +586,8 @@ public class VueProjectAgent {
                 break;
             }
         }
+        log.info("[agent] tool-loop 结束：外层 step={}，写文件数={}，总耗时={}ms",
+                stepCount, files.size(), System.currentTimeMillis() - loopStart);
     }
 
     /**
@@ -541,6 +599,14 @@ public class VueProjectAgent {
         StringBuilder text = new StringBuilder();
         AtomicReference<ChatResponseMetadata> metaRef = new AtomicReference<>();
         AtomicReference<ChatGenerationMetadata> genMetaRef = new AtomicReference<>();
+        // [0]=reasoning 字符数 [1]=正文 字符数
+        long[] stats = new long[2];
+        long start = System.nanoTime();
+        Consumer<String> countingSink = reasoningSink == null ? null
+                : (r -> {
+                    stats[0] += r.length();
+                    reasoningSink.accept(r);
+                });
         chatModel.stream(prompt)
                 .doOnNext(chunk -> {
                     Generation gen = chunk.getResult();
@@ -552,15 +618,16 @@ public class VueProjectAgent {
                                 String t = out.getText();
                                 if (t != null && !t.isEmpty()) {
                                     text.append(t);
+                                    stats[1] += t.length();
                                 }
                             }
                             // reasoningContent 存在消息 metadata（lambda$internalStream$5 写入）
-                            if (reasoningSink != null && out.getMetadata() != null) {
+                            if (countingSink != null && out.getMetadata() != null) {
                                 Object reasoning = out.getMetadata().get("reasoningContent");
                                 if (reasoning != null) {
                                     String r = String.valueOf(reasoning);
                                     if (!r.isEmpty()) {
-                                        reasoningSink.accept(r);
+                                        countingSink.accept(r);
                                     }
                                 }
                             }
@@ -573,6 +640,8 @@ public class VueProjectAgent {
                 })
                 .collectList()
                 .block();
+        log.info("[agent] 单次流式调用完成：reasoning={}字符 text={}字符 耗时={}ms",
+                stats[0], stats[1], (System.nanoTime() - start) / 1_000_000);
         AssistantMessage msg = AssistantMessage.builder().content(text.toString()).build();
         return ChatResponse.builder()
                 .generations(List.of(new Generation(msg, genMetaRef.get())))
@@ -618,6 +687,23 @@ public class VueProjectAgent {
         })
                 .description("向工程写入一个文件。path 为相对路径，content 为文件完整内容。一次只写一个文件，写完再写下一个。")
                 .inputType(WriteFileRequest.class)
+                .build();
+    }
+
+    /**
+     * 构建 readFile 工具：读取工程某文件的完整内容（供修改/自检按需读精确源码，避免全量塞入上下文）
+     */
+    private ToolCallback buildReadFileTool(CodeGenTypeEnum type, Long appId) {
+        return FunctionToolCallback.builder("readFile", (ReadFileRequest req) -> {
+            validatePath(req.path());
+            String content = codeFileWriteService.readFile(
+                    codeFileWriteService.getProjectDir(type, appId), req.path());
+            return content == null
+                    ? "文件不存在: " + req.path() + "（请先看文件清单确认正确相对路径）"
+                    : "【" + req.path() + "】\n" + content;
+        })
+                .description("读取工程中某个源文件的完整内容。path 为相对工程根目录的路径（如 index.html、css/styles.css、js/app.js）。修改前应先读取目标文件再改动。")
+                .inputType(ReadFileRequest.class)
                 .build();
     }
 
@@ -673,6 +759,17 @@ public class VueProjectAgent {
                 return "解析参数失败: " + e.getMessage();
             }
         }
+        if ("readFile".equals(name)) {
+            try {
+                ReadFileRequest req = MAPPER.readValue(arguments, ReadFileRequest.class);
+                validatePath(req.path());
+                String content = codeFileWriteService.readFile(
+                        codeFileWriteService.getProjectDir(type, appId), req.path());
+                return content == null ? "文件不存在: " + req.path() : content;
+            } catch (Exception e) {
+                return "解析参数失败: " + e.getMessage();
+            }
+        }
         if ("searchImage".equals(name)) {
             try {
                 SearchImageRequest req = MAPPER.readValue(arguments, SearchImageRequest.class);
@@ -701,8 +798,10 @@ public class VueProjectAgent {
      * 搜索图片 → 逐张下载并上传 COS → 落库 app_image → 返回 COS URL 列表文本（含编号与尺寸，供模型挑选）
      */
     private String searchAndUploadImages(Long appId, String query, String orientation) {
+        log.info("[searchImage] 被调用 query={} orientation={}", query, orientation);
         List<PexelsClient.PexelsImage> images = pexelsClient.searchImages(query, orientation);
         if (images.isEmpty()) {
+            log.warn("[searchImage] 无结果（Pexels 空/失败），query={}", query);
             return "未找到匹配的图片，请换一个描述重新搜索，或不用图片直接用纯色/渐变背景";
         }
         StringBuilder sb = new StringBuilder("找到以下图片（可直接用 URL 嵌入代码，建议优先用列表中的 URL）：\n");
@@ -804,6 +903,20 @@ public class VueProjectAgent {
     }
 
     /**
+     * 列出工程代码文件相对路径清单（不含内容，供 agent 判断该读哪些文件）
+     */
+    private String buildFileIndex(CodeGenTypeEnum type, Long appId) {
+        String projectDir = codeFileWriteService.getProjectDir(type, appId);
+        List<java.io.File> codeFiles = new java.util.ArrayList<>();
+        collectCodeFiles(new java.io.File(projectDir), codeFiles);
+        StringBuilder sb = new StringBuilder();
+        for (java.io.File f : codeFiles) {
+            sb.append("- ").append(relativePath(new java.io.File(projectDir), f)).append("\n");
+        }
+        return sb.length() == 0 ? "（暂无文件）" : sb.toString();
+    }
+
+    /**
      * 拼装工程相关文件内容（供修复 agent 参考），排除 node_modules/dist 和超大文件
      */
     private String buildFilesContext(Long appId) {
@@ -827,6 +940,12 @@ public class VueProjectAgent {
      * writeFile 工具入参
      */
     public record WriteFileRequest(String path, String content) {
+    }
+
+    /**
+     * readFile 工具入参
+     */
+    public record ReadFileRequest(String path) {
     }
 
     /**

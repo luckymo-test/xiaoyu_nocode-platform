@@ -253,6 +253,68 @@ public class AiCodeGeneratorFacade {
     }
 
     /**
+     * 可视化修改流式接口：在独立线程执行修改 agent，逐文件进度（agent_progress）、思考增量（reasoning）
+     * 与最终结果 VO（done）通过回调返回。vue 用构建产物预览，暂不支持可视化修改（入参校验前过滤）。
+     *
+     * @param type           代码生成类型（html / multi_file）
+     * @param appId          应用 id
+     * @param elementContext 前端点选生成的元素上下文，可为空串
+     * @param instruction    用户自然语言修改意图
+     * @param callback       回调
+     */
+    public void streamModifyProject(CodeGenTypeEnum type, Long appId, String elementContext,
+                                    String instruction, StreamCallback callback) {
+        ThrowUtils.throwIf(type == null || type == CodeGenTypeEnum.VUE,
+                ErrorCode.PARAMS_ERROR, "Vue3 工程暂不支持可视化修改");
+        ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
+        ThrowUtils.throwIf(StrUtil.isBlank(instruction), ErrorCode.PARAMS_ERROR, "修改意图不能为空");
+        ThrowUtils.throwIf(callback == null, ErrorCode.PARAMS_ERROR);
+        vueThreadPoolExecutor.execute(() -> {
+            try {
+                long[] usage = new long[2];
+                vueProjectAgent.modifyGeneratedSite(type, appId, elementContext, instruction, usage,
+                        new VueProjectAgent.VueProgressListener() {
+                            @Override
+                            public void onFileWritten(String path, int size, String content) {
+                                callback.onToken("{\"path\":" + toJsonString(path)
+                                        + ",\"content\":" + toJsonString(content) + "}");
+                            }
+
+                            @Override
+                            public void onReasoning(String reasoning) {
+                                callback.onReasoning(reasoning);
+                            }
+                        });
+                AiCodeGenResultVO vo = readResult(type, appId);
+                vo.setPromptTokens(usage[0]);
+                vo.setCompletionTokens(usage[1]);
+                vo.setTotalTokens(usage[0] + usage[1]);
+                callback.onDone(vo);
+            } catch (RuntimeException e) {
+                log.error("[modify] 可视化修改失败，type={}, appId={}", type, appId, e);
+                callback.onError(e);
+            }
+        });
+    }
+
+    /**
+     * 还原源码（可视化修改的"撤销"）：写回给定文件快照并返回还原后的项目 VO。
+     *
+     * @param type  代码生成类型（html / multi_file）
+     * @param appId 应用 id
+     * @param files 文件快照（path -> content）
+     * @return 还原后的项目结果 VO
+     */
+    public AiCodeGenResultVO restoreSource(CodeGenTypeEnum type, Long appId, Map<String, String> files) {
+        ThrowUtils.throwIf(type == null || type == CodeGenTypeEnum.VUE,
+                ErrorCode.PARAMS_ERROR, "该模式不支持撤销");
+        ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
+        ThrowUtils.throwIf(files == null || files.isEmpty(), ErrorCode.PARAMS_ERROR, "还原内容为空");
+        vueProjectAgent.restoreFiles(type, appId, files);
+        return readResult(type, appId);
+    }
+
+    /**
      * 简易 JSON 字符串转义（用于把文件路径/内容包装进 JSON 事件）
      */
     private String toJsonString(String s) {

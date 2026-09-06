@@ -4,12 +4,20 @@ import { useRoute, useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
 import { ArrowLeftOutlined, UserOutlined, RobotOutlined, DoubleRightOutlined, DoubleLeftOutlined, LinkOutlined, FileTextOutlined, DownloadOutlined } from '@ant-design/icons-vue'
 import { getAppVoById, getAppCode, getVuePreview, deployApp, unDeployApp, downloadCode } from '@/api/appController'
-import { chat, chatMulti, stopGenerate } from '@/api/aiChatController'
+import { chat, chatMulti, stopGenerate, undoAiModify } from '@/api/aiChatController'
+import {
+  listManualEdits,
+  applyManualEdit,
+  undoManualEdit,
+  clearManualEdits,
+} from '@/api/manualEdit'
+import type { ManualEditItem } from '@/api/manualEdit'
 import { listChatHistory } from '@/api/chatHistoryController'
 import {
   streamGenerateHtmlProject,
   streamGenerateMultiFileProject,
   streamGenerateVueProject,
+  streamModifyProject,
 } from '@/api/aiStream'
 import { createSseConnection } from '@/utils/sse'
 import type { SseCallbacks, SseConnection } from '@/utils/sse'
@@ -126,6 +134,513 @@ const loadVuePreview = async (): Promise<boolean> => {
     vuePreviewLoading.value = false
   }
   return false
+}
+
+// ============ 可视化编辑（html / multi_file 网页预览支持） ============
+const previewFrameRef = ref<HTMLIFrameElement | null>(null)
+const editMode = ref(false)
+const editTarget = ref<{ selector: string; tag: string; text: string; outerHtml: string } | null>(null)
+const editInstruction = ref('')
+const editStatus = ref('')
+const modifying = ref(false)
+// 撤销快照：修改前整份源码文件快照（供一键还原）
+const undoSnapshot = ref<CodeFile[]>([])
+let editorDetach: (() => void) | null = null
+
+// —— 手动样式编辑：页签 / 元素句柄 / 属性值 ——
+const editTab = ref<'ai' | 'style'>('style')
+const editTargetEl = ref<HTMLElement | null>(null)
+let pendingReselect = '' // 手动样式刷新后，重新选中该选择器以继续迭代
+const styleTouched = ref<string[]>([]) // 被用户改过的 css 属性名
+const styleVal = reactive<Record<string, string>>({}) // 每个受控属性的当前值（字符串）
+const manualEdits = ref<ManualEditItem[]>([])
+const styleBusy = ref(false)
+
+const toggleVisualEdit = () => {
+  if (editMode.value) {
+    exitVisualEdit()
+  } else {
+    enterVisualEdit()
+  }
+}
+
+const enterVisualEdit = () => {
+  editMode.value = true
+  editStatus.value = '点击网页中的元素进行选择'
+  armPreviewEditor()
+  loadManualEdits()
+}
+
+const exitVisualEdit = () => {
+  editMode.value = false
+  disarmPreviewEditor()
+  editTarget.value = null
+  editTargetEl.value = null
+  pendingReselect = ''
+  styleTouched.value = []
+  editInstruction.value = ''
+  editStatus.value = ''
+  manualEdits.value = []
+}
+
+// 为预览 iframe 注入高亮/点击选择（同源 srcdoc，可访问 contentDocument）
+const armPreviewEditor = () => {
+  disarmPreviewEditor()
+  const frame = previewFrameRef.value
+  const doc = frame?.contentDocument
+  if (!frame || !doc) return
+  let hovered: Element | null = null
+  const clearHover = () => {
+    if (hovered) {
+      ;(hovered as HTMLElement).style.outline = ''
+      hovered = null
+    }
+  }
+  const onMouseOver = (e: Event) => {
+    if (!editMode.value) return
+    const t = e.target as Element
+    if (t === doc.documentElement || t === doc.body) {
+      clearHover()
+      return
+    }
+    clearHover()
+    hovered = t
+    ;(t as HTMLElement).style.outline = '1px dashed #1677ff'
+    e.stopPropagation()
+  }
+  const onClick = (e: Event) => {
+    if (!editMode.value) return
+    e.preventDefault()
+    e.stopPropagation()
+    const t = e.target as Element
+    if (t === doc.documentElement || t === doc.body) return
+    selectEditTarget(t)
+  }
+  doc.addEventListener('mouseover', onMouseOver, true)
+  doc.addEventListener('click', onClick, true)
+  editorDetach = () => {
+    doc.removeEventListener('mouseover', onMouseOver, true)
+    doc.removeEventListener('click', onClick, true)
+    clearHover()
+  }
+}
+
+const disarmPreviewEditor = () => {
+  if (editorDetach) {
+    editorDetach()
+    editorDetach = null
+  }
+}
+
+// srcdoc 内容变化会整体 reload，需要在 load 后重新武装监听
+const onPreviewFrameLoad = () => {
+  if (editMode.value) {
+    armPreviewEditor()
+  }
+  // 手动样式落地后重新选中同一元素，便于继续微调
+  if (pendingReselect) {
+    const sel = pendingReselect
+    pendingReselect = ''
+    const doc = previewFrameRef.value?.contentDocument
+    if (doc) {
+      try {
+        const el = doc.querySelector(sel)
+        if (el) {
+          selectEditTarget(el)
+        }
+      } catch {
+        // 选择器在新文档中失效，忽略
+      }
+    }
+  }
+}
+
+// 生成元素的 CSS 选择器路径（优先 id，其次 class，同名加 nth-of-type）
+const cssPathOf = (el: Element): string => {
+  const parts: string[] = []
+  let cur: Element | null = el
+  while (cur && cur !== cur.ownerDocument?.documentElement && parts.length < 8) {
+    const tag = cur.tagName.toLowerCase()
+    if (cur.id) {
+      parts.unshift(`${tag}#${cur.id}`)
+      break
+    }
+    let seg = tag
+    const firstClasses = Array.from(cur.classList).slice(0, 2)
+    if (firstClasses.length > 0) {
+      seg += '.' + firstClasses.join('.')
+    }
+    const parent = cur.parentElement
+    if (parent) {
+      const siblings = Array.from(parent.children).filter((c) => c.tagName === cur!.tagName)
+      if (siblings.length > 1) {
+        seg += `:nth-of-type(${siblings.indexOf(cur) + 1})`
+      }
+    }
+    parts.unshift(seg)
+    cur = cur.parentElement
+  }
+  return parts.join(' > ')
+}
+
+const describeElement = (el: Element) => {
+  const id = el.id ? `#${el.id}` : ''
+  const cls = Array.from(el.classList).join('.')
+  return {
+    selector: cssPathOf(el),
+    tag: `${el.tagName.toLowerCase()}${id}${cls ? '.' + cls : ''}`,
+    text: (el.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 200),
+    outerHtml: (el as HTMLElement).outerHTML.slice(0, 600),
+  }
+}
+
+const selectEditTarget = (el: Element) => {
+  editTarget.value = describeElement(el)
+  editTargetEl.value = el as HTMLElement
+  editInstruction.value = ''
+  pendingReselect = ''
+  initStylePanel()
+  editTab.value = 'style'
+  editStatus.value = '已选中元素，可在「样式」或「AI」页签修改'
+}
+
+// 拼装给后端的元素上下文文本
+const buildEditContext = (): string => {
+  const t = editTarget.value
+  if (!t) return ''
+  return `选择器: ${t.selector}\n标签: ${t.tag}\n文本: ${t.text || '(空)'}\n结构片段: ${t.outerHtml || '(空)'}`
+}
+
+// 应用修改：走 /ai/modify/stream
+const applyModify = async () => {
+  const inst = editInstruction.value.trim()
+  if (!inst) {
+    message.warning('请描述想怎么改')
+    return
+  }
+  if (!app.value?.id) return
+  // 修改前快照，供撤销
+  undoSnapshot.value = previewFiles.value.map((f) => ({ ...f }))
+  modifying.value = true
+  editStatus.value = 'AI 正在分析并修改…'
+  const callbacks: SseCallbacks = {
+    onAgentProgress: (data) => {
+      try {
+        const p = JSON.parse(data)
+        const path: string = p.path || ''
+        const content: string = p.content || ''
+        if (path) {
+          editStatus.value = `正在修改 ${path}…`
+          upsertFile(previewFiles.value, { path, content })
+        }
+      } catch {
+        // 忽略非关键事件
+      }
+    },
+    onReasoning: () => {
+      editStatus.value = 'AI 正在思考定位…'
+    },
+    onDone: (result) => {
+      const files = filesFromResult(result)
+      previewFiles.value = files
+      if (files.length > 0 && !files.some((f) => f.path === selectedFilePath.value)) {
+        selectedFilePath.value = files[0].path
+      }
+      previewDoc.value = buildPreviewDoc(result)
+      generationDone.value = true
+      previewMode.value = 'web'
+      modifying.value = false
+      editTarget.value = null
+      editInstruction.value = ''
+      editStatus.value = ''
+      message.success('修改成功，预览已刷新')
+    },
+    onError: (m) => {
+      modifying.value = false
+      editStatus.value = ''
+      message.error(m || '修改失败，请重试或换一种描述')
+    },
+    onClose: () => {
+      modifying.value = false
+    },
+  }
+  connection = streamModifyProject(appId.value, buildEditContext(), inst, callbacks)
+}
+
+const cancelEditTarget = () => {
+  editTarget.value = null
+  editTargetEl.value = null
+  pendingReselect = ''
+  styleTouched.value = []
+  editInstruction.value = ''
+  editStatus.value = editMode.value ? '点击网页中的元素进行选择' : ''
+}
+
+const handleEditKeydown = (e: KeyboardEvent) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+    e.preventDefault()
+    applyModify()
+  }
+}
+
+// 撤销上次可视化修改：把修改前快照写回源码并刷新预览
+const undoLastModify = async () => {
+  if (!undoSnapshot.value.length || !app.value?.id) {
+    message.info('暂无可撤销的修改')
+    return
+  }
+  if (modifying.value) return
+  const body: Record<string, string> = {}
+  for (const f of undoSnapshot.value) {
+    if (f.path) {
+      body[f.path] = f.content
+    }
+  }
+  modifying.value = true
+  editStatus.value = '正在撤销…'
+  try {
+    const res = await undoAiModify(body, { appId: appId.value as unknown as number })
+    const result = res.data?.data
+    if (res.data?.code === 0 && result) {
+      const files = filesFromResult(result)
+      previewFiles.value = files
+      if (files.length && !files.some((f) => f.path === selectedFilePath.value)) {
+        selectedFilePath.value = files[0].path
+      }
+      previewDoc.value = buildPreviewDoc(result)
+      generationDone.value = true
+      previewMode.value = 'web'
+      undoSnapshot.value = []
+      editTarget.value = null
+      editInstruction.value = ''
+      message.success('已撤销本次修改')
+    } else {
+      message.error(res.data?.message || '撤销失败')
+    }
+  } catch (e: any) {
+    message.error(e?.message || '撤销失败')
+  } finally {
+    modifying.value = false
+    editStatus.value = ''
+  }
+}
+
+// ============ 手动样式编辑（属性面板 → 覆盖规则落盘） ============
+interface StyleField {
+  css: string
+  label: string
+  kind: 'color' | 'px' | 'num' | 'weight' | 'align' | 'size'
+}
+const STYLE_FIELDS: StyleField[] = [
+  { css: 'color', label: '文字颜色', kind: 'color' },
+  { css: 'background-color', label: '背景色', kind: 'color' },
+  { css: 'font-size', label: '字号(px)', kind: 'px' },
+  { css: 'font-weight', label: '字重', kind: 'weight' },
+  { css: 'text-align', label: '对齐', kind: 'align' },
+  { css: 'margin-top', label: '上边距(px)', kind: 'px' },
+  { css: 'padding', label: '内边距(px)', kind: 'px' },
+  { css: 'border-radius', label: '圆角(px)', kind: 'px' },
+  { css: 'line-height', label: '行高', kind: 'num' },
+  { css: 'width', label: '宽度', kind: 'size' },
+]
+const PX_FIELDS = new Set(['font-size', 'margin-top', 'padding', 'border-radius'])
+
+const curSelector = computed(() => editTarget.value?.selector ?? '')
+
+// 计算值 → 控件显示值（px 字段取纯数字）
+function styleInputValue(cssProp: string, computed: string): string {
+  if (cssProp === 'font-weight' || cssProp === 'text-align' || cssProp === 'width') {
+    return computed
+  }
+  if (cssProp === 'line-height') {
+    return computed || ''
+  }
+  const n = parseFloat(computed)
+  return Number.isFinite(n) ? String(Math.round(n)) : ''
+}
+
+// 控件值 → 最终 css 值（px 字段补单位）
+function styleToCss(cssProp: string, raw: string): string {
+  const v = (raw || '').trim()
+  if (v === '') return ''
+  if (PX_FIELDS.has(cssProp) || cssProp === 'width') {
+    return /^-?\d+(\.\d+)?$/.test(v) ? v + 'px' : v
+  }
+  return v
+}
+
+// 读选中元素当前计算值，初始化控件
+function initStylePanel() {
+  const el = editTargetEl.value
+  styleTouched.value = []
+  for (const f of STYLE_FIELDS) {
+    styleVal[f.css] = ''
+  }
+  if (!el) return
+  const cs = getComputedStyle(el)
+  for (const f of STYLE_FIELDS) {
+    try {
+      styleVal[f.css] = styleInputValue(f.css, cs.getPropertyValue(f.css) || '')
+    } catch {
+      styleVal[f.css] = ''
+    }
+  }
+}
+
+// 属性变更：记录 touched + live 预览（改元素 inline，便于落盘前看效果）
+const onStyleChange = (cssProp: string) => {
+  if (!styleTouched.value.includes(cssProp)) {
+    styleTouched.value.push(cssProp)
+  }
+  const el = editTargetEl.value
+  if (el && el.isConnected) {
+    const v = styleToCss(cssProp, styleVal[cssProp])
+    if (v === '') {
+      el.style.removeProperty(cssProp)
+    } else {
+      el.style.setProperty(cssProp, v)
+    }
+  }
+}
+
+const onStyleInput = (cssProp: string, e: Event) => {
+  styleVal[cssProp] = (e.target as HTMLInputElement).value
+  onStyleChange(cssProp)
+}
+
+const onStyleSelect = (cssProp: string, e: Event) => {
+  styleVal[cssProp] = (e.target as HTMLSelectElement).value
+  onStyleChange(cssProp)
+}
+
+// 计算出的颜色可能是 rgb(...)，转成 #rrggbb 供 color input 使用
+function toHexColor(v: string): string {
+  const s = String(v || '').trim()
+  if (/^#[0-9a-fA-F]{6}$/.test(s)) {
+    return s
+  }
+  const m = s.match(/^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/)
+  if (m) {
+    return (
+      '#' +
+      [1, 2, 3]
+        .map((i) => Number(m[i]).toString(16).padStart(2, '0'))
+        .join('')
+    )
+  }
+  return '#000000'
+}
+
+// 组装覆盖规则（只含被改动且非空的属性）
+function buildManualRule(): string {
+  const props = styleTouched.value.filter((p) => styleToCss(p, styleVal[p]) !== '')
+  if (props.length === 0) return ''
+  const decl = props.map((p) => `  ${p}: ${styleToCss(p, styleVal[p])};`).join('\n')
+  return `${sanitizeSelector(curSelector.value)} {\n${decl}\n}`
+}
+
+// 选择器净化：去掉会破坏 CSS 文件/块边界的字符
+function sanitizeSelector(s: string): string {
+  return (s || '').replace(/[{};'"\\]/g, '')
+}
+
+// 保存手动样式 → 刷新预览与历史
+const applyManualStyle = async () => {
+  const rule = buildManualRule()
+  if (!rule) {
+    message.warning('还没有改动，请先调整右侧属性')
+    return
+  }
+  if (!app.value?.id) return
+  styleBusy.value = true
+  editStatus.value = '保存样式…'
+  try {
+    const res = await applyManualEdit(appId.value as unknown as number, {
+      selector: sanitizeSelector(curSelector.value),
+      css: rule,
+    })
+    if (res.data?.code !== 0) {
+      message.error(res.data?.message || '保存失败')
+      return
+    }
+    message.success('已保存到源码')
+    await refreshAfterManualEdit()
+  } catch (e: any) {
+    message.error(e?.message || '保存失败')
+  } finally {
+    styleBusy.value = false
+    editStatus.value = ''
+  }
+}
+
+// 手动编辑落地后：重拉代码 → 刷新预览（iframe 重载并自动重选继续编辑）→ 刷新历史列表
+const refreshAfterManualEdit = async () => {
+  if (!app.value?.id) return
+  try {
+    const res = await getAppCode({ id: appId.value as unknown as number })
+    const data = res.data?.data
+    if (res.data?.code === 0 && data) {
+      previewFiles.value = filesFromResult(data)
+      previewDoc.value = buildPreviewDoc(data)
+      previewMode.value = 'web'
+      generationDone.value = true
+      if (curSelector.value) {
+        pendingReselect = sanitizeSelector(curSelector.value)
+      }
+    }
+  } catch {
+    // 忽略，历史列表仍可加载
+  }
+  await loadManualEdits()
+}
+
+const loadManualEdits = async () => {
+  if (!app.value?.id) {
+    manualEdits.value = []
+    return
+  }
+  try {
+    const res = await listManualEdits({ appId: appId.value as unknown as number })
+    manualEdits.value = res.data?.data ?? []
+  } catch {
+    manualEdits.value = []
+  }
+}
+
+const undoOneManual = async (id: string) => {
+  if (!app.value?.id) return
+  styleBusy.value = true
+  try {
+    const res = await undoManualEdit(appId.value as unknown as number, id)
+    if (res.data?.code === 0) {
+      message.success('已撤销该条')
+      await refreshAfterManualEdit()
+    } else {
+      message.error(res.data?.message || '撤销失败')
+    }
+  } catch (e: any) {
+    message.error(e?.message || '撤销失败')
+  } finally {
+    styleBusy.value = false
+  }
+}
+
+const clearAllManual = async () => {
+  if (!app.value?.id || manualEdits.value.length === 0) return
+  styleBusy.value = true
+  try {
+    const res = await clearManualEdits(appId.value as unknown as number)
+    if (res.data?.code === 0) {
+      message.success('已清空手动修改')
+      await refreshAfterManualEdit()
+    } else {
+      message.error(res.data?.message || '清空失败')
+    }
+  } catch (e: any) {
+    message.error(e?.message || '清空失败')
+  } finally {
+    styleBusy.value = false
+  }
 }
 
 // 部署进度（vue 流式部署状态文案）
@@ -293,6 +808,7 @@ const sendMessage = async (text?: string, auto = false) => {
   generationDone.value = false
   previewFiles.value = []
   selectedFilePath.value = ''
+  exitVisualEdit()
 
   if (useStream.value) {
     // vue 模式：agent 逐文件生成，SSE 推送 agent_progress（每文件完整代码）
@@ -301,11 +817,14 @@ const sendMessage = async (text?: string, auto = false) => {
       vueProgress.value = '正在生成 Vue 工程…'
       let donePayload: API.AiCodeGenResultVO | null = null
       let vueFileCount = 0 // 已收到的文件数（进度展示用）
+      // 推理增量先攒在本地（避免每 token 触发 reactive + MarkdownView 全量重渲染卡死），结束再赋值一次
+      let reasoningBuf = ''
 
       // 收尾：description + 最终文件集 + 预览
       const finishVue = () => {
         const result = donePayload ?? ({ files: [] } as API.AiCodeGenResultVO)
         aiMsg.status = 'done'
+        aiMsg.reasoning = reasoningBuf || undefined
         if (donePayload?.description) {
           aiMsg.content = donePayload.description
         }
@@ -345,13 +864,14 @@ const sendMessage = async (text?: string, auto = false) => {
           }
         },
         onReasoning: (text) => {
-          aiMsg.reasoning = (aiMsg.reasoning || '') + text
+          reasoningBuf += text
         },
         onDone: (result) => {
           donePayload = result
           finishVue()
         },
         onError: (errorMsg) => {
+          aiMsg.reasoning = reasoningBuf || undefined
           aiMsg.content = friendlyError(errorMsg)
           aiMsg.status = 'error'
           vueProgress.value = ''
@@ -372,11 +892,14 @@ const sendMessage = async (text?: string, auto = false) => {
     // 消息里只显示文件清单，完整代码放右侧预览（分文件文件树），避免大代码块重渲染卡顿。
     let donePayload: API.AiCodeGenResultVO | null = null
     let genFileCount = 0 // 已收到/显示的文件数（进度展示用）
+    // 推理增量先攒在本地，结束再一次性赋值（避免每 token 触发 MarkdownView 全量重渲染卡死）
+    let reasoningBuf = ''
 
     const finishAgent = () => {
       if (donePayload) {
         aiMsg.content = donePayload.description ?? ''
         aiMsg.status = 'done'
+        aiMsg.reasoning = reasoningBuf || undefined
         previewDoc.value = buildPreviewDoc(donePayload)
         const finalFiles = filesFromResult(donePayload)
         aiMsg.files = finalFiles
@@ -409,13 +932,14 @@ const sendMessage = async (text?: string, auto = false) => {
         }
       },
       onReasoning: (text) => {
-        aiMsg.reasoning = (aiMsg.reasoning || '') + text
+        reasoningBuf += text
       },
       onDone: (result) => {
         donePayload = result
         finishAgent()
       },
       onError: (errorMsg) => {
+        aiMsg.reasoning = reasoningBuf || undefined
         aiMsg.content = friendlyError(errorMsg)
         aiMsg.status = 'error'
         previewLoading.value = false
@@ -740,6 +1264,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   connection?.close()
+  exitVisualEdit()
 })
 </script>
 
@@ -818,13 +1343,10 @@ onUnmounted(() => {
             </a-avatar>
             <div class="msg-bubble" :class="{ 'msg-streaming': msg.status === 'streaming' }">
               <template v-if="msg.role === 'ai'">
-                <details
-                  v-if="msg.reasoning"
-                  class="msg-reasoning"
-                  :open="msg.status === 'streaming'"
-                >
-                  <summary>思考过程</summary>
-                  <MarkdownView :content="msg.reasoning" />
+                <details v-if="msg.reasoning" class="msg-reasoning">
+                  <summary>💭 思考过程（{{ msg.reasoning.length }}字）</summary>
+                  <!-- 纯文本渲染，避免大段推理走 MarkdownView 全量解析造成卡顿 -->
+                  <pre class="msg-reasoning-text">{{ msg.reasoning }}</pre>
                 </details>
                 <MarkdownView v-if="msg.content" :content="msg.content" />
                 <div v-if="msg.files && msg.files.length" class="msg-file-list">
@@ -882,16 +1404,36 @@ onUnmounted(() => {
 
       <div v-show="previewExpanded" class="preview-panel">
         <div class="preview-header">
-          <a-select
-            v-model:value="previewMode"
-            style="width: 130px"
-            :options="[
-              { label: '代码预览', value: 'code' },
-              { label: '网页预览', value: 'web' },
-            ]"
-            :disabled="!generationDone"
-          />
-          <a-spin v-if="previewLoading" size="small" />
+          <a-space size="small">
+            <a-select
+              v-model:value="previewMode"
+              style="width: 110px"
+              :options="[
+                { label: '代码预览', value: 'code' },
+                { label: '网页预览', value: 'web' },
+              ]"
+              :disabled="!generationDone"
+            />
+            <a-button
+              v-if="previewMode === 'web' && generationDone && !isVue"
+              size="small"
+              :type="editMode ? 'primary' : 'default'"
+              :disabled="modifying"
+              @click="toggleVisualEdit"
+            >
+              {{ editMode ? '退出编辑' : '可视化编辑' }}
+            </a-button>
+            <a-button
+              v-if="undoSnapshot.length"
+              size="small"
+              :disabled="modifying"
+              @click="undoLastModify"
+            >
+              撤销修改
+            </a-button>
+            <a-spin v-if="previewLoading || modifying" size="small" />
+          </a-space>
+          <span v-if="editStatus" class="deploy-status">{{ editStatus }}</span>
         </div>
         <div class="preview-content">
           <template v-if="previewMode === 'code'">
@@ -923,11 +1465,152 @@ onUnmounted(() => {
           </template>
           <template v-else>
             <template v-if="previewDoc">
-              <iframe
-                :srcdoc="previewDoc"
-                class="preview-frame"
-                sandbox="allow-scripts allow-same-origin allow-modals allow-forms allow-popups"
-              />
+              <div class="web-preview-wrap">
+                <iframe
+                  ref="previewFrameRef"
+                  :srcdoc="previewDoc"
+                  class="preview-frame"
+                  sandbox="allow-scripts allow-same-origin allow-modals allow-forms allow-popups"
+                  @load="onPreviewFrameLoad"
+                />
+                <div v-if="editMode && !editTarget" class="edit-hint">
+                  点击网页中的元素进行选择，点「退出编辑」结束
+                </div>
+                <div v-if="editTarget" class="edit-card">
+                  <div class="edit-card-head">
+                    <span class="edit-card-tag">{{ editTarget.tag }}</span>
+                    <a-button type="text" size="small" class="edit-card-close" @click="cancelEditTarget">
+                      ✕
+                    </a-button>
+                  </div>
+                  <div v-if="editTarget.text" class="edit-card-text">“{{ editTarget.text }}”</div>
+                  <div class="edit-card-selector">{{ editTarget.selector }}</div>
+
+                  <div class="edit-tabs">
+                    <div class="edit-tab" :class="{ active: editTab === 'style' }" @click="editTab = 'style'">
+                      样式
+                    </div>
+                    <div class="edit-tab" :class="{ active: editTab === 'ai' }" @click="editTab = 'ai'">
+                      AI 修改
+                    </div>
+                  </div>
+
+                  <!-- 样式面板：属性改动即时在 iframe 内联预览，点「应用到源码」才落盘 -->
+                  <template v-if="editTab === 'style'">
+                    <div class="style-panel">
+                      <div v-for="f in STYLE_FIELDS" :key="f.css" class="style-row">
+                        <span class="style-label">{{ f.label }}</span>
+                        <input
+                          v-if="f.kind === 'color'"
+                          type="color"
+                          class="style-color"
+                          :value="toHexColor(styleVal[f.css])"
+                          @input="onStyleInput(f.css, $event)"
+                        />
+                        <input
+                          v-else-if="f.kind === 'px' || f.kind === 'num'"
+                          type="number"
+                          class="style-num"
+                          :step="f.kind === 'num' ? '0.1' : '1'"
+                          :min="f.kind === 'num' ? '0.5' : '0'"
+                          :value="styleVal[f.css]"
+                          @input="onStyleInput(f.css, $event)"
+                        />
+                        <select
+                          v-else-if="f.kind === 'weight'"
+                          class="style-select"
+                          :value="styleVal[f.css]"
+                          @change="onStyleSelect(f.css, $event)"
+                        >
+                          <option value="normal">常规</option>
+                          <option value="bold">加粗</option>
+                          <option value="400">400</option>
+                          <option value="500">500</option>
+                          <option value="600">600</option>
+                          <option value="700">700</option>
+                        </select>
+                        <select
+                          v-else-if="f.kind === 'align'"
+                          class="style-select"
+                          :value="styleVal[f.css]"
+                          @change="onStyleSelect(f.css, $event)"
+                        >
+                          <option value="left">左对齐</option>
+                          <option value="center">居中</option>
+                          <option value="right">右对齐</option>
+                          <option value="justify">两端对齐</option>
+                        </select>
+                        <input
+                          v-else-if="f.kind === 'size'"
+                          type="text"
+                          class="style-num"
+                          placeholder="auto / 100% / 300px"
+                          :value="styleVal[f.css]"
+                          @input="onStyleInput(f.css, $event)"
+                        />
+                      </div>
+                    </div>
+                    <div class="edit-card-actions">
+                      <a-button size="small" :disabled="styleBusy" @click="initStylePanel">重置</a-button>
+                      <a-button
+                        size="small"
+                        type="primary"
+                        :loading="styleBusy"
+                        @click="applyManualStyle"
+                      >
+                        应用到源码
+                      </a-button>
+                    </div>
+                  </template>
+
+                  <!-- AI 修改：自然语言 -->
+                  <template v-else>
+                    <a-textarea
+                      v-model:value="editInstruction"
+                      placeholder="想怎么改这个元素？如：把标题改成「XX」、文字改成蓝色、加一个按钮…（Ctrl+Enter 应用）"
+                      :auto-size="{ minRows: 2, maxRows: 4 }"
+                      :disabled="modifying"
+                      @keydown="handleEditKeydown"
+                    />
+                    <div class="edit-card-actions">
+                      <a-button size="small" :disabled="modifying" @click="cancelEditTarget">
+                        取消选择
+                      </a-button>
+                      <a-button
+                        size="small"
+                        type="primary"
+                        :loading="modifying"
+                        @click="applyModify"
+                      >
+                        {{ modifying ? '修改中…' : '应用修改' }}
+                      </a-button>
+                    </div>
+                  </template>
+
+                  <!-- 手动修改记录（逐条撤销 / 清空） -->
+                  <div v-if="manualEdits.length" class="edit-history">
+                    <div class="edit-history-head">
+                      <span>手动修改记录（{{ manualEdits.length }}）</span>
+                      <a-button type="link" size="small" :disabled="styleBusy" @click="clearAllManual">
+                        清空
+                      </a-button>
+                    </div>
+                    <div class="edit-history-list">
+                      <div v-for="m in manualEdits" :key="m.id" class="edit-history-item">
+                        <div class="edit-history-sel" :title="m.css">{{ m.selector }}</div>
+                        <a-button
+                          type="text"
+                          size="small"
+                          :disabled="styleBusy"
+                          @click="undoOneManual(m.id)"
+                        >
+                          撤销
+                        </a-button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </template>
             <div v-else class="preview-empty">
               <a-empty
@@ -1234,6 +1917,202 @@ onUnmounted(() => {
   height: 100%;
   border: none;
   background: #fff;
+}
+
+.web-preview-wrap {
+  position: relative;
+  height: 100%;
+}
+
+.edit-hint {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 14px;
+  border-radius: 14px;
+  background: rgba(22, 119, 255, 0.12);
+  border: 1px solid rgba(22, 119, 255, 0.35);
+  color: #1677ff;
+  font-size: 13px;
+  pointer-events: none;
+  z-index: 10;
+  white-space: nowrap;
+}
+
+.edit-card {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  width: 300px;
+  background: #fff;
+  border: 1px solid #d9d9d9;
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  padding: 10px 12px;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.edit-card-title {
+  font-weight: 600;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.edit-card-tag {
+  font-weight: 400;
+  color: #1677ff;
+  background: #e6f4ff;
+  border-radius: 4px;
+  padding: 0 6px;
+  font-family: 'Consolas', monospace;
+  font-size: 12px;
+}
+
+.edit-card-text {
+  font-size: 12px;
+  color: #666;
+  background: #fafafa;
+  border-radius: 4px;
+  padding: 4px 8px;
+  word-break: break-all;
+  max-height: 60px;
+  overflow-y: auto;
+}
+
+.edit-card-selector {
+  font-size: 11px;
+  color: #999;
+  font-family: 'Consolas', monospace;
+  word-break: break-all;
+}
+
+.edit-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.edit-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.edit-card-close {
+  color: #999;
+}
+
+.edit-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.edit-tab {
+  padding: 4px 10px;
+  font-size: 13px;
+  color: #666;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  user-select: none;
+}
+
+.edit-tab.active {
+  color: #1677ff;
+  border-bottom-color: #1677ff;
+  font-weight: 500;
+}
+
+.style-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.style-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.style-label {
+  font-size: 12px;
+  color: #555;
+  flex-shrink: 0;
+}
+
+.style-color {
+  width: 34px;
+  height: 22px;
+  border: 1px solid #d9d9d9;
+  border-radius: 4px;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.style-num {
+  width: 110px;
+  font-size: 12px;
+  border: 1px solid #d9d9d9;
+  border-radius: 4px;
+  padding: 2px 6px;
+  text-align: right;
+}
+
+.style-select {
+  width: 110px;
+  font-size: 12px;
+  border: 1px solid #d9d9d9;
+  border-radius: 4px;
+  padding: 2px 4px;
+}
+
+.edit-history {
+  margin-top: 8px;
+  border-top: 1px dashed #eee;
+  padding-top: 6px;
+}
+
+.edit-history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: #666;
+}
+
+.edit-history-list {
+  max-height: 110px;
+  overflow-y: auto;
+}
+
+.edit-history-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 2px 0;
+}
+
+.edit-history-sel {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: 'Consolas', monospace;
+  font-size: 11px;
+  color: #888;
 }
 
 .code-frame {
