@@ -15,7 +15,7 @@
 
 | 主题 | 结论 | 依据 |
 |---|---|---|
-| 记忆系统 | ✅ 适用 | 已有 `MessageWindowChatMemory(20)` + Redis 仓储，仅做了窗口裁剪 |
+| 记忆系统 | ✅ 适用（含 P0 缺陷） | Redis 仓储已配但**从未写入**；完整历史在 MySQL，无回灌 |
 | 上下文压缩 | ✅ 适用（第 2 痛点） | #66 已记录 tool-loop 上下文膨胀，列为待定方向 |
 | 工具系统 | ✅ 适用 | `ai/tools/` 已有 5 个工具，无风险分级/审批 |
 | Agent 循环 | ✅ 适用 | `MAX_STEPS=20` 形同摆设；断路器已有 |
@@ -33,30 +33,42 @@
 
 ---
 
-## 二、记忆系统
+## 二、记忆系统（含 P0 缺陷：记忆从未写入）
 
-### 现状与证据
+### 现状与证据：不是"裁剪过度"，是"从未写入"
 
-- [ChatMemoryConfig.java](src/main/java/com/mofanyi/config/ChatMemoryConfig.java)：`MessageWindowChatMemory` + `maxMessages(20)`，仓储为 [RedisChatMemoryRepository.java](src/main/java/com/mofanyi/config/RedisChatMemoryRepository.java)。
-- [VueProjectAgent.java](src/main/java/com/mofanyi/ai/VueProjectAgent.java) `generate`：`messages.addAll(chatMemory.get(String.valueOf(appId)))`，记忆按 appId 一对一。
-- development-notes #40：Spring AI 的 memory advisor 默认存整个 user prompt（含 system prompt），本项目改为手动 `chatMemory.get`/`add`。
+三个事实叠加，结论是**当前项目没有任何对话记忆**：
 
-即：**只实现了"消息裁剪"（材料的策略 1），没有摘要压缩（策略 2）与选择性保留（策略 3）**。
+1. **Redis 记忆从未被写入**。全仓 Java 代码里 `chatMemory` 只有一处使用——`VueProjectAgent.generate` 的 `chatMemory.get(...)`（第 159 行），**没有任何 `chatMemory.add(...)`**；也未注册 `MessageChatMemoryAdvisor`（用的是裸 `chatModel.stream()`），故无任何自动写入路径。→ `chatMemory.get(appId)` **永远返回空列表**。
+2. **写入逻辑是重构时丢的**。被删除的 `AiCodeGeneratorServiceImpl` 原本有 `chatMemory.add(String.valueOf(appId), List.of(new UserMessage(userMessage), new AssistantMessage(aiContent)))`；该文件在 `437c65b` 被移除、重构为 `VueProjectAgent` 时，`get` 跟了过来、**`add` 没跟过来**。
+3. **Redis 记忆无 TTL**。[RedisChatMemoryRepository.java](src/main/java/com/mofanyi/config/RedisChatMemoryRepository.java) 的 `saveAll` 用 `opsForValue().set(key, json)`，**未设过期**（`expire/ttl/Duration` 零命中）——即便写入也不会"过几天过期"，只有 Redis 重启 / 淘汰 / 手动删除才丢。
 
-### 差距
+> **澄清两处误解**：
+> ① **Redis 本身没有失效**——它仍承担 Spring Session（`spring.session.store-type: redis`，登录态经 `request.getSession()` 落 Redis）；失效的只是"对话记忆"这一个功能。
+> ② **不存在"存上下文的 Map"**——全仓无任何按 appId 存上下文的内存结构。`GENERATING_TASKS` 是"停止生成"用的（且它自己也从不写入，见 [plan-refactor.md](plan-refactor.md) P0-1）；上下文是每次请求现拼的局部 `List<Message>`，用完即弃。
 
-窗口裁剪是"硬切"——第 21 条消息一进来，第 1 条无条件丢失。用户的**初始需求**往往正是第 1 条，丢了最致命。
+### 后果
 
-### 改法
+模型**无状态**：每次生成只有"系统提示词 + 本次用户输入"。用户打开几天前的项目、看着界面上的完整历史说"把刚才那个按钮改成蓝色"——AI 完全不知道"刚才"指什么。**不是过几天才丢，是第二次对话就已经丢了。**
 
-1. **窗口裁剪保留为兜底**，不作为唯一策略。
-2. **摘要压缩**：当窗口消息数或估算 token 超阈值时，把较早消息摘要为 500~1000 token 的一段，以固定角色写回记忆（Redis），窗口只保留"摘要 + 最近 N 条"。
-3. **选择性保留**：给关键信息打标优先保留——① 用户首条需求（原始目标）；② 关键错误信息（失败原因）；中间的试错过程优先压缩。
-4. **预留升级空间**：抽 `AgentMemory` 接口（当前实现 `WindowedRedisMemory`），未来可换 `HybridMemory`（窗口 + 摘要 + 向量检索）而不改调用方。
+### 历史并未丢失，丢的是"取回来"的能力
+
+完整对话落在 MySQL `chat_history`（`ChatHistoryServiceImpl.saveMessage`，`AiChatController` 在生成前后写 user / assistant / error）。前端能看全（`/chatHistory/list/page/vo` 游标分页），但**没有把 `chat_history` 回灌进上下文的路径**（`rehydrat/回灌/rebuild` 零命中）。这正是材料所说"长期记忆的难点不在存，在取"。
+
+### 改法（按优先级）
+
+1. **[P0] 恢复写入**：生成结束后 `chatMemory.add(appId, [UserMessage, AssistantMessage])`，与 MySQL 双写对齐；收敛到一处（`ChatHistoryService` 或门面层），不再散在 Agent 内。
+2. **[P0] 冷启动回灌（rehydration）**：memory 为空时，按 appId 从 `chat_history` 取最近 N 条重建上下文窗口再生成。**一招同时解决三种情况**——Redis 过期、Redis 重启、以及现在这种"从未写入"。
+3. **[P1] 明确 TTL 策略**：当热缓存就设 TTL + 回灌兜底；不想过期就管内存增长（应用删除时已有 `deleteByConversationId`）。
+4. **[P1] 摘要压缩**：窗口超阈值时把较早消息摘要为 500~1000 token 写回，窗口保留"摘要 + 最近 N 条"。
+5. **[P2] 选择性保留**：给关键信息打标优先保留（① 用户首条需求；② 关键错误信息），中间试错优先压缩。
+6. **预留升级空间**：抽 `AgentMemory` 接口（当前 `WindowedRedisMemory`），未来可换 `HybridMemory`（窗口 + 摘要 + 向量检索）而不改调用方。
 
 ### 验收
 
-连续 30 轮交互后，注入模型的上下文 token 有上界，**不随轮数线性增长**；用户的初始需求在第 30 轮仍可见。
+- 生成一次后，Redis `spring:ai:chat:memory:{appId}` 键存在且含 user/assistant 消息。
+- 清空该键（模拟过期）后再次对话，模型仍能拿到最近历史（回灌生效）。
+- 补一个覆盖"写入 + 读取 + 回灌"的最小测试——当前 `src/test` 为空，此缺陷正是**无测试才溜进来**的。
 
 ---
 
@@ -237,8 +249,9 @@ development-notes #66 明确记录：`deepseek-v4-flash` 的 tool-loop **每轮�
 
 | 期 | 内容 | 依赖 |
 |---|---|---|
+| **E0** | 记忆链路修复（恢复写入 + 冷启动回灌） | 无——功能缺陷，先修 |
 | **E1** | 上下文压缩 L1+L2（工具结果瘦身）、工具风险分级 | 无 |
-| **E2** | 记忆系统（摘要 + 选择性保留）、Agent 循环预算 | E1（压缩是摘要的前置） |
+| **E2** | 记忆系统（摘要 + 选择性保留）、Agent 循环预算 | E0 / E1 |
 | **E3** | 安全裁剪（SSRF / Mermaid 沙箱）、Prompt 缓存校验 | 无（可并行） |
 | **升级预留** | 检索 / 模板复用 | 触发条件见 9.1 |
 
@@ -253,6 +266,8 @@ development-notes #66 明确记录：`deepseek-v4-flash` 的 tool-loop **每轮�
 ## 十二、验收总清单
 
 - [ ] 30 轮交互后上下文 token 有上界，初始需求仍可见。
+- [ ] 生成后 Redis `spring:ai:chat:memory:{appId}` 键存在且含 user/assistant 消息。
+- [ ] 清空该键后再次对话，模型仍能拿到最近历史（回灌生效）。
 - [ ] 多文件生成时 prompt token 不随已写文件数线性增长。
 - [ ] 每个工具调用经风险拦截，网络/进程类工具有明确上限。
 - [ ] 超预算生成会终止，且区分"失败"与"超预算"。

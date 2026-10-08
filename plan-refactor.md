@@ -287,6 +287,7 @@ surefire 已在 `spring-boot-starter-test` 中，无需新增依赖。
 ### 7.3 死代码 / 命名 / 注释
 
 - 删除 [`Main.java`](src/main/java/com/mofanyi/Main.java)（无引用的 `Hello world`）。
+- **移除死依赖 Sa-Token**：`sa-token-spring-boot3-starter` 与 `sa-token-redis-jackson` 仅在 `pom.xml` 声明，`src` 与 `resources` 均零引用（`rg "StpUtil|SaCheck|cn.dev33" src/main/java` 与 yml 搜索均为空）；鉴权实际走 `HttpSession` + 自写 `@AuthCheck` AOP。
 - `AiServiceFactory` 实为配置类 → 改名 `CodeGenPromptConfig` 并移入 `config` 包。
 - `projectDownloadService` 类名小写开头 → 改 `ProjectDownloadService`。
 - `CodeGenTypeEnum.getEnumByValue` 返回 `null` → 改 `Optional` 或在调用处统一 `throwIf`。
