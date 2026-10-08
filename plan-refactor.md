@@ -26,8 +26,10 @@
 | **P0** | "停止生成"是假功能 | 用户可见的功能缺陷 | `AiCodeGeneratorFacade` L31 / L210 |
 | **P0** | 同一 appId 并发生成无互斥 | 文件互相覆盖、状态互相踩 | `CodeFileWriteService.getProjectDir`；development-notes #63 |
 | **P0** | 生成状态机无终态保障 | 进程崩溃后永久卡 `generating` | `updateGenerateStatus` |
+| **P0** | 交付前无渲染验证（html/multi_file 开环） | 图裂/布局错/0 图只能靠人发现 | 唯一渲染是 `CoverImageService` 部署后截图，结果不回灌 |
 | **P1** | 归属校验散落 3 处 | 越权遗漏风险 | AiChatController×4、ManualEditController×1、AppServiceImpl×1 |
 | **P1** | 手动编辑被重新生成整文件覆盖 | 用户改动静默丢失 | `ManualEditService` vs `writeFile` 覆盖 |
+| **P1** | 素材"事后正则补图"而非素材先行 | 页面围绕空占位设计，补图靠猜 | `VueProjectAgent.autoFillImages` 在 `runToolLoop` 之后 |
 | **P1** | 核心链路零测试 | 后续重构无安全网 | `src/test` 无文件 |
 | **P1** | 无数据库迁移工具 | 换环境/回滚靠手工 | `sql/` 散落 ALTER |
 | **P1** | `AiCallListener` 自建线程池 | 违反项目自身规范 #63 | `AiCallListener` L27 |
@@ -150,9 +152,40 @@ try {
 
 ---
 
-## 五、P1：授权、冲突、测试、迁移
+## 五、P0-4：交付前渲染验证
 
-### 5.1 归属校验统一为一处
+> 详见 [plan-agent-pipeline.md](plan-agent-pipeline.md)——本节是其 P0 项在本方案中的落位。
+
+### 现象与证据
+
+html / multi_file 生成后**没有任何渲染验证**。项目里唯一的浏览器渲染是 `CoverImageService`，它跑在**部署之后**、只为生成封面缩略图，截图结果**从不回灌**给生成链路。vue 的 `VueBuildService.fixBuildError` 修的是**编译错误**，不是"页面渲染是否正确"。
+
+后果：图裂、布局错位、图片 0 张这些问题全部由**人**在浏览器里发现（development-notes #57/#59/#66 即证据），agent 自己无从察觉。
+
+### 改法
+
+复用已有 Selenium 依赖（`CoverImageService` 已用 Chrome/Edge + headless），新增"渲染验证"阶段，接在生成之后、交付之前：
+
+1. 无头浏览器渲染生成的 `index.html`；
+2. 3 档视口：桌面 1440 / 平板 768 / 手机 375；
+3. 采集结构化问题清单：图裂（`img.naturalWidth===0`）、资源 404、console error、横向溢出（`scrollWidth > clientWidth`）、空容器、每档截图；
+4. 把清单喂给修复 agent（把 `fixBuildError` 从"编译错误"泛化为"渲染错误修复"），修完**重新渲染**，最多 N 轮。
+
+### 接入点
+
+`AiCodeGeneratorFacade` 生成流程末尾（`autoFillImages` 之后或替换它）；与 vue 构建失败修复并列，构成统一的"验证 → 修复"回路。
+
+### 验收
+
+1. 故意生成引用不存在图片地址的页面 → 验证阶段报出"图裂"并进入修复。
+2. 3 档视口渲染无异常时才置 `done` 并发 `done` 事件。
+3. 验证报告可作为阶段产物落盘（`manifest.json`），可追溯。
+
+---
+
+## 六、P1：授权、冲突、测试、迁移
+
+### 6.1 归属校验统一为一处
 
 证据：`AiChatController` L180/L214/L232（"只能修改自己的应用"×2、"只能停止自己的生成任务"）、`ManualEditController.checkOwner` L100、`AppServiceImpl.checkAppOwnership` L574。**同一条规则写了 3 份不同文案**，漏一处即越权。
 
@@ -168,7 +201,7 @@ public class AppAuthService {
 
 替换上述 6 处调用。验收：全项目 `rg "只能修改自己的应用"` 只剩 1 处（组件内）。
 
-### 5.2 手动编辑与重新生成的冲突
+### 6.2 手动编辑与重新生成的冲突
 
 证据：`ManualEditService` 往 `css/styles.css` / `index.html` 注入带 UUID 标记块，而 AI 重新生成用 `writeFile` 整文件覆盖 → 用户手动改动静默丢失。
 
@@ -179,7 +212,7 @@ public class AppAuthService {
 
 验收：手动改样式 → 触发 AI 重新生成 → 手动改动仍在，预览/下载/部署一致。
 
-### 5.3 补最小测试集
+### 6.3 补最小测试集
 
 现状：`src/test/java/com/mofanyi/{ai,controller}` 目录存在，**0 个测试文件**。对一个"生成→构建→部署"长链路且依赖外部模型的项目，这是最大缺口。
 
@@ -195,13 +228,13 @@ public class AppAuthService {
 
 surefire 已在 `spring-boot-starter-test` 中，无需新增依赖。
 
-### 5.4 数据库迁移工具
+### 6.4 数据库迁移工具
 
 现状：`sql/` 是散落的手工 `ALTER TABLE`，无版本、无回滚。
 
 改法：引入 **Flyway**（Spring Boot 内置支持），把现有 `sql/*.sql` 收敛为 `V1__init.sql` 等带版本脚本，`baseline-on-migrate=true` 兼容已有库。
 
-### 5.5 线程池归 Spring 管理
+### 6.5 线程池归 Spring 管理
 
 证据：`AiCallListener` L27 自建 `Executors.newVirtualThreadPerTaskExecutor()`，违反项目规范 #63"线程池归 Spring 管理"。
 
@@ -209,9 +242,26 @@ surefire 已在 `spring-boot-starter-test` 中，无需新增依赖。
 
 ---
 
-## 六、P2：结构瘦身与一致性
+### 6.6 素材先行（替代事后正则补图）
 
-### 6.1 拆巨型类
+> 详见 [plan-agent-pipeline.md](plan-agent-pipeline.md)——素材先行的完整论证与方法论对照。
+
+证据：`VueProjectAgent.generate` 先 `runToolLoop`（写页面）、再 `autoFillImages`（正则补图）。页面是在不知道素材的情况下写出来的，所以会出现 `image: ""` 占位，补图只能靠正则猜。候选池仅 `pageSize=5`（`PexelsClient`），无筛选闸门；`downloadAndUpload` 原样上传原图（`SiteImageService`）。
+
+改法：
+
+1. 需要图片时**先生成素材清单**：多 query 扩大候选池（5 → 20~30），加质量闸门（最小分辨率、宽高比分桶、感知去重、水印启发式、可选视觉模型打分），选出 top-K。
+2. 把清单（url / 宽高 / 用途）作为事实注入**页面构建** prompt，页面围绕真实素材设计。
+3. **删除 `autoFillImages` 正则补图**（它优化的是"不为空"而非"好"）。
+4. 素材加工：按目标宽高比裁切、压到 web 尺寸、统一命名（现为原图直传、后缀硬编码 `.jpg`）。
+
+验收：生成一个图片主导页面，页面中图片 URL 全部来自预选清单；`autoFillImages` 相关代码与正则被移除。
+
+---
+
+## 七、P2：结构瘦身与一致性
+
+### 7.1 拆巨型类
 
 **`VueProjectAgent`（722 行）** 按职责拆为：
 
@@ -225,7 +275,7 @@ surefire 已在 `spring-boot-starter-test` 中，无需新增依赖。
 
 **`AppServiceImpl`（576 行）** 按职责拆为：`AppDeployService`（含 `doDeploy`）、`AppFeaturedService`（精选审核）、`AppQueryService`（分页/QueryWrapper）、`AppConverter`（VO 转换）、`AppRecycleService`（回收站/物理删除）。
 
-### 6.2 收敛重复代码
+### 7.2 收敛重复代码
 
 | 重复项 | 现状 | 改法 |
 |---|---|---|
@@ -234,7 +284,7 @@ surefire 已在 `spring-boot-starter-test` 中，无需新增依赖。
 | JSON 转义 | `AiCodeGeneratorFacade.toJsonString` 手写 + 内联 3 处 | 改用注入的 `ObjectMapper` |
 | 文件遍历 | `VueProjectAgent.collectCodeFiles/relativePath` 与 `CodeFileWriteService.walkDir/relativePath` 两份 | 收敛到 `CodeFileWriteService` |
 
-### 6.3 死代码 / 命名 / 注释
+### 7.3 死代码 / 命名 / 注释
 
 - 删除 [`Main.java`](src/main/java/com/mofanyi/Main.java)（无引用的 `Hello world`）。
 - `AiServiceFactory` 实为配置类 → 改名 `CodeGenPromptConfig` 并移入 `config` 包。
@@ -242,7 +292,7 @@ surefire 已在 `spring-boot-starter-test` 中，无需新增依赖。
 - `CodeGenTypeEnum.getEnumByValue` 返回 `null` → 改 `Optional` 或在调用处统一 `throwIf`。
 - **修正 `VueProjectAgent` 类注释**：它写"手动 tool-calling loop 突破 token 上限"，实际 `runToolLoop` 在首次成功后 `break`，工具由框架在**一次** `stream()` 内自动执行，`MAX_STEPS=20` 形同摆设。注释必须与实现对齐（或让实现真正变回循环），否则比没注释更危险。
 
-### 6.4 前端拆分
+### 7.4 前端拆分
 
 `AppGeneratePage.vue` 2100+ 行单文件组件，按关注点拆 composables：
 
@@ -250,7 +300,7 @@ surefire 已在 `spring-boot-starter-test` 中，无需新增依赖。
 
 ---
 
-## 七、目标后端包结构（重构后）
+## 八、目标后端包结构（重构后）
 
 ```
 com.mofanyi
@@ -277,19 +327,19 @@ com.mofanyi
 
 ---
 
-## 八、里程碑与执行顺序
+## 九、里程碑与执行顺序
 
 | 里程碑 | 内容 | 验收 |
 |---|---|---|
-| **M1（P0）** | 生成任务注册表（互斥 + 取消）、状态机终态回收 | 第二/四章验收项全绿 |
-| **M2（P1）** | 授权统一、手动编辑冲突、最小测试、Flyway、线程池 | 6 处校验收敛为 1；测试可跑；迁移脚本可重放 |
+| **M1（P0）** | 生成任务注册表（互斥 + 取消）、状态机终态回收、**交付前渲染验证** | 第二/四/五章验收项全绿 |
+| **M2（P1）** | 授权统一、手动编辑冲突、**素材先行**、最小测试、Flyway、线程池 | 归属校验收敛为 1；图片主导页面素材来自预选清单；测试可跑；迁移脚本可重放 |
 | **M3（P2）** | 拆巨型类、收敛重复、命名/死代码、前端 composables | 无单文件 > 400 行；`rg` 无重复实现 |
 
 **关键顺序约束**：M1 必须先于 M2/M3——它是后续所有重构的安全网（可安全取消、可拒绝并发）。
 
 ---
 
-## 九、明确不做 / 暂缓
+## 十、明确不做 / 暂缓
 
 - **不重构可观测性**：现有分层设计正确，保持即可。
 - **不引入微服务/领域驱动重构**：当前是合理的单体，拆分服务化收益低于成本。
@@ -298,11 +348,13 @@ com.mofanyi
 
 ---
 
-## 十、验收总清单
+## 十一、验收总清单
 
 - [ ] 点"停止生成"后确实中断，状态 `stopped`，可立即重生成。
 - [ ] 同一应用并发生成被拒绝或排队，磁盘无交叉写入。
 - [ ] 崩溃/超时的 `generating` 记录能被自动回收为 `failed`。
+- [ ] 生成后经 3 档视口渲染验证，图裂/溢出/console error 能被自动发现并进入修复。
+- [ ] 图片主导页面围绕预选素材清单构建，`autoFillImages` 正则补图被移除。
 - [ ] 全项目归属校验只剩 1 处实现。
 - [ ] 手动编辑在 AI 重新生成后不丢失。
 - [ ] `mvn test` 有可运行的测试且覆盖 `ToolPaths` 路径穿越。
