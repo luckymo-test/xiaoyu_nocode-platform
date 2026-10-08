@@ -51,16 +51,21 @@ public class ManualEditController {
     }
 
     /**
-     * 追加一条手动修改（body: {selector, css}）
+     * 追加一条手动修改（body: {kind: style|text, selector, css?, text?}）
      */
     @PostMapping("/apply")
     public BaseResponse<ManualEditService.EditItem> apply(@RequestParam Long appId,
                                                           @RequestBody Map<String, String> body,
                                                           HttpServletRequest request) {
         CodeGenTypeEnum type = checkOwner(appId, request);
+        String kind = body == null ? "style" : String.valueOf(body.getOrDefault("kind", "style"));
         String selector = body == null ? "" : StrUtil.maxLength(body.getOrDefault("selector", ""), 200);
+        if ("text".equals(kind)) {
+            String text = body == null ? "" : body.getOrDefault("text", "");
+            return ResultUtils.success(manualEditService.applyText(type, appId, selector, text));
+        }
         String css = body == null ? "" : body.getOrDefault("css", "");
-        return ResultUtils.success(manualEditService.apply(type, appId, selector, css));
+        return ResultUtils.success(manualEditService.applyStyle(type, appId, selector, css));
     }
 
     /**

@@ -1,10 +1,11 @@
 import request from "@/request";
 
-/** 单条手动样式修改 */
+/** 单条手动修改：kind=style(样式覆盖)/text(文字覆盖)；content 为 css 或新文字 */
 export interface ManualEditItem {
   id: string;
+  kind: string;
   selector: string;
-  css: string;
+  content: string;
 }
 
 /** 列出应用的手动修改 GET /ai/manual-edit/list */
@@ -15,10 +16,10 @@ export async function listManualEdits(params: { appId: number | string }, option
   });
 }
 
-/** 追加一条手动修改 POST /ai/manual-edit/apply */
+/** 追加一条手动修改 POST /ai/manual-edit/apply（kind=style 传 css；kind=text 传 text） */
 export async function applyManualEdit(
   appId: number | string,
-  body: { selector: string; css: string },
+  body: { kind: string; selector: string; css?: string; text?: string },
   options?: { [key: string]: any }
 ) {
   return request.post("/ai/manual-edit/apply", body, {

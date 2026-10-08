@@ -53,6 +53,17 @@ ThrowUtils.throwIf(loginUser == null || loginUser.getId() == null, ErrorCode.NOT
 
 后端 `JsonConfig` 已把 `Long` 序列化为**字符串**（`ToStringSerializer`），反序列化也接受字符串 body。雪花 ID 前后端全程按字符串传递，不要转数字。
 
+### 5. Agent 工具注册：工厂式动态绑定；无状态工具才用 Spring AI `@Tool`
+
+Spring AI 1.1.8 同时支持两种工具声明方式，按工具形态取舍：
+
+- **工具需要"每次生成的运行时上下文"（type/appId/进度 listener/状态 ref 等，非模型参数）时，用工厂式**：每个工具一个 `@Component`，暴露 `build(<上下文>) → ToolCallback`，由 `ai/VueProjectAgent.runToolLoop` 把各 `build(...)` 结果并成 `List.of(...)` 交给 ChatOptions。见 `ai/tools/`（WriteFileTool/ReadFileTool/SearchImageTool/FinishTool）。
+  - 理由：writeFile 写哪个工程、searchImage 归属哪个 app、finish 落到哪个 `AtomicReference`，都是服务端按一次生成绑定的，模型 JSON 填不出来；若硬用 `@Tool` 就得把上下文塞 ThreadLocal/请求级容器，而生成跑在线程池 + 工具由框架在 stream 内部（可能跨 reactor 线程）执行，ThreadLocal 易错绑/残留，反而不安全。
+  - 纯"能力/通用逻辑"不与具体生成绑定的，下沉到 `core`（如 `SiteImageService`、`ToolPaths`），供工具与 agent 后处理复用。
+- **工具无状态、入参全部由模型提供时，才用 `@Tool` + `MethodToolCallbackProvider`**：把 `@Tool` 方法写在 `@Component` bean 上，参数用 `@ToolParam`。它产出的同样是 `ToolCallback`，可直接并进上面的 `List.of(...)`，两种方式可共存。当前没有这类工具，未来新增"查询类/通用能力"工具时优先走 `@Tool`。
+
+> 补充：工具由框架**自动执行**（toolCallbacks 注册进 ChatOptions），不要写"手动分发循环"再执行一遍，避免双份维护（历史踩过 executeTool 死代码）。
+
 ## 二、前端规范
 
 ### 1. 雪花 ID 全程按字符串

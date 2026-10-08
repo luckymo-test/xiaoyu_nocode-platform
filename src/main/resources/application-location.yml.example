@@ -15,8 +15,14 @@ codegen:
   node:
     # node 可执行文件绝对路径（含空格用引号包住）
     command: "${NODE_COMMAND:D:\\computer tools\\nodejs\\node.exe}"
-    # npm-cli.js 绝对路径
-    npmCli: "${NPM_CLI:D:\\computer tools\\nodejs\\node_modules\\npm\\bin\\npm-cli.js}"
+    # npm-cli.js 绝对路径（示例：D:\\...\\node_modules\\npm\\bin\\npm-cli.js）
+    npmCli: "${NPM_CLI:your_npm_cli_path}"
+  # Mermaid 架构图渲染（mmdc + 复用本机浏览器内核）
+  mermaid:
+    # @mermaid-js/mermaid-cli 的 src/cli.js 绝对路径（npm i -g @mermaid-js/mermaid-cli 后，用 `npm root -g` 定位）
+    mmdcCli: "${MERMAID_MMDC:your_mermaid_cli_path}"
+    # Puppeteer 复用的浏览器内核（不填则由 mermaid-cli 自找/需自带 Chromium）
+    edgePath: "${MERMAID_EDGE:your_chrome_or_edge_path}"
 # 线程池配置
 thread-pool:
   # Vue 工程生成线程池（Spring 容器管理，ThreadPoolExecutor Bean）
@@ -57,5 +63,10 @@ screenshot:
 # Pexels 免费图库 API（按语义搜索图片嵌入生成的网页）
 pexels:
   api-key: your_pexels_api_key
+  # 每次搜索返回的最大图片数
+  page-size: 5
+# Pixabay 免费图库 API（Pexels 失效/无结果时自动回退的备选源）
+pixabay:
+  api-key: your_pixabay_api_key
   # 每次搜索返回的最大图片数
   page-size: 5

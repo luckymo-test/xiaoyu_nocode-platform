@@ -59,7 +59,7 @@ public class AiCodeGeneratorFacade {
         checkGenerateParams(userMessage, appId);
         appService.updateGenerateStatus(appId, AppGenerateStatusEnum.GENERATING.getValue());
         try {
-            VueProjectAgent.GenerateResult result = vueProjectAgent.generate(CodeGenTypeEnum.HTML, appId, userMessage, null);
+            VueProjectAgent.GenerateResult result = vueProjectAgent.generate(CodeGenTypeEnum.HTML, appId, userMessage, callContext(appId, "html"), null);
             appService.updateGenerateStatus(appId, AppGenerateStatusEnum.DONE.getValue());
             AiCodeGenResultVO vo = readResult(CodeGenTypeEnum.HTML, appId);
             applyUsage(vo, result);
@@ -81,7 +81,7 @@ public class AiCodeGeneratorFacade {
         checkGenerateParams(userMessage, appId);
         appService.updateGenerateStatus(appId, AppGenerateStatusEnum.GENERATING.getValue());
         try {
-            VueProjectAgent.GenerateResult result = vueProjectAgent.generate(CodeGenTypeEnum.MULTI_FILE, appId, userMessage, null);
+            VueProjectAgent.GenerateResult result = vueProjectAgent.generate(CodeGenTypeEnum.MULTI_FILE, appId, userMessage, callContext(appId, "multi_file"), null);
             appService.updateGenerateStatus(appId, AppGenerateStatusEnum.DONE.getValue());
             AiCodeGenResultVO vo = readResult(CodeGenTypeEnum.MULTI_FILE, appId);
             applyUsage(vo, result);
@@ -125,6 +125,7 @@ public class AiCodeGeneratorFacade {
         vueThreadPoolExecutor.execute(() -> {
             try {
                 VueProjectAgent.GenerateResult result = vueProjectAgent.generate(type, appId, userMessage,
+                        callContext(appId, callTypeOf(type)),
                         new VueProjectAgent.VueProgressListener() {
                             @Override
                             public void onFileWritten(String path, int size, String content) {
@@ -159,6 +160,33 @@ public class AiCodeGeneratorFacade {
         vo.setPromptTokens(result.getUsage().promptTokens());
         vo.setCompletionTokens(result.getUsage().completionTokens());
         vo.setTotalTokens(result.getUsage().totalTokens());
+    }
+
+    /**
+     * 构造 AI 调用监控上下文（解析应用归属用户；失败不影响主流程）
+     */
+    private AiCallContext callContext(Long appId, String callType) {
+        Long userId = null;
+        try {
+            var app = appService.getById(appId);
+            if (app != null) {
+                userId = app.getUserId();
+            }
+        } catch (RuntimeException e) {
+            log.warn("解析应用归属用户失败，appId={}", appId, e);
+        }
+        return AiCallContext.of(appId, userId, callType);
+    }
+
+    private String callTypeOf(CodeGenTypeEnum type) {
+        if (type == null) {
+            return "unknown";
+        }
+        return switch (type) {
+            case HTML -> "html";
+            case MULTI_FILE -> "multi_file";
+            case VUE -> "vue";
+        };
     }
 
     /**
@@ -197,7 +225,7 @@ public class AiCodeGeneratorFacade {
         checkGenerateParams(userMessage, appId);
         appService.updateGenerateStatus(appId, AppGenerateStatusEnum.GENERATING.getValue());
         try {
-            VueProjectAgent.GenerateResult result = vueProjectAgent.generate(CodeGenTypeEnum.VUE, appId, userMessage, null);
+            VueProjectAgent.GenerateResult result = vueProjectAgent.generate(CodeGenTypeEnum.VUE, appId, userMessage, callContext(appId, "vue"), null);
             appService.updateGenerateStatus(appId, AppGenerateStatusEnum.DONE.getValue());
             // 源码更新后失效旧构建产物，下次预览/部署重新构建
             codeFileWriteService.deleteVueDist(appId);
@@ -224,6 +252,7 @@ public class AiCodeGeneratorFacade {
         vueThreadPoolExecutor.execute(() -> {
             try {
                 VueProjectAgent.GenerateResult result = vueProjectAgent.generate(CodeGenTypeEnum.VUE, appId, userMessage,
+                        callContext(appId, "vue"),
                         new VueProjectAgent.VueProgressListener() {
                             @Override
                             public void onFileWritten(String path, int size, String content) {
@@ -273,6 +302,7 @@ public class AiCodeGeneratorFacade {
             try {
                 long[] usage = new long[2];
                 vueProjectAgent.modifyGeneratedSite(type, appId, elementContext, instruction, usage,
+                        callContext(appId, "modify"),
                         new VueProjectAgent.VueProgressListener() {
                             @Override
                             public void onFileWritten(String path, int size, String content) {

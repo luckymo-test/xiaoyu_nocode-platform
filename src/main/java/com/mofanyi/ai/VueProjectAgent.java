@@ -2,22 +2,27 @@ package com.mofanyi.ai;
 
 import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.util.StrUtil;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mofanyi.ai.model.VueFileResult;
 import com.mofanyi.ai.model.VueProjectResult;
-import com.mofanyi.config.CosClientConfig;
+import com.mofanyi.ai.tools.AgentProgressListener;
+import com.mofanyi.ai.tools.DiagramTool;
+import com.mofanyi.ai.tools.FinishTool;
+import com.mofanyi.ai.tools.ReadFileTool;
+import com.mofanyi.ai.tools.SearchImageTool;
+import com.mofanyi.ai.tools.WriteFileTool;
+import com.mofanyi.core.AiCallContext;
+import com.mofanyi.core.AiCallListener;
 import com.mofanyi.core.CodeFileWriteService;
-import com.mofanyi.core.PexelsClient;
+import com.mofanyi.core.SiteImageService;
+import com.mofanyi.core.ToolPaths;
 import com.mofanyi.exception.ErrorCode;
 import com.mofanyi.exception.ThrowUtils;
-import com.mofanyi.manager.CosManager;
 import com.mofanyi.model.enums.CodeGenTypeEnum;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
-import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.metadata.ChatGenerationMetadata;
 import org.springframework.ai.chat.metadata.ChatResponseMetadata;
@@ -27,7 +32,6 @@ import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.model.tool.DefaultToolCallingChatOptions;
 import org.springframework.ai.tool.ToolCallback;
-import org.springframework.ai.tool.function.FunctionToolCallback;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
@@ -36,7 +40,6 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
@@ -56,8 +59,6 @@ public class VueProjectAgent {
      */
     private static final int MAX_STEPS = 20;
 
-    private static final ObjectMapper MAPPER = new ObjectMapper();
-
     private final ChatModel chatModel;
     private final String singleHtmlPrompt;
     private final String multiFilePrompt;
@@ -66,10 +67,14 @@ public class VueProjectAgent {
     private final String modifyPrompt;
     private final CodeFileWriteService codeFileWriteService;
     private final ChatMemory chatMemory;
-    private final PexelsClient pexelsClient;
-    private final CosManager cosManager;
-    private final CosClientConfig cosClientConfig;
     private final com.mofanyi.mapper.AppImageMapper appImageMapper;
+    private final SiteImageService siteImageService;
+    private final WriteFileTool writeFileTool;
+    private final ReadFileTool readFileTool;
+    private final SearchImageTool searchImageTool;
+    private final DiagramTool diagramTool;
+    private final FinishTool finishTool;
+    private final AiCallListener aiCallListener;
 
     public VueProjectAgent(@Qualifier("openAiChatModel") ChatModel chatModel,
                            String singleHtmlPrompt,
@@ -79,10 +84,14 @@ public class VueProjectAgent {
                            @Qualifier("modifyPrompt") String modifyPrompt,
                            CodeFileWriteService codeFileWriteService,
                            ChatMemory chatMemory,
-                           PexelsClient pexelsClient,
-                           CosManager cosManager,
-                           CosClientConfig cosClientConfig,
-                           com.mofanyi.mapper.AppImageMapper appImageMapper) {
+                           com.mofanyi.mapper.AppImageMapper appImageMapper,
+                           SiteImageService siteImageService,
+                           WriteFileTool writeFileTool,
+                           ReadFileTool readFileTool,
+                           SearchImageTool searchImageTool,
+                           DiagramTool diagramTool,
+                           FinishTool finishTool,
+                           AiCallListener aiCallListener) {
         this.chatModel = chatModel;
         this.singleHtmlPrompt = singleHtmlPrompt;
         this.multiFilePrompt = multiFilePrompt;
@@ -91,30 +100,29 @@ public class VueProjectAgent {
         this.modifyPrompt = modifyPrompt;
         this.codeFileWriteService = codeFileWriteService;
         this.chatMemory = chatMemory;
-        this.pexelsClient = pexelsClient;
-        this.cosManager = cosManager;
-        this.cosClientConfig = cosClientConfig;
         this.appImageMapper = appImageMapper;
+        this.siteImageService = siteImageService;
+        this.writeFileTool = writeFileTool;
+        this.readFileTool = readFileTool;
+        this.searchImageTool = searchImageTool;
+        this.diagramTool = diagramTool;
+        this.finishTool = finishTool;
+        this.aiCallListener = aiCallListener;
     }
 
     /**
-     * 逐文件回调进度：每写入一个文件触发一次，携带文件路径与完整内容（供前端流式展示代码）
+     * 逐文件回调进度：每写入一个文件触发一次，携带文件路径与完整内容（供前端流式展示代码）。
+     * 兼容门面等外部调用方的旧签名；能力来自 {@link AgentProgressListener}。
      */
-    public interface VueProgressListener {
-        void onFileWritten(String path, int size, String content);
-
-        /**
-         * 模型思考过程增量（reasoning_content），默认空实现；前端据此流式展示"思考过程"
-         */
-        default void onReasoning(String reasoning) {
-        }
+    public interface VueProgressListener extends AgentProgressListener {
     }
 
     /**
      * 生成 Vue3 工程（兼容原调用）：委托通用生成，按 vue 类型执行。
      */
     public VueProjectResult generate(Long appId, String userMessage, VueProgressListener listener) {
-        GenerateResult result = generate(CodeGenTypeEnum.VUE, appId, userMessage, listener);
+        GenerateResult result = generate(CodeGenTypeEnum.VUE, appId, userMessage,
+                AiCallContext.of(appId, null, "vue"), listener);
         return result.getVueResult();
     }
 
@@ -124,10 +132,12 @@ public class VueProjectAgent {
      * @param type        代码生成类型（html / multi_file / vue）
      * @param appId       应用 id
      * @param userMessage 用户需求
+     * @param ctx         可观测性上下文（appId/userId/callType）
      * @param listener    进度回调，可为 null
      * @return 按类型组装的结果
      */
-    public GenerateResult generate(CodeGenTypeEnum type, Long appId, String userMessage, VueProgressListener listener) {
+    public GenerateResult generate(CodeGenTypeEnum type, Long appId, String userMessage,
+                                   AiCallContext ctx, VueProgressListener listener) {
         ThrowUtils.throwIf(type == null, ErrorCode.PARAMS_ERROR);
         ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
         ThrowUtils.throwIf(userMessage == null || userMessage.isBlank(), ErrorCode.PARAMS_ERROR, "用户需求不能为空");
@@ -151,7 +161,7 @@ public class VueProjectAgent {
 
         // [promptTokens, completionTokens] 累加器，runToolLoop 各轮模型调用后写入
         long[] usage = new long[2];
-        runToolLoop(type, appId, messages, files, finished, description, usage, listener);
+        runToolLoop(type, appId, messages, files, finished, description, usage, ctx, listener);
 
         // 强制补图：模型可能漏调 searchImage，导致页面缺图。扫描代码中的空图片字段/占位图并填真实图。
         autoFillImages(type, appId, userMessage);
@@ -268,7 +278,7 @@ public class VueProjectAgent {
             if (!isEmptyValue && !isPlaceholder && !isEmojiValue) {
                 continue; // 已有真实值或非图片场景，跳过
             }
-            String replacement = fetchOneImage(appId, query);
+            String replacement = siteImageService.fetchOneImage(appId, query);
             if (replacement == null) {
                 continue;
             }
@@ -290,7 +300,7 @@ public class VueProjectAgent {
         java.util.regex.Matcher m2 = emptyImg.matcher(result);
         StringBuffer sb2 = new StringBuffer();
         while (m2.find() && filled[0] < maxFill) {
-            String replacement = fetchOneImage(appId, query);
+            String replacement = siteImageService.fetchOneImage(appId, query);
             if (replacement == null) {
                 continue;
             }
@@ -302,27 +312,6 @@ public class VueProjectAgent {
         result = sb2.toString();
 
         return filled[0] > alreadyFilled ? result : content;
-    }
-
-    /**
-     * 从 Pexels 搜一张图并上传 COS，返回 COS URL；失败返回 null
-     */
-    private String fetchOneImage(Long appId, String query) {
-        try {
-            java.util.List<PexelsClient.PexelsImage> images = pexelsClient.searchImages(query, null);
-            if (images == null || images.isEmpty()) {
-                return null;
-            }
-            String url = downloadAndUpload(appId, images.get(0).getUrl());
-            if (url == null) {
-                return null;
-            }
-            saveAppImage(appId, url);
-            return url;
-        } catch (Exception e) {
-            log.warn("[补图] 获取图片失败，appId={}", appId, e);
-            return null;
-        }
     }
 
     /**
@@ -417,7 +406,7 @@ public class VueProjectAgent {
             int order = 1;
             for (String url : urls) {
                 if (url.startsWith("http")) {
-                    saveAppImage(appId, url);
+                    siteImageService.saveAppImage(appId, url);
                     order++;
                 }
             }
@@ -454,7 +443,7 @@ public class VueProjectAgent {
      * @param errorLog 构建错误日志
      * @param listener 进度回调，可为 null
      */
-    public void fixBuildError(Long appId, String errorLog, VueProgressListener listener) {
+    public void fixBuildError(Long appId, String errorLog, AiCallContext ctx, VueProgressListener listener) {
         ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
         ThrowUtils.throwIf(errorLog == null || errorLog.isBlank(), ErrorCode.PARAMS_ERROR);
 
@@ -468,7 +457,7 @@ public class VueProjectAgent {
                 + "\n\n当前工程相关文件内容：\n" + buildFilesContext(appId)
                 + "\n\n请修复导致报错的文件后调用 finish 结束。"));
 
-        runToolLoop(CodeGenTypeEnum.VUE, appId, messages, files, finished, description, null, listener);
+        runToolLoop(CodeGenTypeEnum.VUE, appId, messages, files, finished, description, null, ctx, listener);
     }
 
     /**
@@ -484,7 +473,8 @@ public class VueProjectAgent {
      * @return 实际被改动的文件（path -> 新内容）
      */
     public Map<String, String> modifyGeneratedSite(CodeGenTypeEnum type, Long appId, String elementContext,
-                                                   String instruction, long[] usage, VueProgressListener listener) {
+                                                   String instruction, long[] usage, AiCallContext ctx,
+                                                   VueProgressListener listener) {
         ThrowUtils.throwIf(type == null, ErrorCode.PARAMS_ERROR);
         ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
         ThrowUtils.throwIf(StrUtil.isBlank(instruction), ErrorCode.PARAMS_ERROR, "修改意图不能为空");
@@ -494,12 +484,12 @@ public class VueProjectAgent {
         AtomicReference<String> description = new AtomicReference<>("");
         List<Message> messages = new ArrayList<>();
         messages.add(new SystemMessage(modifyPrompt));
-        String ctx = StrUtil.isBlank(elementContext) ? "（无具体元素，基于整体需求修改）" : elementContext;
-        messages.add(new UserMessage("用户想修改当前页面。\n\n【目标元素上下文】\n" + ctx
+        String elementCtx = StrUtil.isBlank(elementContext) ? "（无具体元素，基于整体需求修改）" : elementContext;
+        messages.add(new UserMessage("用户想修改当前页面。\n\n【目标元素上下文】\n" + elementCtx
                 + "\n\n【用户修改意图】\n" + instruction
                 + "\n\n【当前工程文件清单】\n" + buildFileIndex(type, appId)
                 + "\n\n请先 readFile 读取涉及的文件，定位目标元素对应代码段，最小改动后用 writeFile 覆盖，改完调用 finish。"));
-        runToolLoop(type, appId, messages, files, finished, description, usage, listener);
+        runToolLoop(type, appId, messages, files, finished, description, usage, ctx, listener);
         return files;
     }
 
@@ -515,7 +505,7 @@ public class VueProjectAgent {
             if (e.getKey() == null || e.getValue() == null) {
                 continue;
             }
-            validatePath(e.getKey());
+            ToolPaths.validate(e.getKey());
             codeFileWriteService.saveProjectFile(type, appId, e.getKey(), e.getValue());
         }
     }
@@ -526,12 +516,13 @@ public class VueProjectAgent {
      */
     private void runToolLoop(CodeGenTypeEnum type, Long appId, List<Message> messages, Map<String, String> files,
                              AtomicBoolean finished, AtomicReference<String> description, long[] usage,
-                             VueProgressListener listener) {
+                             AiCallContext ctx, VueProgressListener listener) {
         List<ToolCallback> toolCallbacks = List.of(
-                buildWriteFileTool(type, appId, files, listener),
-                buildReadFileTool(type, appId),
-                buildSearchImageTool(appId),
-                buildFinishTool(finished, description));
+                writeFileTool.build(type, appId, files, listener),
+                readFileTool.build(type, appId),
+                searchImageTool.build(appId),
+                diagramTool.build(appId),
+                finishTool.build(finished, description));
         var options = DefaultToolCallingChatOptions.builder().toolCallbacks(toolCallbacks).build();
 
         // 连续异常计数：模型返回被截断（工具参数 JSON 不完整）等可恢复错误时重试，连续多次失败才终止
@@ -541,11 +532,17 @@ public class VueProjectAgent {
         for (int step = 0; step < MAX_STEPS; step++) {
             stepCount++;
             ChatResponse resp;
+            // 每次模型调用的耗时与本次 token 增量（用于可观测性）
+            long callStart = System.currentTimeMillis();
+            long beforeIn = usage == null ? 0 : usage[0];
+            long beforeOut = usage == null ? 0 : usage[1];
             try {
                 // 用流式调用聚合，以便拿到模型思考过程（reasoning_content）增量
                 resp = streamAndAggregate(new Prompt(messages, options),
                         listener == null ? null : listener::onReasoning);
             } catch (RuntimeException e) {
+                long ms = System.currentTimeMillis() - callStart;
+                aiCallListener.onFailure(ctx, e, ms);
                 log.warn("[agent] 模型响应异常（参数截断/解析失败），step={}，提示模型重试", step, e);
                 if (++consecutiveFailures >= 3) {
                     log.error("[agent] 连续 3 次模型响应异常，终止生成，step={}", step);
@@ -558,36 +555,35 @@ public class VueProjectAgent {
             }
             consecutiveFailures = 0;
             accumulateUsage(resp, usage);
+            // 可观测性：记录本次调用（成功）
+            long callMs = System.currentTimeMillis() - callStart;
+            long inDelta = (usage == null ? 0 : usage[0]) - beforeIn;
+            long outDelta = (usage == null ? 0 : usage[1]) - beforeOut;
+            aiCallListener.onSuccess(ctx, finishReasonOf(resp), inDelta, outDelta, callMs);
             AssistantMessage output = resp.getResult().getOutput();
-            if (!output.hasToolCalls()) {
-                // 模型直接返回文本（未调工具）→ 结束
-                if (description.get().isBlank()) {
-                    description.set(output.getText());
-                }
-                break;
+            // 工具由框架在 stream 内部自动执行（工具回调已通过 options 注册），聚合响应不含工具调用。
+            // 模型直接返回文本时记下概述并结束本层循环（工具循环发生在一次流式调用内）。
+            if (description.get().isBlank() && output.getText() != null) {
+                description.set(output.getText());
             }
-            messages.add(output);
-            List<ToolResponseMessage.ToolResponse> toolResponses = new ArrayList<>();
-            for (AssistantMessage.ToolCall tc : output.getToolCalls()) {
-                String result;
-                try {
-                    log.info("[agent] step={} tool={} args={}", step, tc.name(),
-                            tc.arguments() == null ? "null" : tc.arguments().substring(0,
-                                    Math.min(tc.arguments().length(), 200)));
-                    result = executeTool(tc.name(), tc.arguments(), type, appId, files, finished, description, listener);
-                } catch (RuntimeException e) {
-                    log.warn("[agent] tool exec error, tool={}", tc.name(), e);
-                    result = "执行失败: " + e.getMessage();
-                }
-                toolResponses.add(new ToolResponseMessage.ToolResponse(tc.id(), tc.name(), result));
-            }
-            messages.add(ToolResponseMessage.builder().responses(toolResponses).build());
-            if (finished.get()) {
-                break;
-            }
+            break;
         }
         log.info("[agent] tool-loop 结束：外层 step={}，写文件数={}，总耗时={}ms",
                 stepCount, files.size(), System.currentTimeMillis() - loopStart);
+    }
+
+    /**
+     * 取响应的 finishReason（stop/length/tool_calls 等），取不到返回 null
+     */
+    private String finishReasonOf(ChatResponse resp) {
+        try {
+            if (resp == null || resp.getResult() == null || resp.getResult().getMetadata() == null) {
+                return null;
+            }
+            return resp.getResult().getMetadata().getFinishReason();
+        } catch (RuntimeException e) {
+            return null;
+        }
     }
 
     /**
@@ -669,198 +665,6 @@ public class VueProjectAgent {
     }
 
     /**
-     * 构建 writeFile 工具：写文件到指定类型工程目录并记录进度
-     */
-    private ToolCallback buildWriteFileTool(CodeGenTypeEnum type, Long appId, Map<String, String> files,
-                                            VueProgressListener listener) {
-        return FunctionToolCallback.builder("writeFile", (WriteFileRequest req) -> {
-            validatePath(req.path());
-            if (req.content() == null) {
-                return "内容为空，未写入";
-            }
-            codeFileWriteService.saveProjectFile(type, appId, req.path(), req.content());
-            files.put(req.path(), req.content());
-            if (listener != null) {
-                listener.onFileWritten(req.path(), req.content().length(), req.content());
-            }
-            return "已写入 " + req.path() + "（" + req.content().length() + " 字符）";
-        })
-                .description("向工程写入一个文件。path 为相对路径，content 为文件完整内容。一次只写一个文件，写完再写下一个。")
-                .inputType(WriteFileRequest.class)
-                .build();
-    }
-
-    /**
-     * 构建 readFile 工具：读取工程某文件的完整内容（供修改/自检按需读精确源码，避免全量塞入上下文）
-     */
-    private ToolCallback buildReadFileTool(CodeGenTypeEnum type, Long appId) {
-        return FunctionToolCallback.builder("readFile", (ReadFileRequest req) -> {
-            validatePath(req.path());
-            String content = codeFileWriteService.readFile(
-                    codeFileWriteService.getProjectDir(type, appId), req.path());
-            return content == null
-                    ? "文件不存在: " + req.path() + "（请先看文件清单确认正确相对路径）"
-                    : "【" + req.path() + "】\n" + content;
-        })
-                .description("读取工程中某个源文件的完整内容。path 为相对工程根目录的路径（如 index.html、css/styles.css、js/app.js）。修改前应先读取目标文件再改动。")
-                .inputType(ReadFileRequest.class)
-                .build();
-    }
-
-    /**
-     * 构建 searchImage 工具：按语义描述从 Pexels 图库搜索图片，下载并上传 COS，返回可直接嵌入代码的 URL
-     */
-    private ToolCallback buildSearchImageTool(Long appId) {
-        return FunctionToolCallback.builder("searchImage", (SearchImageRequest req) -> {
-            if (req.query() == null || req.query().isBlank()) {
-                return "查询描述不能为空";
-            }
-            return searchAndUploadImages(appId, req.query(), req.orientation());
-        })
-                .description("需要为页面配图时调用本工具。query 为图片的语义描述（如\"科技感蓝紫色渐变背景\"），orientation 可选（landscape 横向 / portrait 纵向 / square 方形）。调用后返回若干张已上传 COS 的图片 URL，直接在代码的 <img src> 或 CSS background-image 中引用即可。")
-                .inputType(SearchImageRequest.class)
-                .build();
-    }
-
-    /**
-     * 构建 finish 工具：结束生成
-     */
-    private ToolCallback buildFinishTool(AtomicBoolean finished, AtomicReference<String> description) {
-        return FunctionToolCallback.builder("finish", (FinishRequest req) -> {
-            description.set(req.description() == null ? "" : req.description());
-            finished.set(true);
-            return "已结束生成";
-        })
-                .description("所有文件写入完成后调用本工具结束生成。description 为工程整体概述（2~3 句话说明结构与功能）。")
-                .inputType(FinishRequest.class)
-                .build();
-    }
-
-    /**
-     * 按工具名手动执行（解析 arguments JSON）
-     */
-    private String executeTool(String name, String arguments, CodeGenTypeEnum type, Long appId, Map<String, String> files,
-                               AtomicBoolean finished, AtomicReference<String> description,
-                               VueProgressListener listener) {
-        if ("writeFile".equals(name)) {
-            try {
-                WriteFileRequest req = MAPPER.readValue(arguments, WriteFileRequest.class);
-                validatePath(req.path());
-                if (req.content() == null) {
-                    return "内容为空，未写入";
-                }
-                codeFileWriteService.saveProjectFile(type, appId, req.path(), req.content());
-                files.put(req.path(), req.content());
-                if (listener != null) {
-                    listener.onFileWritten(req.path(), req.content().length(), req.content());
-                }
-                return "已写入 " + req.path() + "（" + req.content().length() + " 字符）";
-            } catch (Exception e) {
-                return "解析参数失败: " + e.getMessage();
-            }
-        }
-        if ("readFile".equals(name)) {
-            try {
-                ReadFileRequest req = MAPPER.readValue(arguments, ReadFileRequest.class);
-                validatePath(req.path());
-                String content = codeFileWriteService.readFile(
-                        codeFileWriteService.getProjectDir(type, appId), req.path());
-                return content == null ? "文件不存在: " + req.path() : content;
-            } catch (Exception e) {
-                return "解析参数失败: " + e.getMessage();
-            }
-        }
-        if ("searchImage".equals(name)) {
-            try {
-                SearchImageRequest req = MAPPER.readValue(arguments, SearchImageRequest.class);
-                if (req.query() == null || req.query().isBlank()) {
-                    return "查询描述不能为空";
-                }
-                return searchAndUploadImages(appId, req.query(), req.orientation());
-            } catch (Exception e) {
-                return "解析参数失败: " + e.getMessage();
-            }
-        }
-        if ("finish".equals(name)) {
-            try {
-                FinishRequest req = MAPPER.readValue(arguments, FinishRequest.class);
-                description.set(req.description() == null ? "" : req.description());
-            } catch (Exception e) {
-                description.set(arguments == null ? "" : arguments);
-            }
-            finished.set(true);
-            return "已结束生成";
-        }
-        return "未知工具: " + name;
-    }
-
-    /**
-     * 搜索图片 → 逐张下载并上传 COS → 落库 app_image → 返回 COS URL 列表文本（含编号与尺寸，供模型挑选）
-     */
-    private String searchAndUploadImages(Long appId, String query, String orientation) {
-        log.info("[searchImage] 被调用 query={} orientation={}", query, orientation);
-        List<PexelsClient.PexelsImage> images = pexelsClient.searchImages(query, orientation);
-        if (images.isEmpty()) {
-            log.warn("[searchImage] 无结果（Pexels 空/失败），query={}", query);
-            return "未找到匹配的图片，请换一个描述重新搜索，或不用图片直接用纯色/渐变背景";
-        }
-        StringBuilder sb = new StringBuilder("找到以下图片（可直接用 URL 嵌入代码，建议优先用列表中的 URL）：\n");
-        int index = 1;
-        for (PexelsClient.PexelsImage img : images) {
-            try {
-                String cosUrl = downloadAndUpload(appId, img.getUrl());
-                saveAppImage(appId, cosUrl);
-                sb.append(index).append(". URL=").append(cosUrl)
-                        .append(" 尺寸=").append(img.getWidth()).append("x").append(img.getHeight())
-                        .append("\n");
-                index++;
-            } catch (Exception e) {
-                log.warn("图片上传 COS 失败，appId={}, url={}", appId, img.getUrl(), e);
-                sb.append(index).append(". 该图上传失败，请跳过\n");
-                index++;
-            }
-        }
-        return sb.toString();
-    }
-
-    /**
-     * 将上传成功的图片 URL 落库到 app_image（记录该应用用到的嵌入图）。
-     * sortOrder 基于该应用已有记录数累加，多次 searchImage 调用时编号不重复。
-     */
-    private void saveAppImage(Long appId, String cosUrl) {
-        try {
-            long existing = appImageMapper.selectCountByQuery(
-                    com.mybatisflex.core.query.QueryWrapper.create().eq("appId", appId));
-            com.mofanyi.entity.AppImage appImage = com.mofanyi.entity.AppImage.builder()
-                    .appId(appId)
-                    .imageUrl(cosUrl)
-                    .imageType("embed")
-                    .sortOrder((int) existing + 1)
-                    .build();
-            appImageMapper.insert(appImage);
-        } catch (RuntimeException e) {
-            log.warn("图片落库 app_image 失败，appId={}, url={}", appId, cosUrl, e);
-        }
-    }
-
-    /**
-     * 下载图片到本地临时文件，上传 COS，返回 COS URL；上传后删除本地临时文件
-     */
-    private String downloadAndUpload(Long appId, String imageUrl) throws Exception {
-        byte[] bytes = pexelsClient.downloadImage(imageUrl);
-        String suffix = ".jpg";
-        File tmpFile = File.createTempFile("appimg_", suffix);
-        try {
-            FileUtil.writeBytes(bytes, tmpFile);
-            String key = "app-image/" + appId + "/" + UUID.randomUUID() + suffix;
-            cosManager.putObject(key, tmpFile);
-            return cosClientConfig.getHost() + "/" + key;
-        } finally {
-            FileUtil.del(tmpFile);
-        }
-    }
-
-    /**
      * 按类型组装生成结果
      */
     private GenerateResult assembleResult(CodeGenTypeEnum type, Long appId, Map<String, String> files,
@@ -890,16 +694,6 @@ public class VueProjectAgent {
             case MULTI_FILE -> multiFilePrompt;
             case VUE -> vuePrompt;
         };
-    }
-
-    /**
-     * 校验文件路径安全：必须是相对路径，禁止绝对路径、路径穿越、盘符
-     */
-    private void validatePath(String path) {
-        ThrowUtils.throwIf(path == null || path.isBlank(), ErrorCode.PARAMS_ERROR, "文件路径不能为空");
-        ThrowUtils.throwIf(path.startsWith("/") || path.startsWith("\\") || path.matches("^[a-zA-Z]:.*"),
-                ErrorCode.PARAMS_ERROR, "文件路径必须是相对路径");
-        ThrowUtils.throwIf(path.contains(".."), ErrorCode.PARAMS_ERROR, "文件路径非法");
     }
 
     /**
@@ -934,30 +728,6 @@ public class VueProjectAgent {
             }
         }
         return sb.toString();
-    }
-
-    /**
-     * writeFile 工具入参
-     */
-    public record WriteFileRequest(String path, String content) {
-    }
-
-    /**
-     * readFile 工具入参
-     */
-    public record ReadFileRequest(String path) {
-    }
-
-    /**
-     * finish 工具入参
-     */
-    public record FinishRequest(String description) {
-    }
-
-    /**
-     * searchImage 工具入参
-     */
-    public record SearchImageRequest(String query, String orientation) {
     }
 
     /**

@@ -99,7 +99,9 @@ public class VueBuildService {
             notify(progress, "BUILD_FAILED|" + truncate(error, 300));
             // 修复 agent：根据错误日志覆盖出问题文件
             try {
-                vueProjectAgent.fixBuildError(appId, error, (path, size, content) -> notify(progress, "FIXED|" + path));
+                vueProjectAgent.fixBuildError(appId, error,
+                        AiCallContext.of(appId, null, "fix"),
+                        (path, size, content) -> notify(progress, "FIXED|" + path));
             } catch (RuntimeException e) {
                 log.warn("Vue 自动修复失败, appId={}, attempt={}", appId, attempt + 1, e);
                 notify(progress, "FIX_FAILED|" + truncate(e.getMessage(), 200));

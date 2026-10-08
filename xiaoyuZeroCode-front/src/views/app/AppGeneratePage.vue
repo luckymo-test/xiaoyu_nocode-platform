@@ -155,6 +155,8 @@ const styleTouched = ref<string[]>([]) // 被用户改过的 css 属性名
 const styleVal = reactive<Record<string, string>>({}) // 每个受控属性的当前值（字符串）
 const manualEdits = ref<ManualEditItem[]>([])
 const styleBusy = ref(false)
+// 文字内容（手动编辑 text 类型）
+const styleText = ref('')
 
 const toggleVisualEdit = () => {
   if (editMode.value) {
@@ -476,6 +478,7 @@ function initStylePanel() {
   for (const f of STYLE_FIELDS) {
     styleVal[f.css] = ''
   }
+  styleText.value = el ? (el.textContent || '').trim() : ''
   if (!el) return
   const cs = getComputedStyle(el)
   for (const f of STYLE_FIELDS) {
@@ -484,6 +487,14 @@ function initStylePanel() {
     } catch {
       styleVal[f.css] = ''
     }
+  }
+}
+
+// 文字输入即时预览（替换整段文字内容）
+const onTextInput = () => {
+  const el = editTargetEl.value
+  if (el && el.isConnected) {
+    el.textContent = styleText.value
   }
 }
 
@@ -556,6 +567,7 @@ const applyManualStyle = async () => {
   editStatus.value = '保存样式…'
   try {
     const res = await applyManualEdit(appId.value as unknown as number, {
+      kind: 'style',
       selector: sanitizeSelector(curSelector.value),
       css: rule,
     })
@@ -564,6 +576,36 @@ const applyManualStyle = async () => {
       return
     }
     message.success('已保存到源码')
+    await refreshAfterManualEdit()
+  } catch (e: any) {
+    message.error(e?.message || '保存失败')
+  } finally {
+    styleBusy.value = false
+    editStatus.value = ''
+  }
+}
+
+// 保存文字内容：注入 index.html 的运行时覆盖脚本（带标记，可撤销）
+const applyManualText = async () => {
+  const text = styleText.value.trim()
+  if (!text) {
+    message.warning('请输入新的文字内容')
+    return
+  }
+  if (!app.value?.id || !curSelector.value) return
+  styleBusy.value = true
+  editStatus.value = '保存文字…'
+  try {
+    const res = await applyManualEdit(appId.value as unknown as number, {
+      kind: 'text',
+      selector: sanitizeSelector(curSelector.value),
+      text,
+    })
+    if (res.data?.code !== 0) {
+      message.error(res.data?.message || '保存失败')
+      return
+    }
+    message.success('已更新文字')
     await refreshAfterManualEdit()
   } catch (e: any) {
     message.error(e?.message || '保存失败')
@@ -1550,6 +1592,28 @@ onUnmounted(() => {
                         />
                       </div>
                     </div>
+                    <div class="style-divider">文字内容（整段替换）</div>
+                    <textarea
+                      v-model="styleText"
+                      class="style-text"
+                      :rows="2"
+                      :disabled="styleBusy"
+                      placeholder="输入该元素的新文字…"
+                      @input="onTextInput"
+                    />
+                    <div class="style-text-row">
+                      <a-button
+                        size="small"
+                        type="primary"
+                        ghost
+                        :loading="styleBusy"
+                        :disabled="!styleText.trim()"
+                        @click="applyManualText"
+                      >
+                        改文字
+                      </a-button>
+                      <span class="style-tip">会把该元素内部的文字整体替换</span>
+                    </div>
                     <div class="edit-card-actions">
                       <a-button size="small" :disabled="styleBusy" @click="initStylePanel">重置</a-button>
                       <a-button
@@ -1597,7 +1661,10 @@ onUnmounted(() => {
                     </div>
                     <div class="edit-history-list">
                       <div v-for="m in manualEdits" :key="m.id" class="edit-history-item">
-                        <div class="edit-history-sel" :title="m.css">{{ m.selector }}</div>
+                        <span class="edit-history-kind" :class="m.kind">
+                          {{ m.kind === 'text' ? '文字' : '样式' }}
+                        </span>
+                        <div class="edit-history-sel" :title="m.content">{{ m.selector }}</div>
                         <a-button
                           type="text"
                           size="small"
@@ -2113,6 +2180,53 @@ onUnmounted(() => {
   font-family: 'Consolas', monospace;
   font-size: 11px;
   color: #888;
+}
+
+.edit-history-kind {
+  flex-shrink: 0;
+  font-size: 10px;
+  border-radius: 3px;
+  padding: 0 4px;
+  line-height: 16px;
+}
+
+.edit-history-kind.style {
+  background: #e6f4ff;
+  color: #1677ff;
+}
+
+.edit-history-kind.text {
+  background: #fff7e6;
+  color: #d46b08;
+}
+
+.style-divider {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #999;
+  border-top: 1px dashed #eee;
+  padding-top: 6px;
+}
+
+.style-text {
+  width: 100%;
+  font-size: 12px;
+  border: 1px solid #d9d9d9;
+  border-radius: 4px;
+  padding: 4px 6px;
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+.style-text-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.style-tip {
+  font-size: 11px;
+  color: #bbb;
 }
 
 .code-frame {
