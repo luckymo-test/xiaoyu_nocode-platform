@@ -41,6 +41,23 @@ server:
       cookie:
         max-age: 2592000
 
+# 可观测性：指标端点走独立端口 8125（不暴露在业务端口/公网）
+# 访问：http://localhost:8125/actuator/prometheus
+management:
+  server:
+    port: 8125
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      show-details: when_authorized
+  metrics:
+    tags:
+      # 全局标签，多实例/多应用时便于区分
+      application: xiaoyu-zerocode
+
 # 代码生成文件临时目录与部署配置
 codegen:
   file:

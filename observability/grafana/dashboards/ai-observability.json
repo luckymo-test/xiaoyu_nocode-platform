@@ -1,0 +1,117 @@
+{
+  "uid": "ai-observability",
+  "title": "AI 调用可观测性",
+  "tags": ["ai", "observability"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "模型调用趋势（按类型）",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(ai_call_total[5m])) by (call_type)",
+          "legendFormat": "{{call_type}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "调用成功率（近 1h）",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "min": 0, "max": 1 }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(ai_call_total{status=\"success\"}[1h])) / clamp_min(sum(increase(ai_call_total[1h])), 1)",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "总调用次数（近 1h）",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(increase(ai_call_total[1h]))", "instant": true }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "响应时长分位（P50 / P90 / P95 / P99）",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "refId": "P50", "expr": "histogram_quantile(0.50, sum(rate(ai_call_duration_seconds_bucket[5m])) by (le))", "legendFormat": "P50" },
+        { "refId": "P90", "expr": "histogram_quantile(0.90, sum(rate(ai_call_duration_seconds_bucket[5m])) by (le))", "legendFormat": "P90" },
+        { "refId": "P95", "expr": "histogram_quantile(0.95, sum(rate(ai_call_duration_seconds_bucket[5m])) by (le))", "legendFormat": "P95" },
+        { "refId": "P99", "expr": "histogram_quantile(0.99, sum(rate(ai_call_duration_seconds_bucket[5m])) by (le))", "legendFormat": "P99" }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Token 消耗（输入 / 输出 / 总）",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(increase(ai_tokens_total{kind=\"input\"}[1h])) by (kind)", "legendFormat": "输入" },
+        { "refId": "B", "expr": "sum(increase(ai_tokens_total{kind=\"output\"}[1h])) by (kind)", "legendFormat": "输出" },
+        { "refId": "C", "expr": "sum(increase(ai_tokens_total{kind=\"total\"}[1h])) by (kind)", "legendFormat": "总" }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "失败原因分布",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum(increase(ai_call_errors_total[1h])) by (error_type)", "legendFormat": "{{error_type}}" }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "table",
+      "title": "热门应用排行（按调用次数）",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "datasource": { "type": "mysql", "uid": "mysql" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT appId AS 应用ID, COUNT(*) AS 调用次数, SUM(totalTokens) AS 总Token, ROUND(AVG(durationMs)) AS 平均耗时ms, SUM(status='error') AS 失败次数 FROM ai_call_log WHERE $__timeFilter(createTime) GROUP BY appId ORDER BY 调用次数 DESC LIMIT 20"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "table",
+      "title": "用户活跃排行（按调用次数）",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 24 },
+      "datasource": { "type": "mysql", "uid": "mysql" },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT userId AS 用户ID, COUNT(*) AS 调用次数, SUM(totalTokens) AS 总Token, COUNT(DISTINCT appId) AS 应用数 FROM ai_call_log WHERE $__timeFilter(createTime) GROUP BY userId ORDER BY 调用次数 DESC LIMIT 20"
+        }
+      ]
+    }
+  ]
+}

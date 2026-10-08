@@ -1,0 +1,28 @@
+# Grafana 数据源：Prometheus(指标) + MySQL(AI 调用明细，用于排行)
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+
+  - name: MySQL
+    type: mysql
+    uid: mysql
+    access: proxy
+    # 宿主机 MySQL；容器内用 host.docker.internal
+    url: host.docker.internal:3306
+    database: xiaoyu_zerocode
+    user: root
+    # 密码从 compose 注入的环境变量读取，不写死在仓库
+    secureJsonData:
+      password: ${GF_MYSQL_PASSWORD}
+    jsonData:
+      maxOpenConns: 5
+      maxIdleConns: 2
+      connMaxLifetime: 14400
+    editable: false

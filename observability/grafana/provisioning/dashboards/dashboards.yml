@@ -1,0 +1,13 @@
+# Grafana 仪表盘自动加载：从 ./grafana/dashboards 读取 json
+apiVersion: 1
+
+providers:
+  - name: xiaoyu
+    orgId: 1
+    folder: "AI 可观测性"
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
