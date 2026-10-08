@@ -10,8 +10,8 @@ cookies.txt
 # IDE 本地配置（整目录）
 .idea/
 
-# Claude Code 本机会话配置（权限/密钥）
-.claude/settings.local.json
+# Claude Code 本机会话配置（权限/密钥/启动项），整目录不入库
+.claude/
 
 # 构建产物与依赖
 target/
