@@ -50,6 +50,11 @@ public class AgentMemoryService {
      */
     private static final int REHYDRATE_LIMIT = 30;
 
+    /**
+     * 重新补回"最初需求"时的字符上限（避免一条超长需求反客为主）
+     */
+    private static final int FIRST_REQUIREMENT_MAX_CHARS = 500;
+
     private final ChatMemory chatMemory;
     private final ChatHistoryService chatHistoryService;
 
@@ -173,8 +178,14 @@ public class AgentMemoryService {
     }
 
     /**
-     * 按 token 预算从最旧的消息开始裁剪（保留最近的）。
-     * 至少保留最后一条，避免全部丢弃导致"完全无上下文"。
+     * 上下文压缩 + 选择性保留（M3）：
+     * <ol>
+     *   <li>按 token 预算从最旧的消息开始裁剪（保留最近的），至少保留最后一条；</li>
+     *   <li><b>选择性保留</b>：无论怎么裁，"最初的需求"那一条用户消息都要补回并置于最前——
+     *       它承载应用的原始目标，硬切窗口最容易把它丢掉；</li>
+     *   <li><b>压缩</b>：被省略的中段不再注入（附一条省略提示）。应用当前状态由规格摘要
+     *       （{@link AppSpecService}）承载，近期对话只负责"上文指代"，因此无需额外调用模型做摘要，成本为零。</li>
+     * </ol>
      */
     private List<Message> trimToTokenBudget(List<Message> messages) {
         if (messages == null || messages.isEmpty()) {
@@ -192,7 +203,49 @@ public class AgentMemoryService {
             total += tokens;
             kept.addFirst(m);
         }
+        int omitted = messages.size() - kept.size();
+        // 选择性保留原始需求：被裁掉时补回最前，并标注中段已省略
+        Message firstUser = firstUserMessage(messages);
+        if (firstUser != null && !containsByReference(kept, firstUser)) {
+            kept.addFirst(new UserMessage(buildFirstRequirementNotice(firstUser.getText(), omitted)));
+        }
         return new ArrayList<>(kept);
+    }
+
+    /**
+     * 取第一条用户消息（即最初的需求）
+     */
+    private static Message firstUserMessage(List<Message> messages) {
+        for (Message message : messages) {
+            if (message instanceof UserMessage) {
+                return message;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 按引用判断是否已保留（Spring AI 的 Message 未保证 equals 语义）
+     */
+    private static boolean containsByReference(List<Message> messages, Message target) {
+        for (Message message : messages) {
+            if (message == target) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 构造补回的最初需求：截断 + 标注中段省略
+     */
+    private static String buildFirstRequirementNotice(String firstRequirement, int omitted) {
+        String text = firstRequirement == null ? "" : firstRequirement;
+        if (text.length() > FIRST_REQUIREMENT_MAX_CHARS) {
+            text = text.substring(0, FIRST_REQUIREMENT_MAX_CHARS) + "…(已截断)";
+        }
+        return "【最初的需求（请始终遵守）】" + text
+                + "\n（注：中间已省略 " + Math.max(omitted, 0) + " 条较早对话；应用当前状态见上方规格摘要）";
     }
 
     /**

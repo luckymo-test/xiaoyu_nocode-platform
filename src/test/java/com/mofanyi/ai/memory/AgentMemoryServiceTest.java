@@ -120,10 +120,9 @@ class AgentMemoryServiceTest {
     }
 
     @Test
-    @DisplayName("token 预算裁剪：超预算时从最旧的消息开始丢弃，保留最近的")
-    void loadContext_trimsOldestWhenOverBudget() {
+    @DisplayName("超预算时压缩中段，保留最近的对话")
+    void loadContext_trimsMiddleWhenOverBudget() {
         List<Message> messages = new ArrayList<>();
-        messages.add(new UserMessage("最旧的消息"));
         for (int i = 0; i < 20; i++) {
             messages.add(new UserMessage("x".repeat(2000)));
         }
@@ -131,11 +130,27 @@ class AgentMemoryServiceTest {
 
         List<Message> context = memoryService.loadContext(APP_ID, "再改一处");
 
-        assertTrue(context.size() < messages.size(), "超预算应裁剪");
         assertNotNull(context);
         assertFalse(context.isEmpty());
-        assertTrue(context.stream().noneMatch(m -> "最旧的消息".equals(m.getText())),
-                "应丢弃最旧的消息");
+        assertTrue(context.size() < messages.size(), "超预算应压缩中段");
+        assertTrue(context.get(context.size() - 1).getText().startsWith("x"), "最近的消息应保留");
+    }
+
+    @Test
+    @DisplayName("选择性保留：硬切会丢掉的『最初需求』必须补回并置于最前")
+    void loadContext_keepsFirstRequirement() {
+        List<Message> messages = new ArrayList<>();
+        messages.add(new UserMessage("最初的需求：做一个登录页"));
+        for (int i = 0; i < 20; i++) {
+            messages.add(new UserMessage("x".repeat(2000)));
+        }
+        when(chatMemory.get(CONVERSATION_ID)).thenReturn(messages);
+
+        List<Message> context = memoryService.loadContext(APP_ID, "再改一处");
+
+        assertTrue(context.get(0).getText().contains("最初的需求：做一个登录页"),
+                "最初的需求必须被补回并置于最前");
+        assertTrue(context.get(0).getText().contains("已省略"), "应标注中段已省略");
     }
 
     @Test
