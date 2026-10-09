@@ -67,6 +67,10 @@ codegen:
   # 交付前渲染验证（plan-agent-pipeline P0-4）：无头浏览器 3 档视口实拍检查图裂/横向溢出/空白页/console 报错
   verify:
     enabled: ${CODEGEN_VERIFY_ENABLED:true}
+  # Agent 循环形态（S5）：true=自管循环（逐步预算真正生效）；false=框架内部循环（现状，默认）
+  agent:
+    self-managed-loop:
+      enabled: ${CODEGEN_SELF_MANAGED_LOOP:false}
 
 # 封面截图配置（默认值，实际按环境在 profile 文件中覆盖）
 screenshot:

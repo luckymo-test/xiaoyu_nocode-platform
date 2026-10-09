@@ -83,6 +83,13 @@ public class VueProjectAgent {
 
     private final ChatModel chatModel;
     private final CodeGenPromptRegistry promptRegistry;
+
+    /**
+     * Agent 循环形态开关（plan-refactor S5）：true=自管循环（逐步预算生效），false=框架内部循环（现状，默认）。
+     * 本步只加开关与打点骨架，循环形态不变 —— 开关暂时是 no-op。
+     */
+    @org.springframework.beans.factory.annotation.Value("${codegen.agent.self-managed-loop.enabled:false}")
+    private boolean selfManagedLoopEnabled;
     private final CodeFileWriteService codeFileWriteService;
     private final AgentMemoryService agentMemoryService;
     private final AppSpecService appSpecService;
@@ -372,6 +379,12 @@ public class VueProjectAgent {
         int stepCount = 0;
         for (int step = 0; step < MAX_STEPS; step++) {
             stepCount++;
+            // S5 打点骨架：每轮开始前记录累计用量与循环模式。
+            // 注意：外层恒为 1 轮（框架内部完成全部轮次），自管循环落地后这里才是真实轮次。
+            log.info("[agent] round={} 模式={} 累计token={}/{} 已耗时={}ms", stepCount,
+                    selfManagedLoopEnabled ? "self" : "framework",
+                    (usage == null ? 0 : usage.promptTokens()) + (usage == null ? 0 : usage.completionTokens()),
+                    MAX_LOOP_TOKENS, System.currentTimeMillis() - loopStart);
             ChatResponse resp;
             // 每次模型调用的耗时与本次 token 增量（用于可观测性）
             long callStart = System.currentTimeMillis();
