@@ -20,6 +20,7 @@ import {
   streamModifyProject,
 } from '@/api/aiStream'
 import { createSseConnection } from '@/utils/sse'
+import { getRenderFixStatus } from '@/api/renderFix'
 import type { SseCallbacks, SseConnection } from '@/utils/sse'
 import { useUserStore } from '@/stores/user'
 import MarkdownView from '@/components/MarkdownView.vue'
@@ -937,6 +938,44 @@ const sendMessage = async (text?: string, auto = false) => {
     // 推理增量先攒在本地，结束再一次性赋值（避免每 token 触发 MarkdownView 全量重渲染卡死）
     let reasoningBuf = ''
 
+    // 交付后渲染修复是异步的：轮询状态，修好了自动刷新预览
+    // （生成响应只等到"检测"完成，修复在后台跑；旧的 SSE 已随 done 关闭，故用轮询）
+    let renderFixTimer: number | null = null
+    const stopRenderFixPolling = () => {
+      if (renderFixTimer !== null) {
+        window.clearInterval(renderFixTimer)
+        renderFixTimer = null
+      }
+    }
+    const startRenderFixPolling = () => {
+      stopRenderFixPolling()
+      let rounds = 0
+      renderFixTimer = window.setInterval(async () => {
+        rounds++
+        try {
+          const res = await getRenderFixStatus({ appId: appId.value })
+          const status = res?.data
+          if (status === 'fixing') {
+            return
+          }
+          stopRenderFixPolling()
+          if (status === 'fixed') {
+            message.success('检测到渲染问题，已自动修复，正在刷新预览')
+            await refreshAfterManualEdit()
+          } else if (status === 'still_has_problems') {
+            message.warning('渲染问题已尝试自动修复但仍有残留，建议手动检查')
+            await refreshAfterManualEdit()
+          }
+        } catch {
+          // 网络异常忽略，下一轮重试
+        }
+        // 兜底：最多轮询 40 次（约 200s），避免间隔无限挂着
+        if (rounds >= 40) {
+          stopRenderFixPolling()
+        }
+      }, 5000)
+    }
+
     const finishAgent = () => {
       if (donePayload) {
         aiMsg.content = donePayload.description ?? ''
@@ -955,6 +994,8 @@ const sendMessage = async (text?: string, auto = false) => {
       generating.value = false
       genProgress.value = ''
       generationDone.value = true
+      // 交付后可能还有异步渲染修复在跑，开启轮询
+      startRenderFixPolling()
     }
     const callbacks: SseCallbacks = {
       onAgentProgress: (data) => {
