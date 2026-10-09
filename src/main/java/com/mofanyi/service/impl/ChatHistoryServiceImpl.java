@@ -48,6 +48,11 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
      */
     private static final int MAX_PAGE_SIZE = 20;
 
+    /**
+     * 内部回灌读取的条数上限（防误传超大 limit）
+     */
+    private static final int MAX_REHYDRATE_SIZE = 100;
+
     private final AppMapper appMapper;
 
     public ChatHistoryServiceImpl(AppMapper appMapper) {
@@ -119,6 +124,21 @@ public class ChatHistoryServiceImpl extends ServiceImpl<ChatHistoryMapper, ChatH
                 .limit(size);
         List<ChatHistory> chatHistoryList = this.list(queryWrapper);
         // 倒序加载后翻转成正序，便于前端直接渲染
+        CollUtil.reverse(chatHistoryList);
+        return chatHistoryList;
+    }
+
+    @Override
+    public List<ChatHistory> listRecentByAppId(long appId, int limit) {
+        ThrowUtils.throwIf(appId <= 0, ErrorCode.PARAMS_ERROR);
+        int size = limit > 0 ? Math.min(limit, MAX_REHYDRATE_SIZE) : DEFAULT_PAGE_SIZE;
+        // 倒序取最近 size 条（与 listChatHistory 同款稳定排序），再翻转成正序
+        QueryWrapper queryWrapper = QueryWrapper.create()
+                .eq("appId", appId)
+                .orderBy("createTime", false)
+                .orderBy("id", false)
+                .limit(size);
+        List<ChatHistory> chatHistoryList = this.list(queryWrapper);
         CollUtil.reverse(chatHistoryList);
         return chatHistoryList;
     }

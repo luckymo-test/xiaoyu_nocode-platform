@@ -60,6 +60,16 @@ public interface ChatHistoryService extends IService<ChatHistory> {
     List<ChatHistory> listChatHistory(long appId, LocalDateTime beforeCreateTime, Long beforeId, int pageSize, User loginUser);
 
     /**
+     * 内部使用：按应用 id 取最近 N 条对话消息（按时间正序返回），供 Agent 记忆冷启动回灌。
+     * 刻意不做权限校验——调用方是后台生成线程，没有登录用户上下文；数据范围由 appId 限定。
+     *
+     * @param appId 应用 id
+     * @param limit 最多返回条数（内部会做上限保护）
+     * @return 按时间正序的最近消息
+     */
+    List<ChatHistory> listRecentByAppId(long appId, int limit);
+
+    /**
      * 管理员分页查询所有应用的对话历史（按时间降序，便于内容监管）。
      *
      * @param chatHistoryQueryRequest 查询请求（可按 appId / userId / messageType 过滤）

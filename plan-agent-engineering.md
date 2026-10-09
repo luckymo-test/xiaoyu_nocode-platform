@@ -107,6 +107,10 @@
 | **M3** | 摘要压缩 + 选择性保留 | 窗口超阈值时压缩；关键信息（首条需求、关键错误）优先保留 |
 | **预留** | `AgentMemory` 接口 | 抽接口（当前 `WindowedRedisMemory`），未来可换 `HybridMemory`（窗口 + 摘要 + 向量检索）而不改调用方 |
 
+> **进度**：**M0、M1 已实现**——`AgentMemoryService` 作为读写门面：Redis 热窗口 + `chat_history` 冷启动回灌 + 去代码化写入 + token 预算裁剪；`ChatMemoryConfig.maxMessages` 降级为粗粒度上限（token 预算才是注入口径）；`VueProjectAgent` 生成后写入"类型 + 文件索引 + 说明"摘要。**M2、M3 待做**（`modify` / `fix` 仍未参与记忆）。
+>
+> 实现细节：controller 在生成前已把本轮用户消息落库，故回灌会读到它；`loadContext` 会**丢掉尾部这条**，避免调用方再追加一次造成重复（已由单测覆盖）。
+
 ### 2.8 验收
 
 - 生成一次后，Redis `spring:ai:chat:memory:{appId}` 键存在且含 user/assistant 消息。

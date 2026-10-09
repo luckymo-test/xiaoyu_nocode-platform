@@ -4,6 +4,7 @@ import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.util.StrUtil;
 import com.mofanyi.ai.model.VueFileResult;
 import com.mofanyi.ai.model.VueProjectResult;
+import com.mofanyi.ai.memory.AgentMemoryService;
 import com.mofanyi.ai.tools.AgentProgressListener;
 import com.mofanyi.ai.tools.DiagramTool;
 import com.mofanyi.ai.tools.FinishTool;
@@ -19,7 +20,6 @@ import com.mofanyi.exception.ErrorCode;
 import com.mofanyi.exception.ThrowUtils;
 import com.mofanyi.model.enums.CodeGenTypeEnum;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
@@ -40,6 +40,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
@@ -66,7 +67,7 @@ public class VueProjectAgent {
     private final String vueFixPrompt;
     private final String modifyPrompt;
     private final CodeFileWriteService codeFileWriteService;
-    private final ChatMemory chatMemory;
+    private final AgentMemoryService agentMemoryService;
     private final com.mofanyi.mapper.AppImageMapper appImageMapper;
     private final SiteImageService siteImageService;
     private final WriteFileTool writeFileTool;
@@ -83,7 +84,7 @@ public class VueProjectAgent {
                            @Qualifier("vueFixPrompt") String vueFixPrompt,
                            @Qualifier("modifyPrompt") String modifyPrompt,
                            CodeFileWriteService codeFileWriteService,
-                           ChatMemory chatMemory,
+                           AgentMemoryService agentMemoryService,
                            com.mofanyi.mapper.AppImageMapper appImageMapper,
                            SiteImageService siteImageService,
                            WriteFileTool writeFileTool,
@@ -99,7 +100,7 @@ public class VueProjectAgent {
         this.vueFixPrompt = vueFixPrompt;
         this.modifyPrompt = modifyPrompt;
         this.codeFileWriteService = codeFileWriteService;
-        this.chatMemory = chatMemory;
+        this.agentMemoryService = agentMemoryService;
         this.appImageMapper = appImageMapper;
         this.siteImageService = siteImageService;
         this.writeFileTool = writeFileTool;
@@ -155,8 +156,8 @@ public class VueProjectAgent {
 
         List<Message> messages = new ArrayList<>();
         messages.add(new SystemMessage(promptForType(type)));
-        // 注入对话记忆作为前置上下文
-        messages.addAll(chatMemory.get(String.valueOf(appId)));
+        // 注入对话记忆作为前置上下文（优先 Redis 热窗口，miss 时从 MySQL 冷启动回灌）
+        messages.addAll(agentMemoryService.loadContext(appId, userMessage));
         messages.add(new UserMessage(userMessage));
 
         // [promptTokens, completionTokens] 累加器，runToolLoop 各轮模型调用后写入
@@ -168,9 +169,29 @@ public class VueProjectAgent {
         // 生成完成后扫描项目代码，把嵌入的图片 URL 落库（含补图后的真实 URL）
         scanAndSaveImages(type, appId);
 
+        // 记录本轮对话到记忆：只存说明与文件索引，不存全量代码（代码在磁盘上，需要时 readFile 取）
+        agentMemoryService.appendTurn(appId, userMessage,
+                buildMemorySummary(type, description.get(), files.keySet()));
+
         GenerateResult result = assembleResult(type, appId, files, description.get());
         result.setUsage(new TokenUsage(usage[0], usage[1]));
         return result;
+    }
+
+    /**
+     * 构造写入记忆的 AI 回复摘要（去代码化）：生成类型 + 产出文件索引 + 简短说明。
+     * 刻意不写全量代码——代码已落盘，模型需要时用 readFile 取，避免上下文被代码撑爆。
+     */
+    private String buildMemorySummary(CodeGenTypeEnum type, String description, Set<String> paths) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("已完成").append(type.getValue()).append("生成。");
+        if (paths != null && !paths.isEmpty()) {
+            sb.append("产出文件：").append(String.join("、", paths)).append("。");
+        }
+        if (StrUtil.isNotBlank(description)) {
+            sb.append("说明：").append(StrUtil.maxLength(description, 500));
+        }
+        return sb.toString();
     }
 
     /**
