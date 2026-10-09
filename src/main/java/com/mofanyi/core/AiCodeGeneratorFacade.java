@@ -450,7 +450,7 @@ public class AiCodeGeneratorFacade {
      * （P0-2 的互斥规则同样适用于这里）。修复期间该 appId 也会被互斥占用，用户的"停止生成"同样能取消它。
      */
     private void runRenderFix(CodeGenTypeEnum type, Long appId, String issueText) {
-        GenerationTask task = taskRegistry.tryAcquire(appId, "render_fix");
+        GenerationTask task = acquireRenderFixTask(appId);
         if (task == null) {
             log.info("[verify] appId={} 已有任务在跑，跳过渲染修复", appId);
             renderFixStatus.put(appId, "skipped");
@@ -469,6 +469,30 @@ public class AiCodeGeneratorFacade {
         } finally {
             taskRegistry.release(appId, task);
         }
+    }
+
+    /**
+     * 获取渲染修复的任务占用。
+     *
+     * <p><b>为什么要重试</b>：异步修复是在生成流程**内部**提交的，那一刻生成任务自己还持有 appId 的互斥
+     * （要到生成的 finally 才释放）。若立即抢占必然失败（实测状态直接变 skipped）。这里短暂重试，
+     * 等生成释放后再抢；若用户紧接着发起了新一轮生成，则超时放弃——这正是我们要的互斥行为。
+     */
+    private GenerationTask acquireRenderFixTask(Long appId) {
+        long deadline = System.currentTimeMillis() + 5000;
+        while (System.currentTimeMillis() < deadline) {
+            GenerationTask task = taskRegistry.tryAcquire(appId, "render_fix");
+            if (task != null) {
+                return task;
+            }
+            try {
+                Thread.sleep(200);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return null;
+            }
+        }
+        return null;
     }
 
     /**
