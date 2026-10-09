@@ -214,6 +214,17 @@ public class AiChatController {
     }
 
     /**
+     * 渲染修复状态：交付后修复是**异步**的，前端可轮询此接口得知修复进度并刷新预览。
+     * 返回 ok / fixing / fixed / still_has_problems / skipped / error。
+     */
+    @GetMapping("/render-fix/status")
+    public BaseResponse<String> renderFixStatus(@RequestParam Long appId, HttpServletRequest request) {
+        User loginUser = userService.getLoginUser(request);
+        appAuthService.requireOwner(appId, loginUser);
+        return ResultUtils.success(aiCodeGeneratorFacade.renderFixStatus(appId));
+    }
+
+    /**
      * 手动停止 AI 生成（仅本人可停止）
      */
     @PostMapping("/stop")

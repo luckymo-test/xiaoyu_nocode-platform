@@ -12,8 +12,11 @@ import com.mofanyi.model.enums.CodeGenTypeEnum;
 import com.mofanyi.model.vo.AiCodeGenResultVO;
 import com.mofanyi.service.AppService;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
 import java.util.Map;
 import java.util.concurrent.ThreadPoolExecutor;
 
@@ -36,6 +39,16 @@ public class AiCodeGeneratorFacade {
     private final RenderVerifier renderVerifier;
 
     /**
+     * 渲染修复执行器：交付后异步修复（见 {@link #runRenderFix}）
+     */
+    private final ExecutorService renderFixExecutor;
+
+    /**
+     * 渲染修复状态：appId → ok / fixing / fixed / still_has_problems / skipped / error
+     */
+    private final Map<Long, String> renderFixStatus = new ConcurrentHashMap<>();
+
+    /**
      * 是否开启交付前渲染验证（plan-agent-pipeline P0-4）
      */
     @org.springframework.beans.factory.annotation.Value("${codegen.verify.enabled:true}")
@@ -50,12 +63,14 @@ public class AiCodeGeneratorFacade {
                                  VueProjectAgent vueProjectAgent,
                                  GenerationTaskRegistry taskRegistry,
                                  RenderVerifier renderVerifier,
+                                 @Qualifier("renderFixExecutor") ExecutorService renderFixExecutor,
                                  ThreadPoolExecutor vueThreadPoolExecutor) {
         this.codeFileWriteService = codeFileWriteService;
         this.appService = appService;
         this.vueProjectAgent = vueProjectAgent;
         this.taskRegistry = taskRegistry;
         this.renderVerifier = renderVerifier;
+        this.renderFixExecutor = renderFixExecutor;
         this.vueThreadPoolExecutor = vueThreadPoolExecutor;
     }
 
@@ -74,7 +89,7 @@ public class AiCodeGeneratorFacade {
             appService.updateGenerateStatus(appId, AppGenerateStatusEnum.GENERATING.getValue());
             VueProjectAgent.GenerateResult result = vueProjectAgent.generate(CodeGenTypeEnum.HTML, appId, userMessage, callContext(appId, "html"), null);
             appService.updateGenerateStatus(appId, AppGenerateStatusEnum.DONE.getValue());
-            verifyAndFixIfNeeded(CodeGenTypeEnum.HTML, appId);
+            verifyAndScheduleFix(CodeGenTypeEnum.HTML, appId);
             AiCodeGenResultVO vo = readResult(CodeGenTypeEnum.HTML, appId);
             applyUsage(vo, result);
             return vo;
@@ -101,7 +116,7 @@ public class AiCodeGeneratorFacade {
             appService.updateGenerateStatus(appId, AppGenerateStatusEnum.GENERATING.getValue());
             VueProjectAgent.GenerateResult result = vueProjectAgent.generate(CodeGenTypeEnum.MULTI_FILE, appId, userMessage, callContext(appId, "multi_file"), null);
             appService.updateGenerateStatus(appId, AppGenerateStatusEnum.DONE.getValue());
-            verifyAndFixIfNeeded(CodeGenTypeEnum.MULTI_FILE, appId);
+            verifyAndScheduleFix(CodeGenTypeEnum.MULTI_FILE, appId);
             AiCodeGenResultVO vo = readResult(CodeGenTypeEnum.MULTI_FILE, appId);
             applyUsage(vo, result);
             return vo;
@@ -162,7 +177,7 @@ public class AiCodeGeneratorFacade {
                             }
                         });
                 appService.updateGenerateStatus(appId, AppGenerateStatusEnum.DONE.getValue());
-                verifyAndFixIfNeeded(type, appId);
+                verifyAndScheduleFix(type, appId);
                 AiCodeGenResultVO vo = readResult(type, appId);
                 applyUsage(vo, result);
                 callback.onDone(vo);
@@ -399,30 +414,68 @@ public class AiCodeGeneratorFacade {
     }
 
     /**
-     * 交付前渲染验证 + 一次修复回路（plan-agent-pipeline P0-4）。
+     * 交付前渲染验证（同步、快）+ 异步修复（plan-agent-pipeline P0-4）。
      *
-     * <p>验证或修复失败**不影响生成结果返回**——只记日志与落盘报告；
-     * 仅在浏览器可用且确实发现渲染问题时才触发修复。
+     * <p>只做**检测**：检测很快，结果随生成一起返回；发现问题后把"修复 + 复验"丢到
+     * {@code renderFixExecutor} 异步执行，不让用户等 2~3 分钟。
+     *
+     * <p>验证/修复失败都不影响生成结果返回，只记日志与落盘报告。
      */
-    private void verifyAndFixIfNeeded(CodeGenTypeEnum type, Long appId) {
+    private void verifyAndScheduleFix(CodeGenTypeEnum type, Long appId) {
         if (!renderVerifyEnabled || type == null || type == CodeGenTypeEnum.VUE) {
             return;
         }
         try {
             RenderVerifier.RenderReport report = renderVerifier.verify(type, appId);
-            renderVerifier.persistReport(type, appId, report);
+            renderVerifier.persistReport(type, appId, report, "before");
             if (!report.isUsable() || !report.hasProblems()) {
+                renderFixStatus.put(appId, "ok");
                 return;
             }
             String issueText = report.toPromptText();
-            log.info("[verify] appId={} {}，进入渲染修复回路", appId, report.summary());
+            // 问题清单进日志：修复前的问题不再只存在于喂给模型的上下文里（可追溯）
+            log.info("[verify] appId={} {}，转异步修复。问题清单：\n{}", appId, report.summary(), issueText);
+            renderFixStatus.put(appId, "fixing");
+            renderFixExecutor.execute(() -> runRenderFix(type, appId, issueText));
+        } catch (RuntimeException e) {
+            log.warn("[verify] 渲染验证异常，已忽略（不影响生成结果），appId={}", appId, e);
+            renderFixStatus.put(appId, "error");
+        }
+    }
+
+    /**
+     * 异步修复 + 复验。
+     *
+     * <p>用生成任务注册表做互斥：若用户已发起新一轮生成，则**跳过**修复，避免两处同时写同一工程目录
+     * （P0-2 的互斥规则同样适用于这里）。修复期间该 appId 也会被互斥占用，用户的"停止生成"同样能取消它。
+     */
+    private void runRenderFix(CodeGenTypeEnum type, Long appId, String issueText) {
+        GenerationTask task = taskRegistry.tryAcquire(appId, "render_fix");
+        if (task == null) {
+            log.info("[verify] appId={} 已有任务在跑，跳过渲染修复", appId);
+            renderFixStatus.put(appId, "skipped");
+            return;
+        }
+        try {
+            task.bind(Thread.currentThread());
             vueProjectAgent.fixRenderIssues(type, appId, issueText, callContext(appId, "render_fix"), null);
             RenderVerifier.RenderReport after = renderVerifier.verify(type, appId);
-            renderVerifier.persistReport(type, appId, after);
-            log.info("[verify] appId={} 修复后复验：{}", appId, after.summary());
+            renderVerifier.persistReport(type, appId, after, "after");
+            renderFixStatus.put(appId, after.hasProblems() ? "still_has_problems" : "fixed");
+            log.info("[verify] appId={} 异步修复完成，复验：{}", appId, after.summary());
         } catch (RuntimeException e) {
-            log.warn("[verify] 渲染验证/修复异常，已忽略（不影响生成结果），appId={}", appId, e);
+            log.warn("[verify] 异步修复失败，appId={}", appId, e);
+            renderFixStatus.put(appId, "error");
+        } finally {
+            taskRegistry.release(appId, task);
         }
+    }
+
+    /**
+     * 渲染修复状态（供前端轮询）：ok / fixing / fixed / still_has_problems / skipped / error
+     */
+    public String renderFixStatus(Long appId) {
+        return appId == null ? null : renderFixStatus.get(appId);
     }
 
     /**

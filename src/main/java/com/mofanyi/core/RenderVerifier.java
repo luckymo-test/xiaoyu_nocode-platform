@@ -223,9 +223,12 @@ public class RenderVerifier {
     }
 
     /**
-     * 报告落盘到 .agent/verify.json（阶段产物，可追溯）
+     * 报告落盘到 {@code .agent/verify-{stage}.json}（阶段产物，可追溯）。
+     * 分 stage 落盘（before / after）避免"修复后的结果覆盖掉修复前的问题清单"。
+     *
+     * @param stage 阶段标识，如 before / after
      */
-    public void persistReport(CodeGenTypeEnum type, Long appId, RenderReport report) {
+    public void persistReport(CodeGenTypeEnum type, Long appId, RenderReport report, String stage) {
         if (report == null) {
             return;
         }
@@ -251,7 +254,7 @@ public class RenderVerifier {
             root.set("viewports", arr);
             root.set("errors", report.errors());
             String projectDir = codeFileWriteService.getProjectDir(type, appId);
-            File out = Paths.get(projectDir, ".agent", "verify.json").toFile();
+            File out = Paths.get(projectDir, ".agent", "verify-" + stage + ".json").toFile();
             FileUtil.mkParentDirs(out);
             FileUtil.writeString(root.toStringPretty(), out, StandardCharsets.UTF_8);
         } catch (RuntimeException e) {

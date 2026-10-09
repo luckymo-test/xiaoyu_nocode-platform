@@ -55,6 +55,16 @@ public class ThreadPoolConfig {
         return Executors.newVirtualThreadPerTaskExecutor();
     }
 
+    /**
+     * 渲染修复执行器：交付后异步修复渲染问题（plan-agent-pipeline P0-4）。
+     * 用虚拟线程——修复是长耗时的模型调用 + 浏览器复验，隔离在独立执行器里，
+     * 不占用生成线程池，也不会因生成线程池满而阻塞。
+     */
+    @Bean(destroyMethod = "close")
+    public ExecutorService renderFixExecutor() {
+        return Executors.newVirtualThreadPerTaskExecutor();
+    }
+
     private ThreadPoolExecutor buildExecutor(int core, int max, int keepAliveSeconds, int queueCapacity,
                                              String threadNamePrefix, RejectedExecutionHandler handler) {
         ThreadFactory threadFactory = new ThreadFactory() {
