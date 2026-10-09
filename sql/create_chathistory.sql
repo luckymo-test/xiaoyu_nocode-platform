@@ -1,7 +1,7 @@
 -- 切换库
 use xiaoyu_zerocode;
--- 对话历史表
-create table chat_history
+-- 对话历史表（幂等：可重复执行）
+create table if not exists chat_history
 (
     id          bigint auto_increment comment 'id' primary key,
     message     text                               not null comment '消息',

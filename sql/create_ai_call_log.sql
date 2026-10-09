@@ -2,7 +2,8 @@
 use xiaoyu_zerocode;
 
 -- AI 调用明细表：每次模型调用一行（高基数维度：用户/应用/错误），聚合指标走 Prometheus
-create table ai_call_log
+-- 幂等：可重复执行
+create table if not exists ai_call_log
 (
     id              bigint auto_increment comment 'id' primary key,
     appId           bigint      null comment '应用 id',
