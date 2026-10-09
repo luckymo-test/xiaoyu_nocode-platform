@@ -56,7 +56,7 @@ cos:
 screenshot:
   browser: edge
   # 本地 driver 路径，优先使用，绕过 Selenium Manager 联网下载（离线环境必备）
-  driver-path: "${SCREENSHOT_DRIVER_PATH:C:\\Users\\莫凡毅\\.cache\\selenium\\msedgedriver\\win64\\151.0.4129.72\\msedgedriver.exe}"
+  driver-path: "${SCREENSHOT_DRIVER_PATH:C:\\Users\\莫凡毅\\.cache\\selenium\\msedgedriver\\win64\\153.0.4234.32\\msedgedriver.exe}"
   tmp-dir: "${SCREENSHOT_TMP_DIR:D:\\IDEAproject\\xiaoyu_zerocode\\tmp\\cover}"
   original-folder: app-cover/original
   compressed-folder: app-cover/compressed

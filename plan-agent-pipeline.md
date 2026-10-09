@@ -140,6 +140,12 @@ Preflight(能力盘点：图源可达? node 可用? COS 可写?)
 
 > 局限：通过 `file://` 加载，ES module / `fetch` 类页面可能加载失败；渲染修复的进度暂未推到前端。
 > 附带修复：本机 `msedgedriver`(151) 与 Edge(153) 版本不匹配，已下载匹配驱动到 Selenium 缓存——该链路此前也是坏的（影响封面截图）。
+> **补记（2026-10-10）**：上面只把驱动**下载**到了缓存，**配置兜底仍指向 151** —— 所以只要不设 `SCREENSHOT_DRIVER_PATH`，
+> 链路依旧是坏的。实测证据：`SessionNotCreatedException: session not created: This version of Microsoft Edge WebDriver
+> only supports Microsoft Edge version 151 / Current browser version is 153.0.4234.32`（`RenderVerifierTest` 因此长期
+> "2 skipped"）。已把 `application-location.yml` 与其 `.example` 的兜底改为 `153.0.4234.32`。改后不设环境变量也跑通：
+> 真实生成 `[verify] 渲染验证完成：1/3 档视口存在问题` → 异步修复 → `复验：3 档视口全部通过`；`mvn -o test` 由
+> "37 用例 / 2 skipped" 变为 **"37 用例 / 0 skipped"**。
 
 ### 6.3 素材先行（P1）
 
