@@ -921,3 +921,39 @@ screenshot:
 **待定方向（未做，需确认）**：prompt 抑制过度推理 / 工具循环换更快模型 / 自管 tool-loop 裁剪历史（根治上下文膨胀）。
 
 **注意**：前端 reasoning 曾用 `MarkdownView` 对整串增量全量重渲染导致 O(n²) 卡死，已改为"本地 buffer 攒、完成时一次性赋值 + 纯文本折叠展示"。
+
+---
+
+## 十三、生成任务的取消与状态回收（P0 修复实录）
+
+### 67. 取消生成不要用 `Thread#interrupt()`
+
+**现象**：给"停止生成"接上 `task.cancel()` → `worker.interrupt()` 后，被停止的请求返回**裸 Tomcat 500 页面**（不是统一 JSON 错误）；日志出现 `RedisCommandInterruptedException: Command interrupted` 与 `ClosedByInterruptException`。
+
+**原因**：生成线程是 **Tomcat 工作线程**（非流式接口直接跑在请求线程上）或共享池线程。对它 `interrupt()` 会：
+1. 打断该线程上正在进行的 **Redis 命令**（Spring Session 读、ChatMemory 写）与 **COS 上传**（`ClosedByInterruptException`）；
+2. 把**中断标志**残留到后续错误处理路径，连渲染 `BaseResponse` 都可能二次抛异常 → 最终落到容器默认错误页。
+
+**解决**：取消**只置标志**，在副作用边界（`writeFile`）与**模型调用返回后**检查并抛业务异常。代价是响应延迟 = 一次模型调用的时长，可接受。
+
+**经验**：**不要中断不属于你创建的线程**（Tomcat / 线程池线程）。取消共享线程上的任务，用协作式标志，而不是 `Thread.interrupt()`。
+
+### 68. 工具回调里抛异常无法终止生成（会被框架吞掉）
+
+**现象**：第一版把取消检查放进 `writeFile` 工具，期望抛异常终止生成；实测**点了停止后生成仍在继续**（跑了 90s+ 不停），只是那个文件没写成功。
+
+**原因**：Spring AI 框架在流内自动执行工具时，会**捕获工具抛出的异常并作为"工具错误结果"喂回模型**（让模型自己纠错），异常不会冒泡到调用方。模型看到工具报错后继续重试，生成永不结束。
+
+**解决**：工具里**不抛异常**——检测到已取消就返回"生成已被用户停止，请调用 finish 结束"；真正的终止放在 **`runToolLoop` 中模型调用返回之后**（`taskRegistry.checkCancelled(appId)`），在那里抛出才会冒泡到门面并被记为 `stopped`。
+
+**经验**：**工具回调是"异常被吞掉"的边界**（框架要拿工具结果继续喂模型）。任何"中止整个循环"的意图都不能只在工具里实现，必须在工具循环外层检查。
+
+### 69. devtools 会在 `mvn test` 时热重启应用，污染端到端验证
+
+**现象**：改完代码跑 `mvn test`，正在运行的后端**自动重启**（日志 `Restarting due to N class path changes`）；同时另一份 `mvn spring-boot:run` 启动失败，报 `Port 8124 was already in use`；验证日志里混入"重启瞬间"的连接中断（`Redis command interrupted`），容易被误读成代码 bug。
+
+**原因**：`spring-boot-devtools` 监听 classpath，编译产物一变就重启应用；而端口仍被旧进程占用，新实例起不来。
+
+**解决/注意**：
+- 做端到端验证时关掉热重启：`-Dspring-boot.run.jvmArguments=-Dspring.devtools.restart.enabled=false`；
+- 判断"后端是否在跑"要看**日志**（`Started xiaoyuZeroCodeApplication`），不能只看端口——端口可能是上一个进程还在占着。
