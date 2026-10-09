@@ -80,10 +80,21 @@ public class MermaidRenderer {
             String exec = StrUtil.isNotBlank(edgePath) && FileUtil.exist(edgePath)
                     ? edgePath
                     : "";
+            // 沙箱加固（plan-agent-engineering 6.2）：Mermaid 文本来自模型，渲染在内置浏览器里跑。
+            // 隔离用户数据目录 + 关掉后台网络/扩展/同步等非必要能力，减少被利用面。
+            String profileDir = new File(workDir, "chrome-profile").getAbsolutePath().replace("\\", "/");
+            String hardenArgs = "\"--no-sandbox\""
+                    + ",\"--disable-extensions\""
+                    + ",\"--disable-background-networking\""
+                    + ",\"--disable-sync\""
+                    + ",\"--disable-default-apps\""
+                    + ",\"--no-first-run\""
+                    + ",\"--disable-gpu\""
+                    + ",\"--user-data-dir=" + profileDir + "\"";
             // executablePath 为空时不指定，让 puppeteer 自己找（需已安装对应内核）
             String confJson = exec.isEmpty()
-                    ? "{\"args\":[\"--no-sandbox\"]}"
-                    : "{\"executablePath\":\"" + exec.replace("\\", "/") + "\",\"args\":[\"--no-sandbox\"]}";
+                    ? "{\"args\":[" + hardenArgs + "]}"
+                    : "{\"executablePath\":\"" + exec.replace("\\", "/") + "\",\"args\":[" + hardenArgs + "]}";
             FileUtil.writeString(confJson, conf, StandardCharsets.UTF_8);
 
             ProcessBuilder pb = new ProcessBuilder(List.of(
