@@ -285,6 +285,32 @@ surefire 已在 `spring-boot-starter-test` 中，无需新增依赖。
 
 ### 7.1 拆巨型类
 
+**执行顺序（务必分步：每步独立编译 + 真实生成验证，勿一次性大改）**
+
+`VueProjectAgent`（~780 行）按职责拆为 5 个类。下表的"需要改的调用点"是**已核过的实际引用关系**（这一步才是本重构的难点，不是搬代码本身）：
+
+| 步 | 抽出物 | 依赖 | 需要改的调用点（VueProjectAgent 内） |
+|---|---|---|---|
+| **S1** | `ProjectCodeScanner` | `CodeFileWriteService`、`SiteImageService` | `generate`（`scanAndSaveImages`）、`autoFillImages`（`collectCodeFiles`/`relativePath`/`countCosUrls`）、`buildFileIndex` |
+| **S2** | `ImageAutoFiller` | `CodeFileWriteService`、`SiteImageService`、**上一步的 `ProjectCodeScanner`** | `generate`（`autoFillImages`） |
+| **S3** | `TokenUsageAccumulator` | 无 | `generate`（usage 数组）、`runToolLoop`（accumulateUsage）、`GenerateResult.setUsage` |
+| **S4** | `CodeGenPromptRegistry` | `CodeGenPromptConfig` 的 5 个 prompt Bean | `promptForType`、`vueFixPrompt`/`modifyPrompt`/`renderFixPrompt` 的使用点 |
+| **S5** | `AgentToolLoop` | 5 个工具 Bean + `GenerationTaskRegistry` + 上一步的 accumulator | `runToolLoop`、`streamAndAggregate`；**顺带把循环改成自管**，让逐步预算真正生效（现阶段预算只在模型调用返回后检查，见 engineering 第五章） |
+
+**每步的验证门槛（缺一不可）**：
+
+1. `mvn -o test`（当前 37 个用例）全绿；
+2. 重启后端，跑**一次真实生成**（`GET /api/ai/chat?appId=&message=`），确认产出文件与改动前一致；
+3. 若涉及工具链路，再验一次「停止生成」与「渲染验证」（这两条单测覆盖不到）。
+
+**为什么必须分步**：`autoFillImages` / `countCosUrls` / `buildFileIndex` 三者**共用** `collectCodeFiles` 与 `relativePath`。若一次性把方法搬走，会同时牵动 `generate` 主链路的三处调用；一旦漏改就是编译错，改错就是生成行为变化——而**生成行为只能靠真实生成验证**（单测覆盖不到工具循环，这正是此前"异步修复抢不到锁"能溜过去的原因）。
+
+**S1 的推荐做法**（最小可验证切片）：
+
+1. 新建 `core/ProjectCodeScanner`，承接 `collectCodeFiles` / `relativePath` / `scanAndSaveImages` / `countCosUrls`；
+2. `VueProjectAgent` 的 `autoFillImages` 与 `buildFileIndex` 改为**调用该组件的公开方法**（本步先不搬 `autoFillImages` 自身）；
+3. 编译 + 单测 + 真实生成验证通过后，再进入 S2。
+
 **`VueProjectAgent`（722 行）** 按职责拆为：
 
 | 抽出物 | 职责 |
