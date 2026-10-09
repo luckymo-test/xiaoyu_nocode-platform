@@ -95,7 +95,6 @@ public class VueProjectAgent {
     private final ProjectCodeScanner projectCodeScanner;
     private final ImageAutoFiller imageAutoFiller;
     private final com.mofanyi.mapper.AppImageMapper appImageMapper;
-    private final SiteImageService siteImageService;
     private final WriteFileTool writeFileTool;
     private final ReadFileTool readFileTool;
     private final SearchImageTool searchImageTool;
@@ -118,7 +117,6 @@ public class VueProjectAgent {
                            ProjectCodeScanner projectCodeScanner,
                            ImageAutoFiller imageAutoFiller,
                            com.mofanyi.mapper.AppImageMapper appImageMapper,
-                           SiteImageService siteImageService,
                            WriteFileTool writeFileTool,
                            ReadFileTool readFileTool,
                            SearchImageTool searchImageTool,
@@ -140,7 +138,6 @@ public class VueProjectAgent {
         this.projectCodeScanner = projectCodeScanner;
         this.imageAutoFiller = imageAutoFiller;
         this.appImageMapper = appImageMapper;
-        this.siteImageService = siteImageService;
         this.writeFileTool = writeFileTool;
         this.readFileTool = readFileTool;
         this.searchImageTool = searchImageTool;
