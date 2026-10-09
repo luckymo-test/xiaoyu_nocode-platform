@@ -80,7 +80,8 @@ public class VueProjectAgent {
     /**
      * 单次生成的累计 token 预算（prompt + completion），超过即终止
      */
-    private static final long MAX_LOOP_TOKENS = 200_000L;
+    @org.springframework.beans.factory.annotation.Value("${codegen.agent.max-loop-tokens:200000}")
+    private long maxLoopTokens;
 
     private final ChatModel chatModel;
     private final CodeGenPromptRegistry promptRegistry;
@@ -391,7 +392,7 @@ public class VueProjectAgent {
             log.info("[agent] round={} 模式={} 累计token={}/{} 已耗时={}ms", stepCount,
                     selfManagedLoopEnabled ? "self" : "framework",
                     (usage == null ? 0 : usage.promptTokens()) + (usage == null ? 0 : usage.completionTokens()),
-                    MAX_LOOP_TOKENS, System.currentTimeMillis() - loopStart);
+                    maxLoopTokens, System.currentTimeMillis() - loopStart);
             ChatResponse resp;
             // 每次模型调用的耗时与本次 token 增量（用于可观测性）
             long callStart = System.currentTimeMillis();
@@ -419,7 +420,7 @@ public class VueProjectAgent {
             // 工具回调里抛异常会被框架吞成"工具错误结果"喂回模型，只有在此处中断才真正终止生成。
             taskRegistry.checkCancelled(appId);
             // 预算检查（plan-agent-engineering 第五章）
-            checkBudget(loopStart, usage == null ? 0 : usage.promptTokens(), usage == null ? 0 : usage.completionTokens());
+            checkBudget(loopStart, usage == null ? 0 : usage.promptTokens(), usage == null ? 0 : usage.completionTokens(), maxLoopTokens);
             if (usage != null) { usage.accumulate(resp); }
             // 可观测性：记录本次调用（成功）
             long callMs = System.currentTimeMillis() - callStart;
@@ -448,13 +449,13 @@ public class VueProjectAgent {
      * {@code break}，所以这里主要拦住"多轮异常重试"与"超长单轮"；真正的逐步预算需要改成自管循环
      * （plan-refactor 7.1 拆类时一并做）。取消检查同理。
      */
-    static void checkBudget(long loopStartMillis, long promptTokens, long completionTokens) {
+    static void checkBudget(long loopStartMillis, long promptTokens, long completionTokens, long limitTokens) {
         long elapsed = System.currentTimeMillis() - loopStartMillis;
         ThrowUtils.throwIf(elapsed > MAX_LOOP_MILLIS, ErrorCode.OPERATION_ERROR,
                 "生成超出时限（已 " + (elapsed / 1000) + "s，上限 " + (MAX_LOOP_MILLIS / 1000) + "s），已终止");
         long total = promptTokens + completionTokens;
-        ThrowUtils.throwIf(total > MAX_LOOP_TOKENS, ErrorCode.OPERATION_ERROR,
-                "生成超出 token 预算（已 " + total + "，上限 " + MAX_LOOP_TOKENS + "），已终止");
+        ThrowUtils.throwIf(total > limitTokens, ErrorCode.OPERATION_ERROR,
+                "生成超出 token 预算（已 " + total + "，上限 " + limitTokens + "），已终止");
     }
 
     /**
@@ -484,10 +485,10 @@ public class VueProjectAgent {
             taskRegistry.checkCancelled(appId);
             checkBudget(loopStart,
                     usage == null ? 0 : usage.promptTokens(),
-                    usage == null ? 0 : usage.completionTokens());
+                    usage == null ? 0 : usage.completionTokens(), maxLoopTokens);
             log.info("[agent] round={} 模式=self 累计token={}/{} 已耗时={}ms", round,
                     (usage == null ? 0 : usage.promptTokens()) + (usage == null ? 0 : usage.completionTokens()),
-                    MAX_LOOP_TOKENS, System.currentTimeMillis() - loopStart);
+                    maxLoopTokens, System.currentTimeMillis() - loopStart);
 
             long callStart = System.currentTimeMillis();
             long beforeIn = usage == null ? 0 : usage.promptTokens();
