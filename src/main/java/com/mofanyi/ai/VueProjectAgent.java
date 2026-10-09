@@ -387,11 +387,14 @@ public class VueProjectAgent {
         int stepCount = 0;
         for (int step = 0; step < MAX_STEPS; step++) {
             stepCount++;
-            // S5 打点骨架：每轮开始前记录累计用量与循环模式。
+            // S5 打点：每轮开始前记录"轮次开始时的累计用量"（prompt/completion 分列）。
+            // 分列后才有 ③ 需要的 promptTokens 单独口径——累计 token 混着 completion 时算不出上下文增长。
             // 注意：外层恒为 1 轮（框架内部完成全部轮次），自管循环落地后这里才是真实轮次。
-            log.info("[agent] round={} 模式={} 累计token={}/{} 已耗时={}ms", stepCount,
+            log.info("[agent] round={} 模式={} prompt={} completion={} 累计token={}/{} 已耗时={}ms", stepCount,
                     selfManagedLoopEnabled ? "self" : "framework",
-                    (usage == null ? 0 : usage.promptTokens()) + (usage == null ? 0 : usage.completionTokens()),
+                    usage == null ? 0 : usage.promptTokens(),
+                    usage == null ? 0 : usage.completionTokens(),
+                    usage == null ? 0 : usage.totalTokens(),
                     maxLoopTokens, System.currentTimeMillis() - loopStart);
             ChatResponse resp;
             // 每次模型调用的耗时与本次 token 增量（用于可观测性）
@@ -427,6 +430,7 @@ public class VueProjectAgent {
             long inDelta = (usage == null ? 0 : usage.promptTokens()) - beforeIn;
             long outDelta = (usage == null ? 0 : usage.completionTokens()) - beforeOut;
             aiCallListener.onSuccess(ctx, finishReasonOf(resp), inDelta, outDelta, callMs);
+            logRoundUsage("framework", stepCount, inDelta, outDelta, callMs);
             AssistantMessage output = resp.getResult().getOutput();
             // 工具由框架在 stream 内部自动执行（工具回调已通过 options 注册），聚合响应不含工具调用。
             // 模型直接返回文本时记下概述并结束本层循环（工具循环发生在一次流式调用内）。
@@ -486,8 +490,10 @@ public class VueProjectAgent {
             checkBudget(loopStart,
                     usage == null ? 0 : usage.promptTokens(),
                     usage == null ? 0 : usage.completionTokens(), maxLoopTokens);
-            log.info("[agent] round={} 模式=self 累计token={}/{} 已耗时={}ms", round,
-                    (usage == null ? 0 : usage.promptTokens()) + (usage == null ? 0 : usage.completionTokens()),
+            log.info("[agent] round={} 模式=self prompt={} completion={} 累计token={}/{} 已耗时={}ms", round,
+                    usage == null ? 0 : usage.promptTokens(),
+                    usage == null ? 0 : usage.completionTokens(),
+                    usage == null ? 0 : usage.totalTokens(),
                     maxLoopTokens, System.currentTimeMillis() - loopStart);
 
             long callStart = System.currentTimeMillis();
@@ -508,10 +514,11 @@ public class VueProjectAgent {
             if (usage != null) {
                 usage.accumulate(resp);
             }
-            aiCallListener.onSuccess(ctx, finishReasonOf(resp),
-                    (usage == null ? 0 : usage.promptTokens()) - beforeIn,
-                    (usage == null ? 0 : usage.completionTokens()) - beforeOut,
-                    System.currentTimeMillis() - callStart);
+            long callMs = System.currentTimeMillis() - callStart;
+            long inDelta = (usage == null ? 0 : usage.promptTokens()) - beforeIn;
+            long outDelta = (usage == null ? 0 : usage.completionTokens()) - beforeOut;
+            aiCallListener.onSuccess(ctx, finishReasonOf(resp), inDelta, outDelta, callMs);
+            logRoundUsage("self", round, inDelta, outDelta, callMs);
 
             AssistantMessage out = resp.getResult().getOutput();
             // ① assistant 消息（含 toolCalls）必须入历史，否则下一轮模型看不到自己调过工具
@@ -541,6 +548,18 @@ public class VueProjectAgent {
                 break;
             }
         }
+    }
+
+    /**
+     * 单轮模型调用结束后的用量打点（S5-3 ③）：本轮 prompt / completion 分列。
+     *
+     * <p>与轮次开始前的累计打点配合，可同时得到「本轮用量」与「累计用量」。之所以必须单列 prompt：
+     * ③ 的判据是「末轮 promptTokens ÷ 首轮 promptTokens」，而轮次<b>开始前</b>的打点记的是"进入本轮时"
+     * 的累计值 —— 末轮自身的用量在那一行里根本不存在（循环因收敛而结束，不会再打印下一行），只能在这里记。
+     */
+    private static void logRoundUsage(String mode, int round, long promptDelta, long completionDelta, long callMs) {
+        log.info("[agent] round={} 模式={} 本轮prompt={} 本轮completion={} total={} 调用耗时={}ms",
+                round, mode, promptDelta, completionDelta, promptDelta + completionDelta, callMs);
     }
 
     private String finishReasonOf(ChatResponse resp) {
