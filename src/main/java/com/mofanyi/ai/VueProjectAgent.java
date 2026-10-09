@@ -49,10 +49,15 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 
 /**
- * 通用代码生成 Agent：通过手动 tool-calling loop 逐文件生成 html / multi_file / vue 三种工程。
- * 每轮让模型调用 writeFile 工具写一个文件（需要图片时先调 searchImage 获取 COS 图片 URL），
- * 写完再调用 finish 结束，突破单次输出 token 上限，且能逐文件回调进度（供 SSE 推送前端）。
- * 不使用 ChatClient 的自动工具循环，改用 ChatModel.call 手动控制，以便拿到逐文件进度。
+ * 通用代码生成 Agent：生成 html / multi_file / vue 三种工程。
+ *
+ * <p><b>工具循环的真实形态（勿被旧注释误导）</b>：工具由框架在**一次 {@code chatModel.stream()} 内部**
+ * 自动执行（`DefaultToolCallingChatOptions` 默认开启内部工具执行），模型在一次调用里自行决定写哪些文件、
+ * 何时调用 finish。外层 {@code runToolLoop} 的 for 循环在首次成功后即 break，实际只承担
+ * <b>异常重试</b>与<b>取消/预算检查</b>，并不是"一轮一个文件"的逐步循环。
+ *
+ * <p>之所以用 {@code stream()} 而非 {@code call()}：为了拿到模型的 reasoning 增量（透传给前端）。
+ * 逐文件进度来自 writeFile 工具回调，与是否自管循环无关。
  */
 @Slf4j
 @Component
