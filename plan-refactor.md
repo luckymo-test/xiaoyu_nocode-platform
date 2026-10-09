@@ -323,6 +323,58 @@ surefire 已在 `spring-boot-starter-test` 中，无需新增依赖。
 
 **`AppServiceImpl`（576 行）** 按职责拆为：`AppDeployService`（含 `doDeploy`）、`AppFeaturedService`（精选审核）、`AppQueryService`（分页/QueryWrapper）、`AppConverter`（VO 转换）、`AppRecycleService`（回收站/物理删除）。
 
+#### S5 验收标准（自管循环）—— 本步是"行为变更"，不能沿用前四步的判据
+
+前四步的判据是"日志与产出跟改动前一致"；而 S5 的目的是**改变**生成过程（让逐步预算真正生效）。
+用它自己的话讲：**"成功"和"回归"在观测上必须能分开**，所以另立标准。
+
+**① 可回滚（最重要）**
+
+- 自管循环做成开关：`codegen.agent.self-managed-loop.enabled`，**默认 false**（新旧路径并行存在，不是替换）
+- 判据：开关 false 时行为与改动前一致；true 时走新路径
+- 理由：行为变更若不能一键退回，一旦出问题只能回滚整个提交——把风险从"整次重构"缩小到"一个开关"
+
+**② 预算真正生效（S5 存在的唯一理由）**
+
+- 新增可观测：每轮开始前打印 `[agent] round=N 累计token=X/上限Y 已耗时=Zs`
+- 判据（可证伪）：构造超预算场景，确认**在轮次之间被拦下**，且
+  `totalTokens ≤ 上限 + 单轮最大增量`（而不是现状的"整轮烧完才检查"）
+- **现状反证数据**：三次实测 `218313` / `276833` / `288824`，均 > 20w 上限却未拦下
+
+**③ 上下文增长被压住（附加收益）**
+
+- 判据：同一复杂 prompt，**末轮 promptTokens ÷ 首轮 promptTokens ≤ K**（K 需实测标定，初值 3）
+- 做法：先跑一次记录**改动前**的比值作为基线，才有可比性
+
+**④ 现有能力不退化**
+
+- `reasoning` 透传（SSE `reasoning` 事件）仍在
+- 逐文件进度（SSE `agent_progress`）仍在，且文件名/内容正确
+- `[spec] 注入` / `[scan]` / `[verify]` 链路不变
+- token 三数对账仍成立（`prompt + completion == total`）
+
+**⑤ 四条回归**
+
+生成 / 可视化修改 / **停止生成（仍能在一次模型调用内中断）** / 渲染验证
+
+**⑥ 性能与质量**
+
+- 总耗时与改动前同量级（±30%）
+- 同 prompt 产物：文件数、图片数、渲染验证结果不劣于改动前
+
+**必须接管的框架职责（提前列明，避免漏项）**
+
+| # | 职责 | 备注 |
+|---|---|---|
+| 1 | 解析模型的 `tool_calls`（名字 + 参数 JSON） | |
+| 2 | 执行工具回调（writeFile / readFile / searchImage / diagram / finish） | 回调里不能抛异常终止生成（见 development-notes #68） |
+| 3 | 把 assistant 的 tool_calls 与工具结果成对写回历史 | **风险最高**：顺序/配对错会导致模型困惑或 API 报错 |
+| 4 | 终止条件（无 tool_calls，或 finish 已调用） | 对应现在的 `MAX_STEPS` 与 `finished` |
+| 5 | 工具异常处理**必须与现状一致** | 吞成工具错误结果喂回模型，不能改成向上抛 |
+| 6 | 关闭框架内部工具执行 | `internalToolExecutionEnabled=false` |
+
+> **风险最高的是第 3 条**（历史构造）：tool_calls 与 tool 结果必须成对且顺序正确。这类错误**单测很难覆盖**——只能靠真实生成暴露，这也正是 S5 必须独占一轮、且必须看真实产物的原因。
+
 ### 7.2 收敛重复代码
 
 | 重复项 | 现状 | 改法 |
