@@ -287,6 +287,15 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
     }
 
     @Override
+    public int failStaleGenerating() {
+        App update = new App();
+        update.setGenerateStatus(AppGenerateStatusEnum.FAILED.getValue());
+        // 逻辑删除过滤默认生效，只回收未删除的记录；单实例下启动时任务表必为空，故全部 generating 都是僵尸
+        return this.mapper.updateByQuery(update,
+                QueryWrapper.create().eq("generateStatus", AppGenerateStatusEnum.GENERATING.getValue()));
+    }
+
+    @Override
     public boolean unDeployApp(long id, User loginUser) {
         ThrowUtils.throwIf(id <= 0, ErrorCode.PARAMS_ERROR);
         ThrowUtils.throwIf(loginUser == null || loginUser.getId() == null, ErrorCode.NOT_LOGIN_ERROR);

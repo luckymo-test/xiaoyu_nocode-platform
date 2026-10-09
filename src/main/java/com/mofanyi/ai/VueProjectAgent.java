@@ -6,6 +6,7 @@ import com.mofanyi.ai.model.VueFileResult;
 import com.mofanyi.ai.model.VueProjectResult;
 import com.mofanyi.ai.memory.AgentMemoryService;
 import com.mofanyi.ai.memory.AppSpecService;
+import com.mofanyi.ai.task.GenerationTaskRegistry;
 import com.mofanyi.ai.tools.AgentProgressListener;
 import com.mofanyi.ai.tools.DiagramTool;
 import com.mofanyi.ai.tools.FinishTool;
@@ -70,6 +71,7 @@ public class VueProjectAgent {
     private final CodeFileWriteService codeFileWriteService;
     private final AgentMemoryService agentMemoryService;
     private final AppSpecService appSpecService;
+    private final GenerationTaskRegistry taskRegistry;
     private final com.mofanyi.mapper.AppImageMapper appImageMapper;
     private final SiteImageService siteImageService;
     private final WriteFileTool writeFileTool;
@@ -88,6 +90,7 @@ public class VueProjectAgent {
                            CodeFileWriteService codeFileWriteService,
                            AgentMemoryService agentMemoryService,
                            AppSpecService appSpecService,
+                           GenerationTaskRegistry taskRegistry,
                            com.mofanyi.mapper.AppImageMapper appImageMapper,
                            SiteImageService siteImageService,
                            WriteFileTool writeFileTool,
@@ -105,6 +108,7 @@ public class VueProjectAgent {
         this.codeFileWriteService = codeFileWriteService;
         this.agentMemoryService = agentMemoryService;
         this.appSpecService = appSpecService;
+        this.taskRegistry = taskRegistry;
         this.appImageMapper = appImageMapper;
         this.siteImageService = siteImageService;
         this.writeFileTool = writeFileTool;
@@ -591,6 +595,9 @@ public class VueProjectAgent {
                 continue;
             }
             consecutiveFailures = 0;
+            // 手动停止检查：必须放在模型调用<b>返回之后</b>。
+            // 工具回调里抛异常会被框架吞成"工具错误结果"喂回模型，只有在此处中断才真正终止生成。
+            taskRegistry.checkCancelled(appId);
             accumulateUsage(resp, usage);
             // 可观测性：记录本次调用（成功）
             long callMs = System.currentTimeMillis() - callStart;

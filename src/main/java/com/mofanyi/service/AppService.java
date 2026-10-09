@@ -196,6 +196,14 @@ public interface AppService extends IService<App> {
     void updateGenerateStatus(long id, String status);
 
     /**
+     * 回收"卡在 generating"的僵尸记录（进程崩溃/异常退出遗留）。
+     * 单实例部署下，应用启动时内存中没有任何生成任务，故所有 generating 记录都是上次进程遗留，统一置为 failed。
+     *
+     * @return 回收的记录数
+     */
+    int failStaleGenerating();
+
+    /**
      * 取消部署（下线）自己的应用
      *
      * @param id        应用 id

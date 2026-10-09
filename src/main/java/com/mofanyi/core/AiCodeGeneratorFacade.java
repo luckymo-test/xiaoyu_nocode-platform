@@ -2,6 +2,9 @@ package com.mofanyi.core;
 
 import cn.hutool.core.util.StrUtil;
 import com.mofanyi.ai.VueProjectAgent;
+import com.mofanyi.ai.task.GenerationCancelledException;
+import com.mofanyi.ai.task.GenerationTask;
+import com.mofanyi.ai.task.GenerationTaskRegistry;
 import com.mofanyi.exception.ErrorCode;
 import com.mofanyi.exception.ThrowUtils;
 import com.mofanyi.model.enums.AppGenerateStatusEnum;
@@ -10,10 +13,8 @@ import com.mofanyi.model.vo.AiCodeGenResultVO;
 import com.mofanyi.service.AppService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
-import reactor.core.Disposable;
 
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadPoolExecutor;
 
 /**
@@ -25,14 +26,13 @@ import java.util.concurrent.ThreadPoolExecutor;
 @Component
 public class AiCodeGeneratorFacade {
 
-    /**
-     * 进行中的生成任务：appId → Disposable
-     */
-    private static final Map<Long, Disposable> GENERATING_TASKS = new ConcurrentHashMap<>();
-
     private final CodeFileWriteService codeFileWriteService;
     private final AppService appService;
     private final VueProjectAgent vueProjectAgent;
+    /**
+     * 生成任务注册表：负责 appId 级互斥与"停止生成"的取消句柄
+     */
+    private final GenerationTaskRegistry taskRegistry;
     /**
      * Vue 工程生成线程池（Spring 容器管理，参数见 thread-pool.vue 配置）
      */
@@ -41,10 +41,12 @@ public class AiCodeGeneratorFacade {
     public AiCodeGeneratorFacade(CodeFileWriteService codeFileWriteService,
                                  AppService appService,
                                  VueProjectAgent vueProjectAgent,
+                                 GenerationTaskRegistry taskRegistry,
                                  ThreadPoolExecutor vueThreadPoolExecutor) {
         this.codeFileWriteService = codeFileWriteService;
         this.appService = appService;
         this.vueProjectAgent = vueProjectAgent;
+        this.taskRegistry = taskRegistry;
         this.vueThreadPoolExecutor = vueThreadPoolExecutor;
     }
 
@@ -57,16 +59,20 @@ public class AiCodeGeneratorFacade {
      */
     public AiCodeGenResultVO generateHtmlProject(String userMessage, Long appId) {
         checkGenerateParams(userMessage, appId);
-        appService.updateGenerateStatus(appId, AppGenerateStatusEnum.GENERATING.getValue());
+        GenerationTask task = acquireOrThrow(appId, "html");
         try {
+            task.bind(Thread.currentThread());
+            appService.updateGenerateStatus(appId, AppGenerateStatusEnum.GENERATING.getValue());
             VueProjectAgent.GenerateResult result = vueProjectAgent.generate(CodeGenTypeEnum.HTML, appId, userMessage, callContext(appId, "html"), null);
             appService.updateGenerateStatus(appId, AppGenerateStatusEnum.DONE.getValue());
             AiCodeGenResultVO vo = readResult(CodeGenTypeEnum.HTML, appId);
             applyUsage(vo, result);
             return vo;
         } catch (RuntimeException e) {
-            appService.updateGenerateStatus(appId, AppGenerateStatusEnum.FAILED.getValue());
+            appService.updateGenerateStatus(appId, failureStatus(e));
             throw e;
+        } finally {
+            taskRegistry.release(appId, task);
         }
     }
 
@@ -79,16 +85,20 @@ public class AiCodeGeneratorFacade {
      */
     public AiCodeGenResultVO generateMultiFileProject(String userMessage, Long appId) {
         checkGenerateParams(userMessage, appId);
-        appService.updateGenerateStatus(appId, AppGenerateStatusEnum.GENERATING.getValue());
+        GenerationTask task = acquireOrThrow(appId, "multi_file");
         try {
+            task.bind(Thread.currentThread());
+            appService.updateGenerateStatus(appId, AppGenerateStatusEnum.GENERATING.getValue());
             VueProjectAgent.GenerateResult result = vueProjectAgent.generate(CodeGenTypeEnum.MULTI_FILE, appId, userMessage, callContext(appId, "multi_file"), null);
             appService.updateGenerateStatus(appId, AppGenerateStatusEnum.DONE.getValue());
             AiCodeGenResultVO vo = readResult(CodeGenTypeEnum.MULTI_FILE, appId);
             applyUsage(vo, result);
             return vo;
         } catch (RuntimeException e) {
-            appService.updateGenerateStatus(appId, AppGenerateStatusEnum.FAILED.getValue());
+            appService.updateGenerateStatus(appId, failureStatus(e));
             throw e;
+        } finally {
+            taskRegistry.release(appId, task);
         }
     }
 
@@ -121,8 +131,10 @@ public class AiCodeGeneratorFacade {
     private void streamGenerateByAgent(CodeGenTypeEnum type, String userMessage, Long appId, StreamCallback callback) {
         checkGenerateParams(userMessage, appId);
         ThrowUtils.throwIf(callback == null, ErrorCode.PARAMS_ERROR);
+        GenerationTask task = acquireOrThrow(appId, callTypeOf(type));
         appService.updateGenerateStatus(appId, AppGenerateStatusEnum.GENERATING.getValue());
         vueThreadPoolExecutor.execute(() -> {
+            task.bind(Thread.currentThread());
             try {
                 VueProjectAgent.GenerateResult result = vueProjectAgent.generate(type, appId, userMessage,
                         callContext(appId, callTypeOf(type)),
@@ -143,9 +155,11 @@ public class AiCodeGeneratorFacade {
                 applyUsage(vo, result);
                 callback.onDone(vo);
             } catch (RuntimeException e) {
-                appService.updateGenerateStatus(appId, AppGenerateStatusEnum.FAILED.getValue());
+                appService.updateGenerateStatus(appId, failureStatus(e));
                 log.error("[agent] 生成失败，type={}, appId={}", type, appId, e);
                 callback.onError(e);
+            } finally {
+                taskRegistry.release(appId, task);
             }
         });
     }
@@ -207,9 +221,7 @@ public class AiCodeGeneratorFacade {
      */
     public void stopGenerate(Long appId) {
         ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
-        Disposable disposable = GENERATING_TASKS.remove(appId);
-        if (disposable != null) {
-            disposable.dispose();
+        if (taskRegistry.cancel(appId)) {
             appService.updateGenerateStatus(appId, AppGenerateStatusEnum.STOPPED.getValue());
         }
     }
@@ -248,8 +260,10 @@ public class AiCodeGeneratorFacade {
     public void streamGenerateVueProject(String userMessage, Long appId, StreamCallback callback) {
         checkGenerateParams(userMessage, appId);
         ThrowUtils.throwIf(callback == null, ErrorCode.PARAMS_ERROR);
+        GenerationTask task = acquireOrThrow(appId, "vue");
         appService.updateGenerateStatus(appId, AppGenerateStatusEnum.GENERATING.getValue());
         vueThreadPoolExecutor.execute(() -> {
+            task.bind(Thread.currentThread());
             try {
                 VueProjectAgent.GenerateResult result = vueProjectAgent.generate(CodeGenTypeEnum.VUE, appId, userMessage,
                         callContext(appId, "vue"),
@@ -274,9 +288,11 @@ public class AiCodeGeneratorFacade {
                 applyUsage(vo, result);
                 callback.onDone(vo);
             } catch (RuntimeException e) {
-                appService.updateGenerateStatus(appId, AppGenerateStatusEnum.FAILED.getValue());
+                appService.updateGenerateStatus(appId, failureStatus(e));
                 log.error("[agent] 生成失败，type={}, appId={}", CodeGenTypeEnum.VUE, appId, e);
                 callback.onError(e);
+            } finally {
+                taskRegistry.release(appId, task);
             }
         });
     }
@@ -298,7 +314,9 @@ public class AiCodeGeneratorFacade {
         ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
         ThrowUtils.throwIf(StrUtil.isBlank(instruction), ErrorCode.PARAMS_ERROR, "修改意图不能为空");
         ThrowUtils.throwIf(callback == null, ErrorCode.PARAMS_ERROR);
+        GenerationTask task = acquireOrThrow(appId, "modify");
         vueThreadPoolExecutor.execute(() -> {
+            task.bind(Thread.currentThread());
             try {
                 long[] usage = new long[2];
                 vueProjectAgent.modifyGeneratedSite(type, appId, elementContext, instruction, usage,
@@ -323,6 +341,8 @@ public class AiCodeGeneratorFacade {
             } catch (RuntimeException e) {
                 log.error("[modify] 可视化修改失败，type={}, appId={}", type, appId, e);
                 callback.onError(e);
+            } finally {
+                taskRegistry.release(appId, task);
             }
         });
     }
@@ -367,8 +387,23 @@ public class AiCodeGeneratorFacade {
     }
 
     /**
-     * 校验生成接口入参
+     * 抢占 appId 的生成任务；已被占用时抛业务异常（同一应用互斥，见 plan-refactor P0-2）
      */
+    private GenerationTask acquireOrThrow(Long appId, String type) {
+        GenerationTask task = taskRegistry.tryAcquire(appId, type);
+        ThrowUtils.throwIf(task == null, ErrorCode.OPERATION_ERROR, "该应用正在生成或修改中，请稍候再试");
+        return task;
+    }
+
+    /**
+     * 失败时的目标状态：手动停止记为 stopped，其余记为 failed（见 plan-refactor P0-1）
+     */
+    private String failureStatus(RuntimeException e) {
+        return (e instanceof GenerationCancelledException
+                ? AppGenerateStatusEnum.STOPPED
+                : AppGenerateStatusEnum.FAILED).getValue();
+    }
+
     private void checkGenerateParams(String userMessage, Long appId) {
         ThrowUtils.throwIf(StrUtil.isBlank(userMessage), ErrorCode.PARAMS_ERROR, "用户需求不能为空");
         ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
