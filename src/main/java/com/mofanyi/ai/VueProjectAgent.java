@@ -29,6 +29,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.metadata.ChatGenerationMetadata;
 import org.springframework.ai.chat.metadata.ChatResponseMetadata;
@@ -373,6 +374,12 @@ public class VueProjectAgent {
                 finishTool.build(finished, description));
         var options = DefaultToolCallingChatOptions.builder().toolCallbacks(toolCallbacks).build();
 
+        // S5-2：开关开启时走自管循环（逐轮预算/取消检查才真正生效）
+        if (selfManagedLoopEnabled) {
+            runToolLoopSelfManaged(appId, messages, finished, description, usage, ctx, toolCallbacks);
+            return;
+        }
+
         // 连续异常计数：模型返回被截断（工具参数 JSON 不完整）等可恢复错误时重试，连续多次失败才终止
         int consecutiveFailures = 0;
         long loopStart = System.currentTimeMillis();
@@ -448,6 +455,91 @@ public class VueProjectAgent {
         long total = promptTokens + completionTokens;
         ThrowUtils.throwIf(total > MAX_LOOP_TOKENS, ErrorCode.OPERATION_ERROR,
                 "生成超出 token 预算（已 " + total + "，上限 " + MAX_LOOP_TOKENS + "），已终止");
+    }
+
+    /**
+     * 自管工具循环（S5-2，开关 {@code selfManagedLoopEnabled=true} 时启用）。
+     *
+     * <p>与"框架内部执行"的区别：关闭 {@code internalToolExecutionEnabled}，由本方法自己
+     * 解析 tool_calls、执行工具、把 assistant 消息与工具结果<b>成对</b>写回历史，
+     * 从而能在<b>每轮之间</b>做取消与预算检查——这才是 S5 的目的。
+     *
+     * <p><b>已知回退（方案 b）</b>：本路径用非流式 {@code call()}（tool_calls 天然完整），
+     * 但拿不到 {@code reasoning} 增量，开关开启时 SSE 的 reasoning 事件为空。
+     */
+    private void runToolLoopSelfManaged(Long appId, List<Message> messages, AtomicBoolean finished,
+                                        AtomicReference<String> description, TokenUsageAccumulator usage,
+                                        AiCallContext ctx, List<ToolCallback> toolCallbacks) {
+        var options = DefaultToolCallingChatOptions.builder()
+                .toolCallbacks(toolCallbacks)
+                .internalToolExecutionEnabled(false)   // 关键：不让框架执行工具，改由本方法执行
+                .build();
+        Map<String, ToolCallback> byName = new LinkedHashMap<>();
+        for (ToolCallback cb : toolCallbacks) {
+            byName.put(cb.getToolDefinition().name(), cb);
+        }
+        long loopStart = System.currentTimeMillis();
+        int consecutiveFailures = 0;
+        for (int round = 1; round <= MAX_STEPS; round++) {
+            taskRegistry.checkCancelled(appId);
+            checkBudget(loopStart,
+                    usage == null ? 0 : usage.promptTokens(),
+                    usage == null ? 0 : usage.completionTokens());
+            log.info("[agent] round={} 模式=self 累计token={}/{} 已耗时={}ms", round,
+                    (usage == null ? 0 : usage.promptTokens()) + (usage == null ? 0 : usage.completionTokens()),
+                    MAX_LOOP_TOKENS, System.currentTimeMillis() - loopStart);
+
+            long callStart = System.currentTimeMillis();
+            long beforeIn = usage == null ? 0 : usage.promptTokens();
+            long beforeOut = usage == null ? 0 : usage.completionTokens();
+            ChatResponse resp;
+            try {
+                resp = chatModel.call(new Prompt(messages, options));
+            } catch (RuntimeException e) {
+                aiCallListener.onFailure(ctx, e, System.currentTimeMillis() - callStart);
+                if (++consecutiveFailures >= 3) {
+                    throw e;
+                }
+                messages.add(new UserMessage("上一轮调用失败，请重试；内容较大时请拆小后再写。"));
+                continue;
+            }
+            consecutiveFailures = 0;
+            if (usage != null) {
+                usage.accumulate(resp);
+            }
+            aiCallListener.onSuccess(ctx, finishReasonOf(resp),
+                    (usage == null ? 0 : usage.promptTokens()) - beforeIn,
+                    (usage == null ? 0 : usage.completionTokens()) - beforeOut,
+                    System.currentTimeMillis() - callStart);
+
+            AssistantMessage out = resp.getResult().getOutput();
+            // ① assistant 消息（含 toolCalls）必须入历史，否则下一轮模型看不到自己调过工具
+            messages.add(out);
+            if (out.getText() != null && !out.getText().isBlank() && description.get().isBlank()) {
+                description.set(out.getText());
+            }
+            // ② 终止条件：模型不再请求工具
+            if (!out.hasToolCalls()) {
+                break;
+            }
+            // ③ 执行工具并成对写回（响应 id 必须与 ToolCall 一致）
+            List<ToolResponseMessage.ToolResponse> responses = new ArrayList<>();
+            for (AssistantMessage.ToolCall tc : out.getToolCalls()) {
+                ToolCallback callback = byName.get(tc.name());
+                String result;
+                try {
+                    result = callback == null ? "未知工具: " + tc.name() : callback.call(tc.arguments());
+                } catch (RuntimeException e) {
+                    // 与框架行为一致：工具异常吞成"工具结果"喂回模型，不向上抛（development-notes #68）
+                    result = "工具执行失败: " + e.getMessage();
+                }
+                responses.add(new ToolResponseMessage.ToolResponse(tc.id(), tc.name(), result));
+            }
+            messages.add(ToolResponseMessage.builder().responses(responses).build());
+            if (finished.get()) {
+                break;
+            }
+        }
     }
 
     private String finishReasonOf(ChatResponse resp) {
