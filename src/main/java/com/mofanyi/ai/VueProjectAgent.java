@@ -82,12 +82,7 @@ public class VueProjectAgent {
     private static final long MAX_LOOP_TOKENS = 200_000L;
 
     private final ChatModel chatModel;
-    private final String singleHtmlPrompt;
-    private final String multiFilePrompt;
-    private final String vuePrompt;
-    private final String vueFixPrompt;
-    private final String modifyPrompt;
-    private final String renderFixPrompt;
+    private final CodeGenPromptRegistry promptRegistry;
     private final CodeFileWriteService codeFileWriteService;
     private final AgentMemoryService agentMemoryService;
     private final AppSpecService appSpecService;
@@ -104,12 +99,7 @@ public class VueProjectAgent {
     private final AiCallListener aiCallListener;
 
     public VueProjectAgent(@Qualifier("openAiChatModel") ChatModel chatModel,
-                           String singleHtmlPrompt,
-                           String multiFilePrompt,
-                           @Qualifier("vuePrompt") String vuePrompt,
-                           @Qualifier("vueFixPrompt") String vueFixPrompt,
-                           @Qualifier("modifyPrompt") String modifyPrompt,
-                           @Qualifier("renderFixPrompt") String renderFixPrompt,
+                           CodeGenPromptRegistry promptRegistry,
                            CodeFileWriteService codeFileWriteService,
                            AgentMemoryService agentMemoryService,
                            AppSpecService appSpecService,
@@ -125,12 +115,7 @@ public class VueProjectAgent {
                            FinishTool finishTool,
                            AiCallListener aiCallListener) {
         this.chatModel = chatModel;
-        this.singleHtmlPrompt = singleHtmlPrompt;
-        this.multiFilePrompt = multiFilePrompt;
-        this.vuePrompt = vuePrompt;
-        this.vueFixPrompt = vueFixPrompt;
-        this.modifyPrompt = modifyPrompt;
-        this.renderFixPrompt = renderFixPrompt;
+        this.promptRegistry = promptRegistry;
         this.codeFileWriteService = codeFileWriteService;
         this.agentMemoryService = agentMemoryService;
         this.appSpecService = appSpecService;
@@ -191,7 +176,7 @@ public class VueProjectAgent {
         AtomicReference<String> description = new AtomicReference<>("");
 
         List<Message> messages = new ArrayList<>();
-        messages.add(new SystemMessage(promptForType(type)));
+        messages.add(new SystemMessage(promptRegistry.system(type)));
         // 注入"应用现状"（规格摘要 + 代码库索引）：续接任务时模型需要的是应用现状，而非聊天原文
         String specSection = appSpecService.buildSpecSection(type, appId);
         if (StrUtil.isNotBlank(specSection)) {
@@ -260,7 +245,7 @@ public class VueProjectAgent {
         AtomicReference<String> description = new AtomicReference<>("");
 
         List<Message> messages = new ArrayList<>();
-        messages.add(new SystemMessage(vueFixPrompt));
+        messages.add(new SystemMessage(promptRegistry.vueFix()));
         messages.add(new UserMessage("构建失败，错误日志如下：\n" + errorLog
                 + "\n\n当前工程相关文件内容：\n" + buildFilesContext(appId)
                 + "\n\n请修复导致报错的文件后调用 finish 结束。"));
@@ -291,7 +276,7 @@ public class VueProjectAgent {
         AtomicBoolean finished = new AtomicBoolean(false);
         AtomicReference<String> description = new AtomicReference<>("");
         List<Message> messages = new ArrayList<>();
-        messages.add(new SystemMessage(renderFixPrompt));
+        messages.add(new SystemMessage(promptRegistry.renderFix()));
         messages.add(new UserMessage("渲染验证问题清单：\n" + issueText
                 + "\n\n当前工程文件清单：\n" + buildFileIndex(type, appId)
                 + "\n\n请先 readFile 读取涉及的文件，最小改动后用 writeFile 覆盖，改完调用 finish。"));
@@ -330,7 +315,7 @@ public class VueProjectAgent {
         AtomicBoolean finished = new AtomicBoolean(false);
         AtomicReference<String> description = new AtomicReference<>("");
         List<Message> messages = new ArrayList<>();
-        messages.add(new SystemMessage(modifyPrompt));
+        messages.add(new SystemMessage(promptRegistry.modify()));
         String elementCtx = StrUtil.isBlank(elementContext) ? "（无具体元素，基于整体需求修改）" : elementContext;
         messages.add(new UserMessage("用户想修改当前页面。\n\n【目标元素上下文】\n" + elementCtx
                 + "\n\n【用户修改意图】\n" + instruction
@@ -541,17 +526,6 @@ public class VueProjectAgent {
             result.setVueResult(vueResult);
         }
         return result;
-    }
-
-    /**
-     * 按类型选择 system prompt
-     */
-    private String promptForType(CodeGenTypeEnum type) {
-        return switch (type) {
-            case HTML -> singleHtmlPrompt;
-            case MULTI_FILE -> multiFilePrompt;
-            case VUE -> vuePrompt;
-        };
     }
 
     /**
