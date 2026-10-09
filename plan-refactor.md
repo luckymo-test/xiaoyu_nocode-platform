@@ -329,7 +329,7 @@ surefire 已在 `spring-boot-starter-test` 中，无需新增依赖。
 
 | # | 标准 | 结论 | 证据 / 缺口 |
 |---|---|---|---|
-| ① | 可回滚开关 | ⚠️ **待验** | 开关已实现、true 路径跑通；**false 路径未实测**（即 S5-1 前的老路径，风险低但不等于验过） |
+| ① | 可回滚开关 | ✅ **通过** | true 路径见下方 S5-2/⑤ 证据；**false 路径已实测通过**（2026-10-10，`CODEGEN_SELF_MANAGED_LOOP` 未设，即默认 false），详见下方「① 的 false 路径证据」 |
 | ② | 预算真正生效 | ✅ **通过** | 上限临时调为 20000 后实测被拦下，详见下方时序证据 |
 | ③ | 上下文增长 | 🟡 **部分** | 逐轮累计首次可得：`0 → 10627 → 49200 → 88508 → 138975`（轮增量 10627 / 38573 / 39308 / 50467）。**但打点记的是 prompt+completion 累计**，不是单独 promptTokens → 要精确算"末轮÷首轮"比值需把打点拆成 prompt/completion 两列 |
 | ④ | 能力不退化 | 🟡 **一半通过** | `agent_progress` ✅ 实测推送（SSE 事件 `agent_progress` + `done`）；`reasoning` 🔴 上方路径为空（方案 b 取舍，已豁免） |
@@ -364,7 +364,21 @@ HTTP 200 -> {"code":50001,"message":"生成超出 token 预算（已 41966，上
 
 **取消粒度变细（改进，非仅不退化）**：框架路径只能在整个生成返回后中断（实测 23.6s）；自管路径每轮开始检查，**一轮内即可中断**。
 
-**剩余待验（不影响 S5 结论）**：① 开关 false 路径回归；③ 打点拆成 promptTokens/completionTokens 两列后重算比值；④ `reasoning`（方案 b 下为空，已豁免，要恢复需做方案 a 的流式累加器）。
+**① 的 false 路径证据（开关关闭 = 框架内部循环，2026-10-10 00:34–00:41）**
+
+重启时**不带** `CODEGEN_SELF_MANAGED_LOOP`（走默认 false），同一应用 / `html` 类型，三条回归实测：
+
+| 回归 | 证据 |
+|---|---|
+| 生成 | HTTP 200；日志 `[agent] round=1 模式=framework 累计token=0/200000` + `[agent] tool-loop 结束：外层 step=1，写文件数=3` —— 与 S5-1 之前的形态逐字一致（单次 `stream()` 内框架自跑完全部工具调用）；`[scan] 扫描到 19 个图片 URL` |
+| 渲染验证 | `[verify] 3/3 档视口存在问题，转异步修复`（`verify-before.json`：三档各 1 处图裂）→ 异步修复 → `[verify] 异步修复完成，复验：3 档视口全部通过`（`verify-after.json`：三档 broken=0 / overflow=false） |
+| 停止生成 | `[task] 已请求停止生成：appId=… worker=http-nio-8124-exec-4` → `GenerationCancelledException: 生成已被手动停止`；HTTP `{"code":50001,"message":"生成已被手动停止"}`；`GET /api/app/get/vo` 返回 `generateStatus=stopped`。停止调用到生成结束 **98.4s ≈ 一次模型调用时长**，与"框架路径只能在整个生成返回后中断"一致（true 路径为一轮内即可中断） |
+
+**结论**：开关确实可回滚——false 路径的循环形态、落盘结果、渲染验证与取消语义均与改动前一致；true 路径才是行为变更。① 的判据（"false 时行为与改动前一致；true 时走新路径"）两条都满足。
+
+> 附注：本轮模型时延偏高（单次流式调用 238s），与开关无关——两条路径执行的是同一次模型调用，差异只在循环由谁驱动；⑥ 的性能对照以基线同口径计时，不受此影响。
+
+**剩余待验（不影响 S5 结论）**：③ 打点拆成 promptTokens/completionTokens 两列后重算比值；④ `reasoning`（方案 b 下为空，已豁免，要恢复需做方案 a 的流式累加器）。
 
 **运维注意**：`codegen.agent.self-managed-loop.enabled` 默认 `false`（走框架循环）；`codegen.agent.max-loop-tokens` 默认 `200000`，两者都可用环境变量覆盖。
 
