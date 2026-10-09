@@ -3,6 +3,7 @@ package com.mofanyi.ai.tools;
 import com.mofanyi.core.CodeFileWriteService;
 import com.mofanyi.core.ToolPaths;
 import com.mofanyi.ai.task.GenerationTaskRegistry;
+import com.mofanyi.core.ToolRiskRegistry;
 import com.mofanyi.model.enums.CodeGenTypeEnum;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.function.FunctionToolCallback;
@@ -21,10 +22,13 @@ public class WriteFileTool {
 
     private final CodeFileWriteService codeFileWriteService;
     private final GenerationTaskRegistry taskRegistry;
+    private final ToolRiskRegistry toolRiskRegistry;
 
-    public WriteFileTool(CodeFileWriteService codeFileWriteService, GenerationTaskRegistry taskRegistry) {
+    public WriteFileTool(CodeFileWriteService codeFileWriteService, GenerationTaskRegistry taskRegistry,
+                         ToolRiskRegistry toolRiskRegistry) {
         this.codeFileWriteService = codeFileWriteService;
         this.taskRegistry = taskRegistry;
+        this.toolRiskRegistry = toolRiskRegistry;
     }
 
     public ToolCallback build(CodeGenTypeEnum type, Long appId, Map<String, String> files,
@@ -36,6 +40,8 @@ public class WriteFileTool {
                 return "生成已被用户停止，请立即调用 finish 结束，不要再写入任何文件。";
             }
             ToolPaths.validate(req.path());
+            // 工具风险分级：写文件的大小上限（plan-agent-engineering 第四章）
+            toolRiskRegistry.checkWriteContent("writeFile", req.content());
             if (req.content() == null) {
                 return "内容为空，未写入";
             }

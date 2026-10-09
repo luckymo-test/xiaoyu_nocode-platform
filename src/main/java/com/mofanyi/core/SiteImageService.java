@@ -23,17 +23,20 @@ public class SiteImageService {
     private final CosManager cosManager;
     private final CosClientConfig cosClientConfig;
     private final com.mofanyi.mapper.AppImageMapper appImageMapper;
+    private final ToolRiskRegistry toolRiskRegistry;
 
     public SiteImageService(PexelsClient pexelsClient,
                             PixabayClient pixabayClient,
                             CosManager cosManager,
                             CosClientConfig cosClientConfig,
-                            com.mofanyi.mapper.AppImageMapper appImageMapper) {
+                            com.mofanyi.mapper.AppImageMapper appImageMapper,
+                            ToolRiskRegistry toolRiskRegistry) {
         this.pexelsClient = pexelsClient;
         this.pixabayClient = pixabayClient;
         this.cosManager = cosManager;
         this.cosClientConfig = cosClientConfig;
         this.appImageMapper = appImageMapper;
+        this.toolRiskRegistry = toolRiskRegistry;
     }
 
     /**
@@ -137,6 +140,8 @@ public class SiteImageService {
      * 下载图片到本地临时文件，上传 COS，返回 COS URL；上传后删除本地临时文件
      */
     public String downloadAndUpload(Long appId, String imageUrl) throws Exception {
+        // 工具风险分级：searchImage 是对外网络请求，出站地址必须在白名单内（防 SSRF）
+        toolRiskRegistry.checkOutboundUrl(imageUrl);
         byte[] bytes = pexelsClient.downloadImage(imageUrl);
         return uploadBytes(appId, bytes, ".jpg");
     }
