@@ -18,6 +18,7 @@ import com.mofanyi.core.AiCallListener;
 import com.mofanyi.core.CodeFileWriteService;
 import com.mofanyi.core.ProjectCodeScanner;
 import com.mofanyi.core.ImageAutoFiller;
+import com.mofanyi.core.TokenUsageAccumulator;
 import com.mofanyi.core.SiteImageService;
 import com.mofanyi.core.ToolPaths;
 import com.mofanyi.exception.ErrorCode;
@@ -94,6 +95,7 @@ public class VueProjectAgent {
     private final ManualEditService manualEditService;
     private final ProjectCodeScanner projectCodeScanner;
     private final ImageAutoFiller imageAutoFiller;
+    private final TokenUsageAccumulator tokenUsageAccumulator;
     private final com.mofanyi.mapper.AppImageMapper appImageMapper;
     private final WriteFileTool writeFileTool;
     private final ReadFileTool readFileTool;
@@ -116,6 +118,7 @@ public class VueProjectAgent {
                            ManualEditService manualEditService,
                            ProjectCodeScanner projectCodeScanner,
                            ImageAutoFiller imageAutoFiller,
+                           TokenUsageAccumulator tokenUsageAccumulator,
                            com.mofanyi.mapper.AppImageMapper appImageMapper,
                            WriteFileTool writeFileTool,
                            ReadFileTool readFileTool,
@@ -137,6 +140,7 @@ public class VueProjectAgent {
         this.manualEditService = manualEditService;
         this.projectCodeScanner = projectCodeScanner;
         this.imageAutoFiller = imageAutoFiller;
+        this.tokenUsageAccumulator = tokenUsageAccumulator;
         this.appImageMapper = appImageMapper;
         this.writeFileTool = writeFileTool;
         this.readFileTool = readFileTool;
@@ -414,7 +418,7 @@ public class VueProjectAgent {
             taskRegistry.checkCancelled(appId);
             // 预算检查（plan-agent-engineering 第五章）
             checkBudget(loopStart, usage == null ? 0 : usage[0], usage == null ? 0 : usage[1]);
-            accumulateUsage(resp, usage);
+            tokenUsageAccumulator.accumulate(resp, usage);
             // 可观测性：记录本次调用（成功）
             long callMs = System.currentTimeMillis() - callStart;
             long inDelta = (usage == null ? 0 : usage[0]) - beforeIn;
@@ -519,25 +523,6 @@ public class VueProjectAgent {
                 .generations(List.of(new Generation(msg, genMetaRef.get())))
                 .metadata(metaRef.get() == null ? ChatResponseMetadata.builder().build() : metaRef.get())
                 .build();
-    }
-
-    /**
-     * 累加单轮模型响应的 token 用量到 usage[0]=prompt、usage[1]=completion
-     */
-    private void accumulateUsage(ChatResponse resp, long[] usage) {
-        if (usage == null || resp == null || resp.getMetadata() == null) {
-            return;
-        }
-        var usageMeta = resp.getMetadata().getUsage();
-        if (usageMeta == null) {
-            return;
-        }
-        if (usageMeta.getPromptTokens() != null) {
-            usage[0] += usageMeta.getPromptTokens();
-        }
-        if (usageMeta.getCompletionTokens() != null) {
-            usage[1] += usageMeta.getCompletionTokens();
-        }
     }
 
     /**
