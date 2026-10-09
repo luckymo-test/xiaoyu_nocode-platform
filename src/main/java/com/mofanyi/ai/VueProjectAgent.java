@@ -63,6 +63,16 @@ public class VueProjectAgent {
      */
     private static final int MAX_STEPS = 20;
 
+    /**
+     * 单次生成的墙钟预算（默认 10 分钟）：超过即终止，避免任务长期占用 appId 互斥
+     */
+    private static final long MAX_LOOP_MILLIS = 600_000L;
+
+    /**
+     * 单次生成的累计 token 预算（prompt + completion），超过即终止
+     */
+    private static final long MAX_LOOP_TOKENS = 200_000L;
+
     private final ChatModel chatModel;
     private final String singleHtmlPrompt;
     private final String multiFilePrompt;
@@ -654,6 +664,8 @@ public class VueProjectAgent {
             // 手动停止检查：必须放在模型调用<b>返回之后</b>。
             // 工具回调里抛异常会被框架吞成"工具错误结果"喂回模型，只有在此处中断才真正终止生成。
             taskRegistry.checkCancelled(appId);
+            // 预算检查（plan-agent-engineering 第五章）
+            checkBudget(loopStart, usage == null ? 0 : usage[0], usage == null ? 0 : usage[1]);
             accumulateUsage(resp, usage);
             // 可观测性：记录本次调用（成功）
             long callMs = System.currentTimeMillis() - callStart;
@@ -675,6 +687,22 @@ public class VueProjectAgent {
     /**
      * 取响应的 finishReason（stop/length/tool_calls 等），取不到返回 null
      */
+    /**
+     * 预算校验：超出墙钟或累计 token 预算即抛业务异常终止（区别于"失败"，提示语里说明是超预算）。
+     *
+     * <p><b>生效范围（重要）</b>：框架在一次 {@code stream()} 内自己跑完工具循环，外层 for 首次成功即
+     * {@code break}，所以这里主要拦住"多轮异常重试"与"超长单轮"；真正的逐步预算需要改成自管循环
+     * （plan-refactor 7.1 拆类时一并做）。取消检查同理。
+     */
+    static void checkBudget(long loopStartMillis, long promptTokens, long completionTokens) {
+        long elapsed = System.currentTimeMillis() - loopStartMillis;
+        ThrowUtils.throwIf(elapsed > MAX_LOOP_MILLIS, ErrorCode.OPERATION_ERROR,
+                "生成超出时限（已 " + (elapsed / 1000) + "s，上限 " + (MAX_LOOP_MILLIS / 1000) + "s），已终止");
+        long total = promptTokens + completionTokens;
+        ThrowUtils.throwIf(total > MAX_LOOP_TOKENS, ErrorCode.OPERATION_ERROR,
+                "生成超出 token 预算（已 " + total + "，上限 " + MAX_LOOP_TOKENS + "），已终止");
+    }
+
     private String finishReasonOf(ChatResponse resp) {
         try {
             if (resp == null || resp.getResult() == null || resp.getResult().getMetadata() == null) {
