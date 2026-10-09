@@ -116,7 +116,7 @@ Preflight(能力盘点：图源可达? node 可用? COS 可写?)
                                   交付(落盘 / 部署 / 封面)
 ```
 
-### 6.2 交付前渲染验证（最高价值，P0）
+### 6.2 交付前渲染验证（最高价值，P0）✅ 已落地
 
 复用已有 Selenium 依赖（`CoverImageService` 已用 Chrome/Edge + headless）：
 
@@ -126,6 +126,20 @@ Preflight(能力盘点：图源可达? node 可用? COS 可写?)
 4. 清单喂给修复 agent（把 `fixBuildError` 从"编译错误"泛化为"渲染错误修复"），修完**重新渲染**，最多 N 轮。
 
 **接入点**：生成流程末尾（`autoFillImages` 之后或替换它）；与 vue 的构建失败修复并列，构成统一的"验证 → 修复"回路。
+
+**落地状态：✅ 已实现并实测**
+
+- 新增 `core/BrowserFactory`（抽取驱动创建，与 `CoverImageService` 共用）与 `core/RenderVerifier`：
+  1. 起**一个**无头会话，逐视口 `setSize` 到 1440 / 768 / 375（比每档各起一次会话快得多）；
+  2. 页面内取证：图裂/空 `src`、横向溢出（`scrollWidth > clientWidth`）、可见文本过少（疑似空白页）、控制台严重错误；
+  3. 报告落盘 `.agent/verify.json`（阶段产物，可追溯）；
+  4. 有问题则把报告文本喂给 `VueProjectAgent.fixRenderIssues`（新增 `codegen_render_fix_prompt.txt`），修完**复验**一次。
+- 接入 `AiCodeGeneratorFacade` 的 3 条生成路径；开关 `codegen.verify.enabled`（默认 true）。
+- **失败不阻断交付**：浏览器不可用、验证异常、修复失败都只记日志，生成结果照常返回。
+- 实测：正常页面「3 档视口全部通过」；故意构造的页面（坏图 + 2000px 宽元素）「3/3 档视口存在问题」，图裂与横向溢出均被检出。
+
+> 局限：通过 `file://` 加载，ES module / `fetch` 类页面可能加载失败；渲染修复的进度暂未推到前端。
+> 附带修复：本机 `msedgedriver`(151) 与 Edge(153) 版本不匹配，已下载匹配驱动到 Selenium 缓存——该链路此前也是坏的（影响封面截图）。
 
 ### 6.3 素材先行（P1）
 
@@ -166,7 +180,7 @@ Preflight(能力盘点：图源可达? node 可用? COS 可写?)
 
 | 期 | 内容 | 依赖 |
 |---|---|---|
-| 一期 | 交付前渲染验证（P0） | 无（Selenium 已在） |
+| 一期 ✅ | 交付前渲染验证（P0） | 无（Selenium 已在） |
 | 二期 | 素材先行 + 质量闸门 + 加工规范化 | 一期验证回路（用于复核页面） |
 | 三期 | Preflight 能力盘点 + 阶段产物可观测 | 前两期 |
 

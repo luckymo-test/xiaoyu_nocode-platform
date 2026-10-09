@@ -41,6 +41,11 @@ public class CodeGenPromptConfig {
         return loadPrompt("prompt/codegen_modify_prompt.txt");
     }
 
+    @Bean
+    public String renderFixPrompt() {
+        return loadPrompt("prompt/codegen_render_fix_prompt.txt");
+    }
+
     private String loadPrompt(String path) {
         try {
             ClassPathResource resource = new ClassPathResource(path);

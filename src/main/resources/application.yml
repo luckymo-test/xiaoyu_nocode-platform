@@ -64,6 +64,9 @@ codegen:
     tmp-root: ${CODEGEN_TMP_ROOT:D:\IDEAproject\xiaoyu_zerocode\tmp}
     deploy-root: ${CODEGEN_DEPLOY_ROOT:D:\IDEAproject\xiaoyu_zerocode\deploy}
     domain: ${CODEGEN_DOMAIN:http://localhost}
+  # 交付前渲染验证（plan-agent-pipeline P0-4）：无头浏览器 3 档视口实拍检查图裂/横向溢出/空白页/console 报错
+  verify:
+    enabled: ${CODEGEN_VERIFY_ENABLED:true}
 
 # 封面截图配置（默认值，实际按环境在 profile 文件中覆盖）
 screenshot:
@@ -102,4 +105,3 @@ springdoc:
     - group: 'default'
       paths-to-match: '/**'
       packages-to-scan: com.mofanyi.controller
-

@@ -33,6 +33,13 @@ public class AiCodeGeneratorFacade {
      * 生成任务注册表：负责 appId 级互斥与"停止生成"的取消句柄
      */
     private final GenerationTaskRegistry taskRegistry;
+    private final RenderVerifier renderVerifier;
+
+    /**
+     * 是否开启交付前渲染验证（plan-agent-pipeline P0-4）
+     */
+    @org.springframework.beans.factory.annotation.Value("${codegen.verify.enabled:true}")
+    private boolean renderVerifyEnabled;
     /**
      * Vue 工程生成线程池（Spring 容器管理，参数见 thread-pool.vue 配置）
      */
@@ -42,11 +49,13 @@ public class AiCodeGeneratorFacade {
                                  AppService appService,
                                  VueProjectAgent vueProjectAgent,
                                  GenerationTaskRegistry taskRegistry,
+                                 RenderVerifier renderVerifier,
                                  ThreadPoolExecutor vueThreadPoolExecutor) {
         this.codeFileWriteService = codeFileWriteService;
         this.appService = appService;
         this.vueProjectAgent = vueProjectAgent;
         this.taskRegistry = taskRegistry;
+        this.renderVerifier = renderVerifier;
         this.vueThreadPoolExecutor = vueThreadPoolExecutor;
     }
 
@@ -65,6 +74,7 @@ public class AiCodeGeneratorFacade {
             appService.updateGenerateStatus(appId, AppGenerateStatusEnum.GENERATING.getValue());
             VueProjectAgent.GenerateResult result = vueProjectAgent.generate(CodeGenTypeEnum.HTML, appId, userMessage, callContext(appId, "html"), null);
             appService.updateGenerateStatus(appId, AppGenerateStatusEnum.DONE.getValue());
+            verifyAndFixIfNeeded(CodeGenTypeEnum.HTML, appId);
             AiCodeGenResultVO vo = readResult(CodeGenTypeEnum.HTML, appId);
             applyUsage(vo, result);
             return vo;
@@ -91,6 +101,7 @@ public class AiCodeGeneratorFacade {
             appService.updateGenerateStatus(appId, AppGenerateStatusEnum.GENERATING.getValue());
             VueProjectAgent.GenerateResult result = vueProjectAgent.generate(CodeGenTypeEnum.MULTI_FILE, appId, userMessage, callContext(appId, "multi_file"), null);
             appService.updateGenerateStatus(appId, AppGenerateStatusEnum.DONE.getValue());
+            verifyAndFixIfNeeded(CodeGenTypeEnum.MULTI_FILE, appId);
             AiCodeGenResultVO vo = readResult(CodeGenTypeEnum.MULTI_FILE, appId);
             applyUsage(vo, result);
             return vo;
@@ -151,6 +162,7 @@ public class AiCodeGeneratorFacade {
                             }
                         });
                 appService.updateGenerateStatus(appId, AppGenerateStatusEnum.DONE.getValue());
+                verifyAndFixIfNeeded(type, appId);
                 AiCodeGenResultVO vo = readResult(type, appId);
                 applyUsage(vo, result);
                 callback.onDone(vo);
@@ -384,6 +396,33 @@ public class AiCodeGeneratorFacade {
         }
         sb.append('"');
         return sb.toString();
+    }
+
+    /**
+     * 交付前渲染验证 + 一次修复回路（plan-agent-pipeline P0-4）。
+     *
+     * <p>验证或修复失败**不影响生成结果返回**——只记日志与落盘报告；
+     * 仅在浏览器可用且确实发现渲染问题时才触发修复。
+     */
+    private void verifyAndFixIfNeeded(CodeGenTypeEnum type, Long appId) {
+        if (!renderVerifyEnabled || type == null || type == CodeGenTypeEnum.VUE) {
+            return;
+        }
+        try {
+            RenderVerifier.RenderReport report = renderVerifier.verify(type, appId);
+            renderVerifier.persistReport(type, appId, report);
+            if (!report.isUsable() || !report.hasProblems()) {
+                return;
+            }
+            String issueText = report.toPromptText();
+            log.info("[verify] appId={} {}，进入渲染修复回路", appId, report.summary());
+            vueProjectAgent.fixRenderIssues(type, appId, issueText, callContext(appId, "render_fix"), null);
+            RenderVerifier.RenderReport after = renderVerifier.verify(type, appId);
+            renderVerifier.persistReport(type, appId, after);
+            log.info("[verify] appId={} 修复后复验：{}", appId, after.summary());
+        } catch (RuntimeException e) {
+            log.warn("[verify] 渲染验证/修复异常，已忽略（不影响生成结果），appId={}", appId, e);
+        }
     }
 
     /**

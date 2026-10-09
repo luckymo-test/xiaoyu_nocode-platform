@@ -137,30 +137,11 @@ public class CoverImageService {
     private WebDriver createDriver() {
         int width = screenshotProperties.getWidth();
         int height = screenshotProperties.getHeight();
-        boolean headless = screenshotProperties.isHeadless();
-        String driverPath = screenshotProperties.getDriverPath();
-        if ("chrome".equalsIgnoreCase(screenshotProperties.getBrowser())) {
-            if (StrUtil.isNotBlank(driverPath)) {
-                System.setProperty("webdriver.chrome.driver", driverPath);
-            }
-            ChromeOptions options = new ChromeOptions();
-            if (headless) {
-                options.addArguments("--headless=new");
-            }
-            options.addArguments("--disable-gpu", "--no-sandbox");
-            options.addArguments("--window-size=" + width + "," + height);
-            return new ChromeDriver(options);
-        }
-        if (StrUtil.isNotBlank(driverPath)) {
-            System.setProperty("webdriver.edge.driver", driverPath);
-        }
-        EdgeOptions options = new EdgeOptions();
-        if (headless) {
-            options.addArguments("--headless=new");
-        }
-        options.addArguments("--disable-gpu", "--no-sandbox");
-        options.addArguments("--window-size=" + width + "," + height);
-        return new EdgeDriver(options);
+        // 驱动创建逻辑统一在 BrowserFactory（与 RenderVerifier 共用）
+        return BrowserFactory.create(screenshotProperties.getBrowser(),
+                screenshotProperties.getDriverPath(),
+                screenshotProperties.isHeadless(),
+                width, height);
     }
 
     private File buildTmpDir() {

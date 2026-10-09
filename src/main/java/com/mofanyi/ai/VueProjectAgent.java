@@ -69,6 +69,7 @@ public class VueProjectAgent {
     private final String vuePrompt;
     private final String vueFixPrompt;
     private final String modifyPrompt;
+    private final String renderFixPrompt;
     private final CodeFileWriteService codeFileWriteService;
     private final AgentMemoryService agentMemoryService;
     private final AppSpecService appSpecService;
@@ -89,6 +90,7 @@ public class VueProjectAgent {
                            @Qualifier("vuePrompt") String vuePrompt,
                            @Qualifier("vueFixPrompt") String vueFixPrompt,
                            @Qualifier("modifyPrompt") String modifyPrompt,
+                           @Qualifier("renderFixPrompt") String renderFixPrompt,
                            CodeFileWriteService codeFileWriteService,
                            AgentMemoryService agentMemoryService,
                            AppSpecService appSpecService,
@@ -108,6 +110,7 @@ public class VueProjectAgent {
         this.vuePrompt = vuePrompt;
         this.vueFixPrompt = vueFixPrompt;
         this.modifyPrompt = modifyPrompt;
+        this.renderFixPrompt = renderFixPrompt;
         this.codeFileWriteService = codeFileWriteService;
         this.agentMemoryService = agentMemoryService;
         this.appSpecService = appSpecService;
@@ -506,6 +509,43 @@ public class VueProjectAgent {
         runToolLoop(CodeGenTypeEnum.VUE, appId, messages, files, finished, description, null, ctx, listener);
         appSpecService.recordChange(CodeGenTypeEnum.VUE, appId, "构建修复",
                 "修复构建错误；改动文件：" + String.join("、", files.keySet()));
+    }
+
+    /**
+     * 渲染问题修复：给定无头浏览器实拍采集的问题清单（图裂/溢出/空白/console 报错），
+     * 让 agent 读源码、最小改动修复（plan-agent-pipeline.md P0-4）。
+     *
+     * @param type      代码生成类型（html / multi_file）
+     * @param appId     应用 id
+     * @param issueText 渲染验证问题清单文本
+     * @param ctx       可观测性上下文
+     * @param listener  进度回调，可为 null
+     */
+    public void fixRenderIssues(CodeGenTypeEnum type, Long appId, String issueText,
+                                AiCallContext ctx, VueProgressListener listener) {
+        ThrowUtils.throwIf(type == null || type == CodeGenTypeEnum.VUE,
+                ErrorCode.PARAMS_ERROR, "Vue3 工程暂不支持渲染修复");
+        ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
+        ThrowUtils.throwIf(StrUtil.isBlank(issueText), ErrorCode.PARAMS_ERROR);
+
+        Map<String, String> files = new LinkedHashMap<>();
+        AtomicBoolean finished = new AtomicBoolean(false);
+        AtomicReference<String> description = new AtomicReference<>("");
+        List<Message> messages = new ArrayList<>();
+        messages.add(new SystemMessage(renderFixPrompt));
+        messages.add(new UserMessage("渲染验证问题清单：\n" + issueText
+                + "\n\n当前工程文件清单：\n" + buildFileIndex(type, appId)
+                + "\n\n请先 readFile 读取涉及的文件，最小改动后用 writeFile 覆盖，改完调用 finish。"));
+
+        // 修复也是整文件覆盖，同样要保住用户的手动修改
+        ManualEditService.UserEditSnapshot userEdits = manualEditService.snapshot(type, appId);
+        try {
+            runToolLoop(type, appId, messages, files, finished, description, null, ctx, listener);
+        } finally {
+            manualEditService.replay(type, appId, userEdits);
+        }
+        appSpecService.recordChange(type, appId, "渲染修复",
+                "修复渲染问题；改动文件：" + String.join("、", files.keySet()));
     }
 
     /**
