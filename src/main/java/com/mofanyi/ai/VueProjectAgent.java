@@ -21,6 +21,7 @@ import com.mofanyi.core.ToolPaths;
 import com.mofanyi.exception.ErrorCode;
 import com.mofanyi.exception.ThrowUtils;
 import com.mofanyi.model.enums.CodeGenTypeEnum;
+import com.mofanyi.service.ManualEditService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
@@ -72,6 +73,7 @@ public class VueProjectAgent {
     private final AgentMemoryService agentMemoryService;
     private final AppSpecService appSpecService;
     private final GenerationTaskRegistry taskRegistry;
+    private final ManualEditService manualEditService;
     private final com.mofanyi.mapper.AppImageMapper appImageMapper;
     private final SiteImageService siteImageService;
     private final WriteFileTool writeFileTool;
@@ -91,6 +93,7 @@ public class VueProjectAgent {
                            AgentMemoryService agentMemoryService,
                            AppSpecService appSpecService,
                            GenerationTaskRegistry taskRegistry,
+                           ManualEditService manualEditService,
                            com.mofanyi.mapper.AppImageMapper appImageMapper,
                            SiteImageService siteImageService,
                            WriteFileTool writeFileTool,
@@ -109,6 +112,7 @@ public class VueProjectAgent {
         this.agentMemoryService = agentMemoryService;
         this.appSpecService = appSpecService;
         this.taskRegistry = taskRegistry;
+        this.manualEditService = manualEditService;
         this.appImageMapper = appImageMapper;
         this.siteImageService = siteImageService;
         this.writeFileTool = writeFileTool;
@@ -175,12 +179,18 @@ public class VueProjectAgent {
 
         // [promptTokens, completionTokens] 累加器，runToolLoop 各轮模型调用后写入
         long[] usage = new long[2];
-        runToolLoop(type, appId, messages, files, finished, description, usage, ctx, listener);
-
-        // 强制补图：模型可能漏调 searchImage，导致页面缺图。扫描代码中的空图片字段/占位图并填真实图。
-        autoFillImages(type, appId, userMessage);
-        // 生成完成后扫描项目代码，把嵌入的图片 URL 落库（含补图后的真实 URL）
-        scanAndSaveImages(type, appId);
+        // 生成前快照用户手动修改：重新生成是整文件覆盖，会把 @user-edit 标记块一起抹掉（plan-refactor 6.2）
+        ManualEditService.UserEditSnapshot userEdits = manualEditService.snapshot(type, appId);
+        try {
+            runToolLoop(type, appId, messages, files, finished, description, usage, ctx, listener);
+            // 强制补图：模型可能漏调 searchImage，导致页面缺图。扫描代码中的空图片字段/占位图并填真实图。
+            autoFillImages(type, appId, userMessage);
+            // 生成完成后扫描项目代码，把嵌入的图片 URL 落库（含补图后的真实 URL）
+            scanAndSaveImages(type, appId);
+        } finally {
+            // 成功 / 失败 / 被手动停止都要重放，用户手动改动不因一次生成而丢失
+            manualEditService.replay(type, appId, userEdits);
+        }
 
         // 记录本轮对话到记忆：只存说明与文件索引，不存全量代码（代码在磁盘上，需要时 readFile 取）
         String summary = buildMemorySummary(type, description.get(), files.keySet());
@@ -527,7 +537,13 @@ public class VueProjectAgent {
                 + "\n\n【用户修改意图】\n" + instruction
                 + "\n\n【当前工程文件清单】\n" + buildFileIndex(type, appId)
                 + "\n\n请先 readFile 读取涉及的文件，定位目标元素对应代码段，最小改动后用 writeFile 覆盖，改完调用 finish。"));
-        runToolLoop(type, appId, messages, files, finished, description, usage, ctx, listener);
+        // 可视化修改同样是整文件覆盖，先快照再重放，避免顺手抹掉用户的手动修改
+        ManualEditService.UserEditSnapshot userEdits = manualEditService.snapshot(type, appId);
+        try {
+            runToolLoop(type, appId, messages, files, finished, description, usage, ctx, listener);
+        } finally {
+            manualEditService.replay(type, appId, userEdits);
+        }
         // 可视化修改同样要更新规格摘要（否则摘要会滞后于代码）
         appSpecService.recordChange(type, appId, "可视化修改",
                 instruction + "；改动文件：" + String.join("、", files.keySet()));

@@ -65,6 +65,84 @@ public class ManualEditService {
     public record EditItem(String id, String kind, String selector, String content) {
     }
 
+    /**
+     * 用户手动修改快照：把工程里所有 {@code @user-edit} 标记块原样摘出来，供重新生成后重放。
+     * 为什么要它：重新生成是 {@code writeFile} 整文件覆盖，会把用户手动改动一起抹掉（plan-refactor 6.2）。
+     */
+    public record UserEditSnapshot(List<String> cssBlocks, List<String> htmlBlocks) {
+
+        public boolean isEmpty() {
+            return (cssBlocks == null || cssBlocks.isEmpty())
+                    && (htmlBlocks == null || htmlBlocks.isEmpty());
+        }
+    }
+
+    /**
+     * 生成前快照：摘出当前工程里的全部手动修改块
+     */
+    public UserEditSnapshot snapshot(CodeGenTypeEnum type, Long appId) {
+        if (type == null || appId == null || appId <= 0) {
+            return new UserEditSnapshot(List.of(), List.of());
+        }
+        return new UserEditSnapshot(
+                extractBlocks(readFile(type, appId, CSS_FILE)),
+                extractBlocks(readFile(type, appId, HTML_FILE)));
+    }
+
+    /**
+     * 生成后重放：把快照里的手动修改块写回。
+     *
+     * <p><b>幂等</b>——先清掉目标文件里已有的标记块再追加。因为模型可能只重写了部分文件：
+     * 未重写的文件里标记块仍在，若直接追加会产生重复。
+     *
+     * <p>CSS 追加到文件末尾（同优先级下后出现者生效，用户规则覆盖 AI 规则）；
+     * HTML 插到 {@code </body>} 之前（保持脚本在文档流末尾执行）。
+     */
+    public void replay(CodeGenTypeEnum type, Long appId, UserEditSnapshot snapshot) {
+        if (type == null || appId == null || appId <= 0 || snapshot == null || snapshot.isEmpty()) {
+            return;
+        }
+        if (snapshot.cssBlocks() != null && !snapshot.cssBlocks().isEmpty()) {
+            String css = readFile(type, appId, CSS_FILE);
+            if (css != null) {
+                writeFile(type, appId, CSS_FILE,
+                        removeAllBlocks(css) + String.join("\n", snapshot.cssBlocks()) + "\n");
+            }
+        }
+        if (snapshot.htmlBlocks() != null && !snapshot.htmlBlocks().isEmpty()) {
+            String html = readFile(type, appId, HTML_FILE);
+            if (html != null) {
+                String block = "\n" + String.join("\n", snapshot.htmlBlocks()) + "\n";
+                writeFile(type, appId, HTML_FILE, insertBeforeBodyClose(removeAllBlocks(html), block));
+            }
+        }
+    }
+
+    /**
+     * 摘出全部标记块（原样返回，含首尾标记）
+     */
+    private static List<String> extractBlocks(String content) {
+        if (StrUtil.isBlank(content)) {
+            return List.of();
+        }
+        List<String> blocks = new ArrayList<>();
+        Matcher matcher = ANY_BLOCK.matcher(content);
+        while (matcher.find()) {
+            blocks.add(matcher.group());
+        }
+        return blocks;
+    }
+
+    /**
+     * 去掉全部标记块（重放前先清，保证幂等）
+     */
+    static String removeAllBlocks(String content) {
+        if (StrUtil.isBlank(content)) {
+            return "";
+        }
+        return ANY_BLOCK.matcher(content).replaceAll("");
+    }
+
     private String readFile(CodeGenTypeEnum type, Long appId, String relPath) {
         return codeFileWriteService.readFile(codeFileWriteService.getProjectDir(type, appId), relPath);
     }
