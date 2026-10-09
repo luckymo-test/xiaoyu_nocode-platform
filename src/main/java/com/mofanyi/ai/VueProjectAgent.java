@@ -226,7 +226,7 @@ public class VueProjectAgent {
         appSpecService.recordChange(type, appId, "生成", summary);
 
         GenerateResult result = assembleResult(type, appId, files, description.get());
-        result.setUsage(new TokenUsage(usage[0], usage[1]));
+        result.setUsage(new TokenUsageAccumulator.TokenUsage(usage[0], usage[1]));
         return result;
     }
 
@@ -592,22 +592,12 @@ public class VueProjectAgent {
     }
 
     /**
-     * 单次生成的 token 用量（模型 usage 累加）
-     */
-    public record TokenUsage(long promptTokens, long completionTokens) {
-
-        public long totalTokens() {
-            return promptTokens + completionTokens;
-        }
-    }
-
-    /**
      * 通用生成结果：vue 类型含文件清单；html/multi_file 由门面从项目目录读取
      */
     public static class GenerateResult {
         private String description;
         private VueProjectResult vueResult;
-        private TokenUsage usage;
+        private TokenUsageAccumulator.TokenUsage usage;
 
         public String getDescription() {
             return description;
@@ -625,11 +615,11 @@ public class VueProjectAgent {
             this.vueResult = vueResult;
         }
 
-        public TokenUsage getUsage() {
+        public TokenUsageAccumulator.TokenUsage getUsage() {
             return usage;
         }
 
-        public void setUsage(TokenUsage usage) {
+        public void setUsage(TokenUsageAccumulator.TokenUsage usage) {
             this.usage = usage;
         }
     }

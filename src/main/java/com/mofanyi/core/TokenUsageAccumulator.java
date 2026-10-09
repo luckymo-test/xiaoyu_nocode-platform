@@ -33,4 +33,15 @@ public class TokenUsageAccumulator {
             usage[1] += usageMeta.getCompletionTokens();
         }
     }
+
+    /**
+     * 单次生成的 token 用量（模型 usage 累加）——原为 VueProjectAgent 的内部 record，
+     * S3-2 前半迁到这里，使"用量"概念与累加逻辑同处一类。
+     */
+    public record TokenUsage(long promptTokens, long completionTokens) {
+
+        public long totalTokens() {
+            return promptTokens + completionTokens;
+        }
+    }
 }
