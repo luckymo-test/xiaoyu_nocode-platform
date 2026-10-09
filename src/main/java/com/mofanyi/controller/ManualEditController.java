@@ -8,7 +8,7 @@ import com.mofanyi.entity.User;
 import com.mofanyi.exception.ErrorCode;
 import com.mofanyi.exception.ThrowUtils;
 import com.mofanyi.model.enums.CodeGenTypeEnum;
-import com.mofanyi.service.AppService;
+import com.mofanyi.service.AppAuthService;
 import com.mofanyi.service.ManualEditService;
 import com.mofanyi.service.UserService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -35,7 +35,7 @@ public class ManualEditController {
     private ManualEditService manualEditService;
 
     @Autowired
-    private AppService appService;
+    private AppAuthService appAuthService;
 
     @Autowired
     private UserService userService;
@@ -92,12 +92,8 @@ public class ManualEditController {
      * 鉴权：登录 + 本人应用 + 非 vue，返回代码类型
      */
     private CodeGenTypeEnum checkOwner(Long appId, HttpServletRequest request) {
-        ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
         User loginUser = userService.getLoginUser(request);
-        App app = appService.getById(appId);
-        ThrowUtils.throwIf(app == null, ErrorCode.NOT_FOUND_ERROR);
-        ThrowUtils.throwIf(!app.getUserId().equals(loginUser.getId()),
-                ErrorCode.NO_AUTH_ERROR, "只能修改自己的应用");
+        App app = appAuthService.requireOwner(appId, loginUser);
         CodeGenTypeEnum type = CodeGenTypeEnum.getEnumByValue(app.getCodeGenType());
         ThrowUtils.throwIf(type == null, ErrorCode.PARAMS_ERROR, "应用类型未知");
         ThrowUtils.throwIf(type == CodeGenTypeEnum.VUE,

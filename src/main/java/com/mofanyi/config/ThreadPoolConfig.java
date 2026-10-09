@@ -6,6 +6,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionHandler;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -42,6 +44,15 @@ public class ThreadPoolConfig {
                 properties.getQueueCapacity(),
                 properties.getThreadNamePrefix(),
                 discardWithLog);
+    }
+
+    /**
+     * AI 调用明细异步落库执行器：短任务、IO 等待型，用虚拟线程（创建成本低、不占平台线程）。
+     * 由 Spring 管理，替代此前在 AiCallListener 里自行 new 的做法（违反项目规范 #63）。
+     */
+    @Bean(destroyMethod = "close")
+    public ExecutorService aiCallDetailExecutor() {
+        return Executors.newVirtualThreadPerTaskExecutor();
     }
 
     private ThreadPoolExecutor buildExecutor(int core, int max, int keepAliveSeconds, int queueCapacity,

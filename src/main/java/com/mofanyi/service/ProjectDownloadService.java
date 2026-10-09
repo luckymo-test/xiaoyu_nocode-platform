@@ -24,7 +24,7 @@ import java.util.Set;
  * 只有应用创建者能下载自己的代码。
  */
 @Service
-public class projectDownloadService {
+public class ProjectDownloadService {
 
     /**
      * 需要整体排除的目录（依赖 / 构建产物 / VCS / IDE）
@@ -45,14 +45,14 @@ public class projectDownloadService {
             ".local.yml", ".tsbuildinfo", ".class", ".log", ".pyc", ".iml");
 
     private final CodeFileWriteService codeFileWriteService;
-    private final AppService appService;
+    private final AppAuthService appAuthService;
     private final UserService userService;
 
-    public projectDownloadService(CodeFileWriteService codeFileWriteService,
-                                  AppService appService,
+    public ProjectDownloadService(CodeFileWriteService codeFileWriteService,
+                                  AppAuthService appAuthService,
                                   UserService userService) {
         this.codeFileWriteService = codeFileWriteService;
-        this.appService = appService;
+        this.appAuthService = appAuthService;
         this.userService = userService;
     }
 
@@ -70,12 +70,9 @@ public class projectDownloadService {
      * @return 下载信息（源目录、过滤器、下载文件名）
      */
     public DownloadInfo validate(Long appId, HttpServletRequest request) {
-        ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
         User loginUser = userService.getLoginUser(request);
-        App app = appService.getById(appId);
-        ThrowUtils.throwIf(app == null, ErrorCode.NOT_FOUND_ERROR);
-        ThrowUtils.throwIf(!app.getUserId().equals(loginUser.getId()),
-                ErrorCode.NO_AUTH_ERROR, "只能下载自己的应用代码");
+        // 归属校验统一走 AppAuthService（plan-refactor 6.1）
+        App app = appAuthService.requireOwner(appId, loginUser);
         CodeGenTypeEnum type = CodeGenTypeEnum.getEnumByValue(app.getCodeGenType());
         ThrowUtils.throwIf(type == null, ErrorCode.PARAMS_ERROR, "应用类型未知");
         String projectDir = codeFileWriteService.getProjectDir(type, appId);

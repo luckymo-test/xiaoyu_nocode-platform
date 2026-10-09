@@ -14,6 +14,7 @@ import com.mofanyi.exception.BusinessException;
 import com.mofanyi.exception.ErrorCode;
 import com.mofanyi.exception.ThrowUtils;
 import com.mofanyi.mapper.AppMapper;
+import com.mofanyi.service.AppAuthService;
 import com.mofanyi.mapper.AppImageMapper;
 import com.mofanyi.model.dto.app.AppAddRequest;
 import com.mofanyi.model.dto.app.AppQueryRequest;
@@ -75,19 +76,22 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
     private final CoverImageService coverImageService;
 
     private final AppImageMapper appImageMapper;
+    private final AppAuthService appAuthService;
 
     public AppServiceImpl(CodeFileWriteService codeFileWriteService,
                           ChatHistoryService chatHistoryService,
                           RedisChatMemoryRepository redisChatMemoryRepository,
                           VueBuildService vueBuildService,
                           CoverImageService coverImageService,
-                          AppImageMapper appImageMapper) {
+                          AppImageMapper appImageMapper,
+                          AppAuthService appAuthService) {
         this.codeFileWriteService = codeFileWriteService;
         this.chatHistoryService = chatHistoryService;
         this.redisChatMemoryRepository = redisChatMemoryRepository;
         this.vueBuildService = vueBuildService;
         this.coverImageService = coverImageService;
         this.appImageMapper = appImageMapper;
+        this.appAuthService = appAuthService;
     }
 
     @Override
@@ -581,8 +585,8 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
      * 校验应用归属：非创建用户无权操作
      */
     private void checkAppOwnership(App app, User loginUser) {
-        ThrowUtils.throwIf(!app.getUserId().equals(loginUser.getId()),
-                ErrorCode.NO_AUTH_ERROR, "只能操作自己的应用");
+        // 统一走 AppAuthService，避免同一条规则在多处各写一份（plan-refactor 6.1）
+        appAuthService.requireOwner(app, loginUser);
     }
 
     /**

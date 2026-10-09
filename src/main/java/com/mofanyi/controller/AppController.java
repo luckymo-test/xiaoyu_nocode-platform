@@ -20,7 +20,7 @@ import com.mofanyi.model.vo.AppVO;
 import com.mofanyi.model.vo.AiCodeGenResultVO;
 import com.mofanyi.service.AppService;
 import com.mofanyi.service.UserService;
-import com.mofanyi.service.projectDownloadService;
+import com.mofanyi.service.ProjectDownloadService;
 import com.mybatisflex.core.paginate.Page;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -55,7 +55,7 @@ public class AppController {
     private UserService userService;
 
     @Autowired
-    private projectDownloadService projectDownloadService;
+    private ProjectDownloadService projectDownloadService;
 
     /**
      * 创建应用
@@ -197,7 +197,7 @@ public class AppController {
     @GetMapping("/download/code")
     public ResponseEntity<StreamingResponseBody> downloadCode(long id, HttpServletRequest request) {
         ThrowUtils.throwIf(id <= 0, ErrorCode.PARAMS_ERROR);
-        projectDownloadService.DownloadInfo info = projectDownloadService.validate(id, request);
+        ProjectDownloadService.DownloadInfo info = projectDownloadService.validate(id, request);
         String encoded = URLEncoder.encode(info.filename(), StandardCharsets.UTF_8).replace("+", "%20");
         return ResponseEntity.ok()
                 .contentType(MediaType.parseMediaType("application/zip"))

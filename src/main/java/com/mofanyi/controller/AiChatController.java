@@ -13,7 +13,7 @@ import com.mofanyi.exception.ThrowUtils;
 import com.mofanyi.model.enums.ChatMessageTypeEnum;
 import com.mofanyi.model.enums.CodeGenTypeEnum;
 import com.mofanyi.model.vo.AiCodeGenResultVO;
-import com.mofanyi.service.AppService;
+import com.mofanyi.service.AppAuthService;
 import com.mofanyi.service.ChatHistoryService;
 import com.mofanyi.service.UserService;
 import jakarta.servlet.http.HttpServletRequest;
@@ -34,16 +34,16 @@ public class AiChatController {
 
     private final AiCodeGeneratorFacade aiCodeGeneratorFacade;
     private final UserService userService;
-    private final AppService appService;
+    private final AppAuthService appAuthService;
     private final ChatHistoryService chatHistoryService;
 
     public AiChatController(AiCodeGeneratorFacade aiCodeGeneratorFacade,
                             UserService userService,
-                            AppService appService,
+                            AppAuthService appAuthService,
                             ChatHistoryService chatHistoryService) {
         this.aiCodeGeneratorFacade = aiCodeGeneratorFacade;
         this.userService = userService;
-        this.appService = appService;
+        this.appAuthService = appAuthService;
         this.chatHistoryService = chatHistoryService;
     }
 
@@ -174,10 +174,7 @@ public class AiChatController {
         ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
         ThrowUtils.throwIf(StrUtil.isBlank(instruction), ErrorCode.PARAMS_ERROR, "修改意图不能为空");
         User loginUser = userService.getLoginUser(request);
-        App app = appService.getById(appId);
-        ThrowUtils.throwIf(app == null, ErrorCode.NOT_FOUND_ERROR);
-        ThrowUtils.throwIf(!app.getUserId().equals(loginUser.getId()),
-                ErrorCode.NO_AUTH_ERROR, "只能修改自己的应用");
+        App app = appAuthService.requireOwner(appId, loginUser);
         CodeGenTypeEnum type = CodeGenTypeEnum.getEnumByValue(app.getCodeGenType());
         ThrowUtils.throwIf(type == CodeGenTypeEnum.VUE,
                 ErrorCode.PARAMS_ERROR, "Vue3 工程暂不支持可视化修改");
@@ -208,10 +205,7 @@ public class AiChatController {
                                                       HttpServletRequest request) {
         ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
         User loginUser = userService.getLoginUser(request);
-        App app = appService.getById(appId);
-        ThrowUtils.throwIf(app == null, ErrorCode.NOT_FOUND_ERROR);
-        ThrowUtils.throwIf(!app.getUserId().equals(loginUser.getId()),
-                ErrorCode.NO_AUTH_ERROR, "只能修改自己的应用");
+        App app = appAuthService.requireOwner(appId, loginUser);
         CodeGenTypeEnum type = CodeGenTypeEnum.getEnumByValue(app.getCodeGenType());
         ThrowUtils.throwIf(type == CodeGenTypeEnum.VUE,
                 ErrorCode.PARAMS_ERROR, "Vue3 工程暂不支持可视化修改");
@@ -226,10 +220,7 @@ public class AiChatController {
     public BaseResponse<Boolean> stopGenerate(@RequestParam Long appId, HttpServletRequest request) {
         ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
         User loginUser = userService.getLoginUser(request);
-        App app = appService.getById(appId);
-        ThrowUtils.throwIf(app == null, ErrorCode.NOT_FOUND_ERROR);
-        ThrowUtils.throwIf(!app.getUserId().equals(loginUser.getId()),
-                ErrorCode.NO_AUTH_ERROR, "只能停止自己的生成任务");
+        appAuthService.requireOwner(appId, loginUser);
         aiCodeGeneratorFacade.stopGenerate(appId);
         return ResultUtils.success(true);
     }

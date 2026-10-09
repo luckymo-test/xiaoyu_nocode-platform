@@ -3,11 +3,11 @@ package com.mofanyi.core;
 import com.mofanyi.entity.AiCallLog;
 import com.mofanyi.mapper.AiCallLogMapper;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDateTime;
 import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 /**
  * AI 调用监听器：每次模型调用结束时统一"打指标 + 异步落明细"。
@@ -22,13 +22,16 @@ public class AiCallListener {
     private final AiCallLogMapper aiCallLogMapper;
 
     /**
-     * 明细落库线程池：虚拟线程，短任务，不阻塞生成
+     * 明细落库执行器：虚拟线程、短任务，不阻塞生成。
+     * 由 Spring 容器管理（ThreadPoolConfig#aiCallDetailExecutor），不再自行 new（项目规范 #63）。
      */
-    private final ExecutorService detailWriter = Executors.newVirtualThreadPerTaskExecutor();
+    private final ExecutorService detailWriter;
 
-    public AiCallListener(AiMetricsRecorder metrics, AiCallLogMapper aiCallLogMapper) {
+    public AiCallListener(AiMetricsRecorder metrics, AiCallLogMapper aiCallLogMapper,
+                          @Qualifier("aiCallDetailExecutor") ExecutorService detailWriter) {
         this.metrics = metrics;
         this.aiCallLogMapper = aiCallLogMapper;
+        this.detailWriter = detailWriter;
     }
 
     /**
