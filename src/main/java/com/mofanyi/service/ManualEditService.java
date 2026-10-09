@@ -2,6 +2,7 @@ package com.mofanyi.service;
 
 import cn.hutool.core.util.EscapeUtil;
 import cn.hutool.core.util.StrUtil;
+import com.mofanyi.ai.memory.AppSpecService;
 import com.mofanyi.core.CodeFileWriteService;
 import com.mofanyi.exception.ErrorCode;
 import com.mofanyi.exception.ThrowUtils;
@@ -51,9 +52,11 @@ public class ManualEditService {
     private static final int MAX_TEXT_LEN = 2000;
 
     private final CodeFileWriteService codeFileWriteService;
+    private final AppSpecService appSpecService;
 
-    public ManualEditService(CodeFileWriteService codeFileWriteService) {
+    public ManualEditService(CodeFileWriteService codeFileWriteService, AppSpecService appSpecService) {
         this.codeFileWriteService = codeFileWriteService;
+        this.appSpecService = appSpecService;
     }
 
     /**
@@ -110,6 +113,7 @@ public class ManualEditService {
         String block = "\n/* @user-edit:" + id + " */\n" + rule + "\n/* @end-user-edit */\n";
         writeFile(type, appId, CSS_FILE, base + block);
         String sel = StrUtil.isBlank(selector) ? extractSelector(rule) : selector.trim();
+        appSpecService.recordChange(type, appId, "手动编辑", "样式：" + sel);
         return new EditItem(id, KIND_STYLE, sel, rule);
     }
 
@@ -137,6 +141,7 @@ public class ManualEditService {
                 + "<!-- @end-user-edit -->\n";
         String newHtml = insertBeforeBodyClose(html, block);
         writeFile(type, appId, HTML_FILE, newHtml);
+        appSpecService.recordChange(type, appId, "手动编辑", "文字：" + selector.trim() + " → " + newText);
         return new EditItem(id, KIND_TEXT, selector.trim(), newText);
     }
 

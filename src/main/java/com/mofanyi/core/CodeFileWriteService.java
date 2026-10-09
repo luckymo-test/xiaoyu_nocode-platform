@@ -168,7 +168,8 @@ public class CodeFileWriteService {
         }
         for (File child : children) {
             if (child.isDirectory()) {
-                if ("node_modules".equals(child.getName()) || "dist".equals(child.getName())) {
+                if ("node_modules".equals(child.getName()) || "dist".equals(child.getName())
+                        || ".agent".equals(child.getName())) {
                     continue;
                 }
                 walkDir(root, child, files);

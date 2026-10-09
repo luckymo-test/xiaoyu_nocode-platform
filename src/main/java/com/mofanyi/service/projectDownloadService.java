@@ -30,7 +30,7 @@ public class projectDownloadService {
      * 需要整体排除的目录（依赖 / 构建产物 / VCS / IDE）
      */
     private static final Set<String> EXCLUDED_DIRS = Set.of(
-            "node_modules", "dist", "build", "target", ".git", ".idea", ".vscode", "tmp", "__pycache__");
+            "node_modules", "dist", "build", "target", ".git", ".idea", ".vscode", "tmp", "__pycache__", ".agent");
 
     /**
      * 需要排除的具体文件（敏感配置 / 系统文件）

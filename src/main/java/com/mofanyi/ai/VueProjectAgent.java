@@ -5,6 +5,7 @@ import cn.hutool.core.util.StrUtil;
 import com.mofanyi.ai.model.VueFileResult;
 import com.mofanyi.ai.model.VueProjectResult;
 import com.mofanyi.ai.memory.AgentMemoryService;
+import com.mofanyi.ai.memory.AppSpecService;
 import com.mofanyi.ai.tools.AgentProgressListener;
 import com.mofanyi.ai.tools.DiagramTool;
 import com.mofanyi.ai.tools.FinishTool;
@@ -68,6 +69,7 @@ public class VueProjectAgent {
     private final String modifyPrompt;
     private final CodeFileWriteService codeFileWriteService;
     private final AgentMemoryService agentMemoryService;
+    private final AppSpecService appSpecService;
     private final com.mofanyi.mapper.AppImageMapper appImageMapper;
     private final SiteImageService siteImageService;
     private final WriteFileTool writeFileTool;
@@ -85,6 +87,7 @@ public class VueProjectAgent {
                            @Qualifier("modifyPrompt") String modifyPrompt,
                            CodeFileWriteService codeFileWriteService,
                            AgentMemoryService agentMemoryService,
+                           AppSpecService appSpecService,
                            com.mofanyi.mapper.AppImageMapper appImageMapper,
                            SiteImageService siteImageService,
                            WriteFileTool writeFileTool,
@@ -101,6 +104,7 @@ public class VueProjectAgent {
         this.modifyPrompt = modifyPrompt;
         this.codeFileWriteService = codeFileWriteService;
         this.agentMemoryService = agentMemoryService;
+        this.appSpecService = appSpecService;
         this.appImageMapper = appImageMapper;
         this.siteImageService = siteImageService;
         this.writeFileTool = writeFileTool;
@@ -156,6 +160,11 @@ public class VueProjectAgent {
 
         List<Message> messages = new ArrayList<>();
         messages.add(new SystemMessage(promptForType(type)));
+        // 注入"应用现状"（规格摘要 + 代码库索引）：续接任务时模型需要的是应用现状，而非聊天原文
+        String specSection = appSpecService.buildSpecSection(type, appId);
+        if (StrUtil.isNotBlank(specSection)) {
+            messages.add(new SystemMessage(specSection));
+        }
         // 注入对话记忆作为前置上下文（优先 Redis 热窗口，miss 时从 MySQL 冷启动回灌）
         messages.addAll(agentMemoryService.loadContext(appId, userMessage));
         messages.add(new UserMessage(userMessage));
@@ -170,8 +179,10 @@ public class VueProjectAgent {
         scanAndSaveImages(type, appId);
 
         // 记录本轮对话到记忆：只存说明与文件索引，不存全量代码（代码在磁盘上，需要时 readFile 取）
-        agentMemoryService.appendTurn(appId, userMessage,
-                buildMemorySummary(type, description.get(), files.keySet()));
+        String summary = buildMemorySummary(type, description.get(), files.keySet());
+        agentMemoryService.appendTurn(appId, userMessage, summary);
+        // 同步更新应用规格摘要（供后续续接时理解"这个应用现在是什么样"）
+        appSpecService.recordChange(type, appId, "生成", summary);
 
         GenerateResult result = assembleResult(type, appId, files, description.get());
         result.setUsage(new TokenUsage(usage[0], usage[1]));
@@ -479,6 +490,8 @@ public class VueProjectAgent {
                 + "\n\n请修复导致报错的文件后调用 finish 结束。"));
 
         runToolLoop(CodeGenTypeEnum.VUE, appId, messages, files, finished, description, null, ctx, listener);
+        appSpecService.recordChange(CodeGenTypeEnum.VUE, appId, "构建修复",
+                "修复构建错误；改动文件：" + String.join("、", files.keySet()));
     }
 
     /**
@@ -511,6 +524,9 @@ public class VueProjectAgent {
                 + "\n\n【当前工程文件清单】\n" + buildFileIndex(type, appId)
                 + "\n\n请先 readFile 读取涉及的文件，定位目标元素对应代码段，最小改动后用 writeFile 覆盖，改完调用 finish。"));
         runToolLoop(type, appId, messages, files, finished, description, usage, ctx, listener);
+        // 可视化修改同样要更新规格摘要（否则摘要会滞后于代码）
+        appSpecService.recordChange(type, appId, "可视化修改",
+                instruction + "；改动文件：" + String.join("、", files.keySet()));
         return files;
     }
 

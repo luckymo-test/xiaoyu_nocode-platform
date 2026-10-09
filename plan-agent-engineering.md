@@ -103,13 +103,19 @@
 |---|---|---|
 | **M0** | 恢复写入 + 冷启动回灌 | 先让它**能工作**：生成后 `chatMemory.add`；memory miss 时从 `chat_history` 重建最近 N 条。与 MySQL 双写对齐，写入收敛到一处（`ChatHistoryService` 或门面层） |
 | **M1** | 记忆内容去代码化 + 单位 token 化 | 记忆只存"写了哪些文件 + 要点"，不存全量代码；裁剪按估算 token 而非条数 |
-| **M2** | 规格摘要 + 代码库索引 | 落地 2.5 的目标架构；`modify` / `fix` 一并纳入 |
+| **M2** ✅ | 规格摘要 + 代码库索引 | 落地 2.5 的目标架构；`modify` / `fix` 一并纳入 |
 | **M3** | 摘要压缩 + 选择性保留 | 窗口超阈值时压缩；关键信息（首条需求、关键错误）优先保留 |
 | **预留** | `AgentMemory` 接口 | 抽接口（当前 `WindowedRedisMemory`），未来可换 `HybridMemory`（窗口 + 摘要 + 向量检索）而不改调用方 |
 
-> **进度**：**M0、M1 已实现**——`AgentMemoryService` 作为读写门面：Redis 热窗口 + `chat_history` 冷启动回灌 + 去代码化写入 + token 预算裁剪；`ChatMemoryConfig.maxMessages` 降级为粗粒度上限（token 预算才是注入口径）；`VueProjectAgent` 生成后写入"类型 + 文件索引 + 说明"摘要。**M2、M3 待做**（`modify` / `fix` 仍未参与记忆）。
+> **进度**：**M0、M1、M2 已实现**，M3（摘要压缩 + 选择性保留）待做。
+>
+> - **M0/M1**：`AgentMemoryService` 作为读写门面——Redis 热窗口 + `chat_history` 冷启动回灌 + 去代码化写入 + token 预算裁剪；`ChatMemoryConfig.maxMessages` 降级为粗粒度上限（token 预算才是注入口径）。
+> - **M2**：`AppSpecService` 维护工程目录下 `.agent/spec.md`（规格摘要 = 初始需求 + 变更记录）+ 代码库索引，作为一条 SystemMessage 注入；生成 / 可视化修改 / 构建修复 / 手动编辑四条写路径均触发更新；`.agent` 已从代码读取与下载的遍历中排除。
+> - **端到端已验证**（真实 Redis + MySQL + DeepSeek）：写入后键存在且去代码化；`DEL` 键后回灌 2 条历史；回灌剥离代码块；第三轮命中缓存不回灌；规格注入量 93 → 345 字符（含变更记录与文件索引）。
 >
 > 实现细节：controller 在生成前已把本轮用户消息落库，故回灌会读到它；`loadContext` 会**丢掉尾部这条**，避免调用方再追加一次造成重复（已由单测覆盖）。
+>
+> 已知小瑕疵：模型 `finish` 的说明里若自带"产出文件：…"，记忆摘要会出现轻微重复前缀（不影响功能）。
 
 ### 2.8 验收
 
