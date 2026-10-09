@@ -16,6 +16,7 @@ import com.mofanyi.ai.tools.WriteFileTool;
 import com.mofanyi.core.AiCallContext;
 import com.mofanyi.core.AiCallListener;
 import com.mofanyi.core.CodeFileWriteService;
+import com.mofanyi.core.ProjectCodeScanner;
 import com.mofanyi.core.SiteImageService;
 import com.mofanyi.core.ToolPaths;
 import com.mofanyi.exception.ErrorCode;
@@ -90,6 +91,7 @@ public class VueProjectAgent {
     private final AppSpecService appSpecService;
     private final GenerationTaskRegistry taskRegistry;
     private final ManualEditService manualEditService;
+    private final ProjectCodeScanner projectCodeScanner;
     private final com.mofanyi.mapper.AppImageMapper appImageMapper;
     private final SiteImageService siteImageService;
     private final WriteFileTool writeFileTool;
@@ -111,6 +113,7 @@ public class VueProjectAgent {
                            AppSpecService appSpecService,
                            GenerationTaskRegistry taskRegistry,
                            ManualEditService manualEditService,
+                           ProjectCodeScanner projectCodeScanner,
                            com.mofanyi.mapper.AppImageMapper appImageMapper,
                            SiteImageService siteImageService,
                            WriteFileTool writeFileTool,
@@ -131,6 +134,7 @@ public class VueProjectAgent {
         this.appSpecService = appSpecService;
         this.taskRegistry = taskRegistry;
         this.manualEditService = manualEditService;
+        this.projectCodeScanner = projectCodeScanner;
         this.appImageMapper = appImageMapper;
         this.siteImageService = siteImageService;
         this.writeFileTool = writeFileTool;
@@ -204,7 +208,7 @@ public class VueProjectAgent {
             // 强制补图：模型可能漏调 searchImage，导致页面缺图。扫描代码中的空图片字段/占位图并填真实图。
             autoFillImages(type, appId, userMessage);
             // 生成完成后扫描项目代码，把嵌入的图片 URL 落库（含补图后的真实 URL）
-            scanAndSaveImages(type, appId);
+            projectCodeScanner.scanAndSaveImages(type, appId);
         } finally {
             // 成功 / 失败 / 被手动停止都要重放，用户手动改动不因一次生成而丢失
             manualEditService.replay(type, appId, userEdits);
@@ -250,8 +254,7 @@ public class VueProjectAgent {
                 return;
             }
             // 收集代码文件并逐个处理
-            java.util.List<java.io.File> codeFiles = new java.util.ArrayList<>();
-            collectCodeFiles(root, codeFiles);
+            java.util.List<java.io.File> codeFiles = projectCodeScanner.collectCodeFiles(root);
             String query = extractImageQuery(userMessage);
             int filledCount = 0;
             final int MAX_FILL = 8; // 单页最多补图数，防止过量
@@ -261,7 +264,7 @@ public class VueProjectAgent {
                 if (filledCount >= MAX_FILL) {
                     break;
                 }
-                String path = relativePath(root, f);
+                String path = projectCodeScanner.relativePath(root, f);
                 String content = cn.hutool.core.io.FileUtil.readUtf8String(f);
                 String newContent = fillImagesInContent(content, path, appId, query, filledCount, MAX_FILL);
                 if (newContent != null && !newContent.equals(content)) {
@@ -271,7 +274,7 @@ public class VueProjectAgent {
                     }
                     codeFileWriteService.saveProjectFile(type, appId, path, newContent);
                     // 重新统计已补图数（用 COS URL 出现次数）
-                    filledCount = countCosUrls(projectDir);
+                    filledCount = projectCodeScanner.countCosUrls(projectDir);
                 }
             }
             // 若把 emoji/icon 换成了内嵌 <img>，确保 CSS 里有点亮样式，否则图片会撑破布局
@@ -379,27 +382,6 @@ public class VueProjectAgent {
     }
 
     /**
-     * 统计项目目录中已生成的 COS 图片 URL 数量
-     */
-    private int countCosUrls(String projectDir) {
-        java.util.List<java.io.File> files = new java.util.ArrayList<>();
-        collectCodeFiles(new java.io.File(projectDir), files);
-        int count = 0;
-        java.util.regex.Pattern p = java.util.regex.Pattern.compile("app-image/");
-        for (java.io.File f : files) {
-            try {
-                String content = cn.hutool.core.io.FileUtil.readUtf8String(f);
-                java.util.regex.Matcher m = p.matcher(content);
-                while (m.find()) {
-                    count++;
-                }
-            } catch (Exception ignore) {
-            }
-        }
-        return count;
-    }
-
-    /**
      * 从用户需求中提取 Pexels 搜索关键词：去掉"生成/一个/页面/需要/带/的"等无意义词，保留内容词
      */
     private String extractImageQuery(String userMessage) {
@@ -426,79 +408,6 @@ public class VueProjectAgent {
         return sb.toString();
     }
 
-    /**
-     * 计算文件相对项目根路径（复用 CodeFileWriteService 的路径语义）
-     */
-    private String relativePath(java.io.File root, java.io.File file) {
-        String rel = root.toPath().toAbsolutePath().relativize(file.toPath().toAbsolutePath())
-                .toString().replace('\\', '/');
-        return rel.startsWith("/") ? rel.substring(1) : rel;
-    }
-
-    /**
-     * 扫描项目代码文件中的图片 URL（<img src>、background-image、数据数组等），写入 app_image。
-     * 与 searchImage 落库互补，保证生成的页面图片可靠入库。
-     */
-    private void scanAndSaveImages(CodeGenTypeEnum type, Long appId) {
-        try {
-            java.util.Set<String> urls = new java.util.LinkedHashSet<>();
-            String projectDir = codeFileWriteService.getProjectDir(type, appId);
-            java.io.File root = new java.io.File(projectDir);
-            if (!root.isDirectory()) {
-                log.info("[scan] 项目目录不存在，跳过，dir={}", projectDir);
-                return;
-            }
-            java.util.regex.Pattern pattern = java.util.regex.Pattern.compile(
-                    "https?://[^\"'\\s)\\]}]+?\\.(?:jpg|jpeg|png|webp|gif)(?:\\?[^\"'\\s)]*)?");
-
-            // 递归收集代码文件（排除 node_modules/dist）
-            java.util.List<java.io.File> codeFiles = new java.util.ArrayList<>();
-            collectCodeFiles(root, codeFiles);
-            for (java.io.File f : codeFiles) {
-                try {
-                    String content = cn.hutool.core.io.FileUtil.readUtf8String(f);
-                    java.util.regex.Matcher m = pattern.matcher(content);
-                    while (m.find()) {
-                        urls.add(m.group().replace("\\/", "/"));
-                    }
-                } catch (Exception ignore) {
-                    // 单文件读取失败不影响整体
-                }
-            }
-            // 只保留平台 COS 图（app-image 前缀）或其他可商用外链，这里都入库
-            log.info("[scan] 扫描到 {} 个图片 URL，appId={}", urls.size(), appId);
-            int order = 1;
-            for (String url : urls) {
-                if (url.startsWith("http")) {
-                    siteImageService.saveAppImage(appId, url);
-                    order++;
-                }
-            }
-        } catch (RuntimeException e) {
-            log.warn("扫描落库图片失败，appId={}", appId, e);
-        }
-    }
-
-    private void collectCodeFiles(java.io.File dir, java.util.List<java.io.File> out) {
-        java.io.File[] children = dir.listFiles();
-        if (children == null) {
-            return;
-        }
-        for (java.io.File child : children) {
-            if (child.isDirectory()) {
-                if ("node_modules".equals(child.getName()) || "dist".equals(child.getName())) {
-                    continue;
-                }
-                collectCodeFiles(child, out);
-            } else {
-                String name = child.getName().toLowerCase();
-                if (name.endsWith(".html") || name.endsWith(".css") || name.endsWith(".js")
-                        || name.endsWith(".vue") || name.endsWith(".json")) {
-                    out.add(child);
-                }
-            }
-        }
-    }
 
     /**
      * 修复构建错误：给定错误日志，让模型用 writeFile 覆盖出问题的文件，直到 finish 或达最大轮数。
@@ -834,11 +743,11 @@ public class VueProjectAgent {
      */
     private String buildFileIndex(CodeGenTypeEnum type, Long appId) {
         String projectDir = codeFileWriteService.getProjectDir(type, appId);
-        List<java.io.File> codeFiles = new java.util.ArrayList<>();
-        collectCodeFiles(new java.io.File(projectDir), codeFiles);
+        java.io.File root = new java.io.File(projectDir);
+        List<java.io.File> codeFiles = projectCodeScanner.collectCodeFiles(root);
         StringBuilder sb = new StringBuilder();
         for (java.io.File f : codeFiles) {
-            sb.append("- ").append(relativePath(new java.io.File(projectDir), f)).append("\n");
+            sb.append("- ").append(projectCodeScanner.relativePath(root, f)).append("\n");
         }
         return sb.length() == 0 ? "（暂无文件）" : sb.toString();
     }
