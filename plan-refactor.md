@@ -379,9 +379,9 @@ B = `839 / 234 / 450 / 6617 / 7691 / 3951 / 6607 / 5349`（合计 31738）。两
   **注意这是下界**：自管那次是撞预算被掐断的（没跑完），跑完只会更高；两次运行之间 app 的 spec/记忆也有小幅增长，
   严格对照需要固定上下文重测。尽管如此，量级结论成立——**这是"自管循环值得存在"的直接量化证据**
   （此前那组 `138975` 比 `253075~501563` 的口径不成立，见上文修正）。
-- **运维注意**：B 撞上的是**默认上限** —— 同一 prompt 在框架路径下能生成完（烧到 463557），自管循环在
-  `max-loop-tokens=200000` 下会被判超预算。**要长期开自管循环，需要相应调高 `codegen.agent.max-loop-tokens`**，
-  否则大页面会被预算提前掐断。
+- **运维注意（已处置）**：B 撞上的是**默认上限** —— 同一 prompt 在框架路径下能生成完（烧到 463557），自管循环在
+  `max-loop-tokens=200000` 下会被判超预算。**默认值已由 20 万上调到 80 万**，并在 `application.yml` 里接线
+  （`CODEGEN_MAX_LOOP_TOKENS` 可覆盖），见下方「token 上限调整」。
 
 **⑤ 四条回归的证据**
 
@@ -410,7 +410,27 @@ B = `839 / 234 / 450 / 6617 / 7691 / 3951 / 6607 / 5349`（合计 31738）。两
 
 **剩余待验（不影响 S5 结论）**：④ `reasoning`（方案 b 下为空，已豁免，要恢复需做方案 a 的流式累加器）。
 
-**运维注意**：`codegen.agent.self-managed-loop.enabled` 默认 `false`（走框架循环）；`codegen.agent.max-loop-tokens` 默认 `200000`，两者都可用环境变量覆盖。
+**新发现的缺口（本次打点拆列照出来的，未修）**：**修复类流程不走预算**。`fixBuildError` 与 `fixRenderIssues`
+调用 `runToolLoop` 时传的是 `usage = null`（`VueProjectAgent` L266 / L300），于是这些流程里 ② 的打点恒为
+`prompt=0 completion=0`，`checkBudget` 拿到 0 —— **token 预算对它们完全不生效**（只剩墙钟闸门）。
+本次异步渲染修复的三轮实测日志即是证据：`本轮prompt=0 本轮completion=0`。
+`generate`（L207）与 `modifyGeneratedSite`（L340）传的是真累加器，不受影响。修法很小（让门面为修复流程也建一个
+累加器），但属独立一步，待排期。
+
+**运维注意**：`codegen.agent.self-managed-loop.enabled` 默认 `false`（走框架循环）；`codegen.agent.max-loop-tokens`
+默认 **800000**（2026-10-10 由 200000 上调），两者都可用环境变量覆盖（`CODEGEN_SELF_MANAGED_LOOP` /
+`CODEGEN_MAX_LOOP_TOKENS`）。
+
+**token 上限调整（2026-10-10）**
+
+- 触发：同一 portfolio prompt 在框架路径单次调用烧到 `463557`，自管循环在 20 万上限下跑到第 9 轮被掐断
+  （`已 214603，上限 200000`）——**上限比一次正常生成的实际开销还低**，等于把大页面全判死。
+- 取值：**800000**（≈ 最重实测值的 1.7 倍）。定位仍是"拦住跑飞"，主力闸门是 `MAX_STEPS=20` 与墙钟 600s。
+- 接线：新增 `codegen.agent.max-loop-tokens: ${CODEGEN_MAX_LOOP_TOKENS:800000}`，与 `self-managed-loop` 同形；
+  代码里的 `@Value` 兜底同步改为 800000。
+- 实测验证（自管循环，同一 prompt）：**HTTP 200，5 轮收敛，总耗时 122.8s，`prompt 155020 / completion 17867 /
+  total 172887`**（日志 `累计token=…/800000`），随后 `[scan] 20 个图片 URL` → `[verify] 3/3 档视口存在问题` →
+  异步修复 → **复验 3 档视口全部通过**。全链路未被预算打断。
 
 **S5-2 前置：API 调研结论（已用 `javap` 核对本地 1.1.8 jar，全部确认）**
 

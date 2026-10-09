@@ -78,9 +78,13 @@ public class VueProjectAgent {
     private static final long MAX_LOOP_MILLIS = 600_000L;
 
     /**
-     * 单次生成的累计 token 预算（prompt + completion），超过即终止
+     * 单次生成的累计 token 预算（prompt + completion），超过即终止。
+     *
+     * <p>默认值由 20 万上调到 80 万（S5-3 收尾）：实测同一 portfolio prompt 在框架路径单次调用就烧掉 46 万，
+     * 20 万会让自管循环的大页面在跑到一半时被判超预算。预算的定位是"拦住跑飞"，主力闸门仍是
+     * {@link #MAX_STEPS} 与 {@link #MAX_LOOP_MILLIS}。可用环境变量 {@code CODEGEN_MAX_LOOP_TOKENS} 覆盖。
      */
-    @org.springframework.beans.factory.annotation.Value("${codegen.agent.max-loop-tokens:200000}")
+    @org.springframework.beans.factory.annotation.Value("${codegen.agent.max-loop-tokens:800000}")
     private long maxLoopTokens;
 
     private final ChatModel chatModel;
