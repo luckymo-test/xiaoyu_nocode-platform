@@ -325,6 +325,33 @@ surefire 已在 `spring-boot-starter-test` 中，无需新增依赖。
 
 #### S5 验收标准（自管循环）—— 本步是"行为变更"，不能沿用前四步的判据
 
+**S5-2 前置：API 调研结论（已用 `javap` 核对本地 1.1.8 jar，全部确认）**
+
+| 用途 | 确认的签名 |
+|---|---|
+| 关闭框架内部工具执行 | `DefaultToolCallingChatOptions.builder().toolCallbacks(List<ToolCallback>).internalToolExecutionEnabled(Boolean).build()` |
+| 取模型的工具调用 | `AssistantMessage.getToolCalls()` → `List<AssistantMessage.ToolCall>`；`hasToolCalls()` |
+| ToolCall 结构 | record `ToolCall(String id, String type, String name, String arguments)` → 访问器 `id()/type()/name()/arguments()` |
+| 执行工具回调 | `ToolCallback.call(String toolInput)` → `String`；`getToolDefinition().name()` 取工具名 |
+| 成对写回历史 | `ToolResponseMessage.builder().responses(List<ToolResponse>).build()`；`ToolResponse(String id, String name, String responseData)` |
+| 重建 assistant 消息 | `AssistantMessage.builder().content(String).toolCalls(List<ToolCall>).build()` |
+
+**调研中发现的两个连带问题（动手前必须先解决）**
+
+1. **现有 `streamAndAggregate` 会丢掉 toolCalls**：它返回的是
+   `AssistantMessage.builder().content(text).build()` —— **没有 toolCalls**。
+   自管循环要把模型的 assistant 消息入历史，若沿用这个对象，历史里就没有 `tool_calls`，
+   模型会以为"我没调过工具"，下一轮必然跑偏。**必须让它把 toolCalls 一并聚合返回。**
+2. **流式下的 tool-call 参数是分片的**：`id`/`name` 通常只在首个 chunk 出现，`arguments`
+   会跨多个 chunk 被切开。要正确重组，必须**按 tool-call 序号累加参数片段**——
+   这正是框架内部替我们做的事，自己实现等于重写它的累加器，且**拼错就是非法 JSON、工具执行失败**。
+
+> 由此引出一个**方案选择**（S5-2 开工前要定）：
+> **(a)** 流式 + 自己累加 tool-call 片段（保住 `reasoning` 透传，但实现复杂、易错）；
+> **(b)** 每轮改用非流式 `call()`（tool_calls 天然完整，实现简单），代价是 **`reasoning` 透传退化**——
+> 而这违反验收标准 ④（不得退化），所以需要先决定 ④ 是否可暂时豁免；
+> **(c)** 混合：仅在"有工具调用的轮次"用非流式，纯文本轮次保持流式。折中，但状态判断要小心。
+
 前四步的判据是"日志与产出跟改动前一致"；而 S5 的目的是**改变**生成过程（让逐步预算真正生效）。
 用它自己的话讲：**"成功"和"回归"在观测上必须能分开**，所以另立标准。
 
