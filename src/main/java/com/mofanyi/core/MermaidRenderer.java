@@ -88,7 +88,10 @@ public class MermaidRenderer {
 
             ProcessBuilder pb = new ProcessBuilder(List.of(
                     node, cliJs, "-i", in.getAbsolutePath(),
-                    "-o", out.getAbsolutePath(), "-p", conf.getAbsolutePath()));
+                    "-o", out.getAbsolutePath(), "-p", conf.getAbsolutePath(),
+                    // 安全（plan-agent-engineering 6.2）：Mermaid 文本来自模型，可能含 HTML/链接，
+                    // 强制 strict 级别，禁止渲染期的脚本/交互能力
+                    "-s", "strict"));
             pb.redirectErrorStream(true);
             Process process = pb.start();
             String logs = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
