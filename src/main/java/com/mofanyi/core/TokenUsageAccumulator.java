@@ -1,25 +1,26 @@
 package com.mofanyi.core;
 
 import org.springframework.ai.chat.model.ChatResponse;
-import org.springframework.stereotype.Component;
 
 /**
- * Token 用量累加（plan-refactor 7.1 拆分第 S3 步，从 VueProjectAgent 抽出）。
+ * Token 用量累加器（plan-refactor 7.1 拆分 S3 步）。
  *
- * <p>注意本步<b>只搬 accumulate 方法，不动 runToolLoop 的签名</b>（仍传 {@code long[] usage}）。
- * 把它改成"传递累加器对象"是 S3 的第二半，会牵动 {@code generate} ↔ {@code runToolLoop} 的传参。
+ * <p><b>刻意不做成 Spring Bean</b>：它按次持有计数（一次生成一个实例），由 {@code VueProjectAgent.generate}
+ * 每次 {@code new} 出来并沿调用链传递。若做成单例 {@code @Component}，并发生成会共享同一份计数 ——
+ * 与 P0 阶段那个"共享可变状态"的坑同类。
  */
-@Component
 public class TokenUsageAccumulator {
 
+    private long promptTokens;
+    private long completionTokens;
+
     /**
-     * 累加单轮模型响应的 token 用量到 usage[0]=prompt、usage[1]=completion
+     * 累加单轮模型响应的 token 用量
      *
-     * @param resp  单轮模型响应（取 metadata.usage）
-     * @param usage 累加器数组；为 null 时直接返回
+     * @param resp 单轮模型响应（取 metadata.usage）
      */
-    public void accumulate(ChatResponse resp, long[] usage) {
-        if (usage == null || resp == null || resp.getMetadata() == null) {
+    public void accumulate(ChatResponse resp) {
+        if (resp == null || resp.getMetadata() == null) {
             return;
         }
         var usageMeta = resp.getMetadata().getUsage();
@@ -27,11 +28,30 @@ public class TokenUsageAccumulator {
             return;
         }
         if (usageMeta.getPromptTokens() != null) {
-            usage[0] += usageMeta.getPromptTokens();
+            promptTokens += usageMeta.getPromptTokens();
         }
         if (usageMeta.getCompletionTokens() != null) {
-            usage[1] += usageMeta.getCompletionTokens();
+            completionTokens += usageMeta.getCompletionTokens();
         }
+    }
+
+    public long promptTokens() {
+        return promptTokens;
+    }
+
+    public long completionTokens() {
+        return completionTokens;
+    }
+
+    public long totalTokens() {
+        return promptTokens + completionTokens;
+    }
+
+    /**
+     * 本次生成的用量快照（挂在结果 VO 上）
+     */
+    public TokenUsage snapshot() {
+        return new TokenUsage(promptTokens, completionTokens);
     }
 
     /**

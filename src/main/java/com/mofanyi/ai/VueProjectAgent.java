@@ -95,7 +95,6 @@ public class VueProjectAgent {
     private final ManualEditService manualEditService;
     private final ProjectCodeScanner projectCodeScanner;
     private final ImageAutoFiller imageAutoFiller;
-    private final TokenUsageAccumulator tokenUsageAccumulator;
     private final com.mofanyi.mapper.AppImageMapper appImageMapper;
     private final WriteFileTool writeFileTool;
     private final ReadFileTool readFileTool;
@@ -118,7 +117,6 @@ public class VueProjectAgent {
                            ManualEditService manualEditService,
                            ProjectCodeScanner projectCodeScanner,
                            ImageAutoFiller imageAutoFiller,
-                           TokenUsageAccumulator tokenUsageAccumulator,
                            com.mofanyi.mapper.AppImageMapper appImageMapper,
                            WriteFileTool writeFileTool,
                            ReadFileTool readFileTool,
@@ -140,7 +138,6 @@ public class VueProjectAgent {
         this.manualEditService = manualEditService;
         this.projectCodeScanner = projectCodeScanner;
         this.imageAutoFiller = imageAutoFiller;
-        this.tokenUsageAccumulator = tokenUsageAccumulator;
         this.appImageMapper = appImageMapper;
         this.writeFileTool = writeFileTool;
         this.readFileTool = readFileTool;
@@ -205,7 +202,7 @@ public class VueProjectAgent {
         messages.add(new UserMessage(userMessage));
 
         // [promptTokens, completionTokens] 累加器，runToolLoop 各轮模型调用后写入
-        long[] usage = new long[2];
+        TokenUsageAccumulator usage = new TokenUsageAccumulator();
         // 生成前快照用户手动修改：重新生成是整文件覆盖，会把 @user-edit 标记块一起抹掉（plan-refactor 6.2）
         ManualEditService.UserEditSnapshot userEdits = manualEditService.snapshot(type, appId);
         try {
@@ -226,7 +223,7 @@ public class VueProjectAgent {
         appSpecService.recordChange(type, appId, "生成", summary);
 
         GenerateResult result = assembleResult(type, appId, files, description.get());
-        result.setUsage(new TokenUsageAccumulator.TokenUsage(usage[0], usage[1]));
+        result.setUsage(usage.snapshot());
         return result;
     }
 
@@ -323,7 +320,7 @@ public class VueProjectAgent {
      * @return 实际被改动的文件（path -> 新内容）
      */
     public Map<String, String> modifyGeneratedSite(CodeGenTypeEnum type, Long appId, String elementContext,
-                                                   String instruction, long[] usage, AiCallContext ctx,
+                                                   String instruction, TokenUsageAccumulator usage, AiCallContext ctx,
                                                    VueProgressListener listener) {
         ThrowUtils.throwIf(type == null, ErrorCode.PARAMS_ERROR);
         ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
@@ -374,7 +371,7 @@ public class VueProjectAgent {
      * 直到模型不再调工具或达最大轮数。
      */
     private void runToolLoop(CodeGenTypeEnum type, Long appId, List<Message> messages, Map<String, String> files,
-                             AtomicBoolean finished, AtomicReference<String> description, long[] usage,
+                             AtomicBoolean finished, AtomicReference<String> description, TokenUsageAccumulator usage,
                              AiCallContext ctx, VueProgressListener listener) {
         List<ToolCallback> toolCallbacks = List.of(
                 writeFileTool.build(type, appId, files, listener),
@@ -393,8 +390,8 @@ public class VueProjectAgent {
             ChatResponse resp;
             // 每次模型调用的耗时与本次 token 增量（用于可观测性）
             long callStart = System.currentTimeMillis();
-            long beforeIn = usage == null ? 0 : usage[0];
-            long beforeOut = usage == null ? 0 : usage[1];
+            long beforeIn = usage == null ? 0 : usage.promptTokens();
+            long beforeOut = usage == null ? 0 : usage.completionTokens();
             try {
                 // 用流式调用聚合，以便拿到模型思考过程（reasoning_content）增量
                 resp = streamAndAggregate(new Prompt(messages, options),
@@ -417,12 +414,12 @@ public class VueProjectAgent {
             // 工具回调里抛异常会被框架吞成"工具错误结果"喂回模型，只有在此处中断才真正终止生成。
             taskRegistry.checkCancelled(appId);
             // 预算检查（plan-agent-engineering 第五章）
-            checkBudget(loopStart, usage == null ? 0 : usage[0], usage == null ? 0 : usage[1]);
-            tokenUsageAccumulator.accumulate(resp, usage);
+            checkBudget(loopStart, usage == null ? 0 : usage.promptTokens(), usage == null ? 0 : usage.completionTokens());
+            if (usage != null) { usage.accumulate(resp); }
             // 可观测性：记录本次调用（成功）
             long callMs = System.currentTimeMillis() - callStart;
-            long inDelta = (usage == null ? 0 : usage[0]) - beforeIn;
-            long outDelta = (usage == null ? 0 : usage[1]) - beforeOut;
+            long inDelta = (usage == null ? 0 : usage.promptTokens()) - beforeIn;
+            long outDelta = (usage == null ? 0 : usage.completionTokens()) - beforeOut;
             aiCallListener.onSuccess(ctx, finishReasonOf(resp), inDelta, outDelta, callMs);
             AssistantMessage output = resp.getResult().getOutput();
             // 工具由框架在 stream 内部自动执行（工具回调已通过 options 注册），聚合响应不含工具调用。

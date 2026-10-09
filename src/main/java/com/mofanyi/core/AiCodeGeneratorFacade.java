@@ -345,7 +345,7 @@ public class AiCodeGeneratorFacade {
         vueThreadPoolExecutor.execute(() -> {
             task.bind(Thread.currentThread());
             try {
-                long[] usage = new long[2];
+                TokenUsageAccumulator usage = new TokenUsageAccumulator();
                 vueProjectAgent.modifyGeneratedSite(type, appId, elementContext, instruction, usage,
                         callContext(appId, "modify"),
                         new VueProjectAgent.VueProgressListener() {
@@ -361,9 +361,9 @@ public class AiCodeGeneratorFacade {
                             }
                         });
                 AiCodeGenResultVO vo = readResult(type, appId);
-                vo.setPromptTokens(usage[0]);
-                vo.setCompletionTokens(usage[1]);
-                vo.setTotalTokens(usage[0] + usage[1]);
+                vo.setPromptTokens(usage.promptTokens());
+                vo.setCompletionTokens(usage.completionTokens());
+                vo.setTotalTokens(usage.totalTokens());
                 callback.onDone(vo);
             } catch (RuntimeException e) {
                 log.error("[modify] 可视化修改失败，type={}, appId={}", type, appId, e);
