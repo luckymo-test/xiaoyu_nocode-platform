@@ -381,7 +381,7 @@ public class VueProjectAgent {
 
         // S5-2：开关开启时走自管循环（逐轮预算/取消检查才真正生效）
         if (selfManagedLoopEnabled) {
-            runToolLoopSelfManaged(appId, messages, finished, description, usage, ctx, toolCallbacks);
+            runToolLoopSelfManaged(appId, messages, finished, description, usage, ctx, toolCallbacks, listener);
             return;
         }
 
@@ -473,12 +473,15 @@ public class VueProjectAgent {
      * 解析 tool_calls、执行工具、把 assistant 消息与工具结果<b>成对</b>写回历史，
      * 从而能在<b>每轮之间</b>做取消与预算检查——这才是 S5 的目的。
      *
-     * <p><b>已知回退（方案 b）</b>：本路径用非流式 {@code call()}（tool_calls 天然完整），
-     * 但拿不到 {@code reasoning} 增量，开关开启时 SSE 的 reasoning 事件为空。
+     * <p><b>方案 a（2026-10-10 起）</b>：本路径用<b>流式</b>调用（与框架路径同一个 {@code streamAndAggregate}），
+     * reasoning 增量照常透传 —— 原"方案 b 非流式调用导致 reasoning 为空"的回退已消除。
+     * 之所以敢流式自管，依据是探针结论（{@code SelfManagedStreamProbeTest}）：关闭内部工具执行时，
+     * tool_calls 会在流末 chunk 里以完整 JSON 下发，直接取用即可，无需自己拼接分片。
      */
     private void runToolLoopSelfManaged(Long appId, List<Message> messages, AtomicBoolean finished,
                                         AtomicReference<String> description, TokenUsageAccumulator usage,
-                                        AiCallContext ctx, List<ToolCallback> toolCallbacks) {
+                                        AiCallContext ctx, List<ToolCallback> toolCallbacks,
+                                        VueProgressListener listener) {
         var options = DefaultToolCallingChatOptions.builder()
                 .toolCallbacks(toolCallbacks)
                 .internalToolExecutionEnabled(false)   // 关键：不让框架执行工具，改由本方法执行
@@ -505,7 +508,10 @@ public class VueProjectAgent {
             long beforeOut = usage == null ? 0 : usage.completionTokens();
             ChatResponse resp;
             try {
-                resp = chatModel.call(new Prompt(messages, options));
+                // 用流式调用聚合（而非非流式 call()）：这样 reasoning 增量能像框架路径一样透传给前端（验收 ④）。
+                // 前提已由探针证伪/证实：关闭内部工具执行时 tool_calls 会完整下发到 doOnNext，可自行取用。
+                resp = streamAndAggregate(new Prompt(messages, options),
+                        listener == null ? null : listener::onReasoning);
             } catch (RuntimeException e) {
                 aiCallListener.onFailure(ctx, e, System.currentTimeMillis() - callStart);
                 if (++consecutiveFailures >= 3) {
@@ -586,6 +592,10 @@ public class VueProjectAgent {
         StringBuilder text = new StringBuilder();
         AtomicReference<ChatResponseMetadata> metaRef = new AtomicReference<>();
         AtomicReference<ChatGenerationMetadata> genMetaRef = new AtomicReference<>();
+        // 聚合 tool_calls：自管循环要靠它拿到"模型这一轮调了什么工具"。
+        // 探针实测（SelfManagedStreamProbeTest）：关闭框架内部工具执行时，tool_calls 会在最后一个 chunk 里
+        // 以**完整 JSON** 下发（测到 11100 字符仍不分片），所以这里直接取那一片即可，无需自己拼接分片。
+        AtomicReference<List<AssistantMessage.ToolCall>> toolCallsRef = new AtomicReference<>(List.of());
         // [0]=reasoning 字符数 [1]=正文 字符数
         long[] stats = new long[2];
         long start = System.nanoTime();
@@ -618,6 +628,9 @@ public class VueProjectAgent {
                                     }
                                 }
                             }
+                            if (out.hasToolCalls()) {
+                                toolCallsRef.set(out.getToolCalls());
+                            }
                             genMetaRef.set(gen.getMetadata());
                         }
                     }
@@ -629,7 +642,10 @@ public class VueProjectAgent {
                 .block();
         log.info("[agent] 单次流式调用完成：reasoning={}字符 text={}字符 耗时={}ms",
                 stats[0], stats[1], (System.nanoTime() - start) / 1_000_000);
-        AssistantMessage msg = AssistantMessage.builder().content(text.toString()).build();
+        AssistantMessage msg = AssistantMessage.builder()
+                .content(text.toString())
+                .toolCalls(toolCallsRef.get())
+                .build();
         return ChatResponse.builder()
                 .generations(List.of(new Generation(msg, genMetaRef.get())))
                 .metadata(metaRef.get() == null ? ChatResponseMetadata.builder().build() : metaRef.get())
