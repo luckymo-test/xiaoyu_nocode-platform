@@ -35,9 +35,18 @@ public class ToolRiskRegistry {
     private static final int MAX_WRITE_CHARS = 200_000;
 
     /**
-     * 出站白名单：只允许图库来源（Pexels / Pixabay）
+     * 出站白名单：由各图源自己声明（{@link ImageSource#allowedHostSuffixes()}）后汇总。
+     *
+     * <p>从硬编码常量改成汇总，是为了消灭"加了图源忘了加白名单"这类漏接——现象是"接口能搜到、下载全失败"。
      */
-    private static final List<String> ALLOWED_HOST_SUFFIXES = List.of("pexels.com", "pixabay.com");
+    private final List<String> allowedHostSuffixes;
+
+    public ToolRiskRegistry(List<ImageSource> imageSources) {
+        this.allowedHostSuffixes = imageSources.stream()
+                .flatMap(source -> source.allowedHostSuffixes().stream())
+                .distinct()
+                .toList();
+    }
 
     public enum Risk {
         /** 只读，无副作用 */
@@ -86,7 +95,7 @@ public class ToolRiskRegistry {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "出站地址非法：" + StrUtil.maxLength(url, 100));
         }
         ThrowUtils.throwIf(StrUtil.isBlank(host), ErrorCode.PARAMS_ERROR, "出站地址缺少主机名");
-        boolean allowed = ALLOWED_HOST_SUFFIXES.stream()
+        boolean allowed = allowedHostSuffixes.stream()
                 .anyMatch(suffix -> host.equalsIgnoreCase(suffix) || host.toLowerCase().endsWith("." + suffix));
         ThrowUtils.throwIf(!allowed, ErrorCode.PARAMS_ERROR,
                 "出站地址不在允许的白名单内：" + host);

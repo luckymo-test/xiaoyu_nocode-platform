@@ -1,5 +1,21 @@
 # 计划书：图片获取能力扩展 —— undraw 插画 + Mermaid 架构图
 
+> **实测补充（2026-10-10）：哪些图源在本机/国内网络真的可达**
+>
+> 加图源前先探了可达性（`curl -sS -m 8`，看是连通还是 CONN-FAIL），结果直接改变了候选名单：
+>
+> | 源 | 结果 | 结论 |
+> |---|---|---|
+> | Pexels / Pixabay | 401 / 400（缺 key） | ✅ 通，现用两家 |
+> | **Openverse**（api.openverse.org） | CONN-FAIL（TCP 超时，强制 IPv4 也一样） | ❌ **不可达**，加了也用不了 |
+> | **Wikimedia Commons** | CONN-FAIL | ❌ **不可达**（国内长期不可达，与本次实测一致） |
+> | **Unsplash**（api.unsplash.com） | OAuth error（= 已连通） | ⚠️ **可达但条款冲突**：Unsplash API Guidelines 要求**热链**展示 + 署名，而我们一律"下载→转存 COS→页面用 COS 直链"，属其明令反对的 re-host。要用得先接受"页面里带署名 + 走 download 触发"，需要产品决策 |
+> | 硅基流动 / 阿里百炼 / 火山方舟 / 智谱 | 均"缺 key/无效 key"报错（= 已连通） | ✅ 四家**文生图**全部可达 |
+>
+> 因此"加图源"的现实路线修正为：**生成式兜底（文生图）** > Unsplash（待条款决策）> Openverse/Wikimedia（可用性为 0，放弃）。
+> 生成式还顺带解决 3.2 的"静默降级"问题——检索源都没命中时**显式生成**，而不是悄悄变成纯色背景。
+
+
 > 日期：2026-09-06
 > 目标：让"配图"不再只靠 Pexels 摄影图，而是**根据网站风格自动选择图源**：插画/扁平风格走 undraw 插画，架构/流程/时序类示意图由 AI 生成 Mermaid 文本并渲染成图。
 > 现状：图片链路已集中在 [core/SiteImageService.java](src/main/java/com/mofanyi/core/SiteImageService.java)（Pexels 搜索→下载→COS→落库）+ [ai/tools/SearchImageTool.java](src/main/java/com/mofanyi/ai/tools/SearchImageTool.java)，生成与补图（autoFillImages）都复用它。改造相对集中。
@@ -105,4 +121,3 @@
 ## 六、建议
 
 按"低风险高收益"排序：先做 **0a（Pixabay 回退）**——改动小、立刻提升摄影图取图成功率（Pexels 曾因鉴权/限流静默失败，见 development-notes #66）；再做 **0b spike**（mmdc + undraw 直链）确认可行性；跑通后进 1/2。mmdc 本机装不上就切 kroki 方案重排阶段 2。
-

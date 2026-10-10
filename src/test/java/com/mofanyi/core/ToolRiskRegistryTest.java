@@ -15,7 +15,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class ToolRiskRegistryTest {
 
-    private final ToolRiskRegistry registry = new ToolRiskRegistry();
+    /** 白名单由图源声明汇总而来，故构造时把现有图源传进去（Pexels/Pixabay 无参可实例化） */
+    private final ToolRiskRegistry registry =
+            new ToolRiskRegistry(java.util.List.of(new PexelsClient(), new PixabayClient()));
 
     @Test
     @DisplayName("出站白名单：放行图库来源，拦截其它域名（含内网）")

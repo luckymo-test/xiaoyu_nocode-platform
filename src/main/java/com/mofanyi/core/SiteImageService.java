@@ -19,47 +19,47 @@ import java.util.UUID;
 public class SiteImageService {
 
     private final PexelsClient pexelsClient;
-    private final PixabayClient pixabayClient;
     private final CosManager cosManager;
     private final CosClientConfig cosClientConfig;
     private final com.mofanyi.mapper.AppImageMapper appImageMapper;
     private final ToolRiskRegistry toolRiskRegistry;
+    /** 图源列表（按 @Order：pexels → pixabay → …），编排只认这个接口，加源不用改本类 */
+    private final List<ImageSource> imageSources;
 
     public SiteImageService(PexelsClient pexelsClient,
-                            PixabayClient pixabayClient,
                             CosManager cosManager,
                             CosClientConfig cosClientConfig,
                             com.mofanyi.mapper.AppImageMapper appImageMapper,
-                            ToolRiskRegistry toolRiskRegistry) {
+                            ToolRiskRegistry toolRiskRegistry,
+                            List<ImageSource> imageSources) {
         this.pexelsClient = pexelsClient;
-        this.pixabayClient = pixabayClient;
         this.cosManager = cosManager;
         this.cosClientConfig = cosClientConfig;
         this.appImageMapper = appImageMapper;
         this.toolRiskRegistry = toolRiskRegistry;
+        this.imageSources = imageSources;
     }
 
     /**
-     * 搜索结果：图片来源（pexels / pixabay），供文案标注来源
+     * 搜索结果：候选图 + 命中的图源名（供文案标注来源）
      */
-    private record SearchOutcome(List<PexelsClient.PexelsImage> images, String source) {
+    private record SearchOutcome(List<ImageSource.ImageCandidate> images, String source) {
     }
 
     /**
-     * 摄影图搜索：Pexels 为主，无结果/失败时自动回退 Pixabay（同 query）
+     * 图源顺序回退：按 {@link ImageSource} 的 @Order 依次尝试，第一个有结果的源胜出。
+     * 加新源只需新增一个实现类，本方法不动。
      */
     private SearchOutcome searchPhotos(String query, String orientation) {
-        List<PexelsClient.PexelsImage> images = pexelsClient.searchImages(query, orientation);
-        if (!images.isEmpty()) {
-            return new SearchOutcome(images, "pexels");
+        for (ImageSource source : imageSources) {
+            List<ImageSource.ImageCandidate> images =
+                    source.search(query, orientation, pexelsClient.getPageSize());
+            if (!images.isEmpty()) {
+                return new SearchOutcome(images, source.name());
+            }
+            log.info("[searchImage] 图源 {} 无结果，换下一个源，query={}", source.name(), query);
         }
-        log.info("[searchImage] Pexels 空/失败，回退 Pixabay query={}", query);
-        List<PexelsClient.PexelsImage> alt = pixabayClient.searchImages(query, orientation);
-        if (!alt.isEmpty()) {
-            log.info("[searchImage] Pixabay 命中 {} 张，query={}", alt.size(), query);
-            return new SearchOutcome(alt, "pixabay");
-        }
-        return new SearchOutcome(images, "pexels");
+        return new SearchOutcome(List.of(), "none");
     }
 
     /**
@@ -68,26 +68,26 @@ public class SiteImageService {
     public String searchAndUploadImages(Long appId, String query, String orientation) {
         log.info("[searchImage] 被调用 query={} orientation={}", query, orientation);
         SearchOutcome outcome = searchPhotos(query, orientation);
-        List<PexelsClient.PexelsImage> images = outcome.images();
+        List<ImageSource.ImageCandidate> images = outcome.images();
         if (images.isEmpty()) {
-            log.warn("[searchImage] Pexels 与 Pixabay 均无结果，query={}", query);
-            return "未找到匹配的图片（Pexels 与 Pixabay 均无结果），请换一个描述重新搜索，或不用图片直接用纯色/渐变背景";
+            log.warn("[searchImage] 全部图源均无结果，query={}", query);
+            return "未找到匹配的图片（所有图源均无结果），请换一个描述重新搜索，或不用图片直接用纯色/渐变背景";
         }
         boolean fromPixabay = "pixabay".equals(outcome.source());
         StringBuilder sb = new StringBuilder(fromPixabay
                 ? "找到以下图片（来自 Pixabay 图库，可直接用 URL 嵌入代码）：\n"
                 : "找到以下图片（可直接用 URL 嵌入代码，建议优先用列表中的 URL）：\n");
         int index = 1;
-        for (PexelsClient.PexelsImage img : images) {
+        for (ImageSource.ImageCandidate img : images) {
             try {
-                String cosUrl = downloadAndUpload(appId, img.getUrl());
+                String cosUrl = downloadAndUpload(appId, img.url());
                 saveAppImage(appId, cosUrl);
                 sb.append(index).append(". URL=").append(cosUrl)
-                        .append(" 尺寸=").append(img.getWidth()).append("x").append(img.getHeight())
+                        .append(" 尺寸=").append(img.width()).append("x").append(img.height())
                         .append("\n");
                 index++;
             } catch (Exception e) {
-                log.warn("图片上传 COS 失败，appId={}, url={}", appId, img.getUrl(), e);
+                log.warn("图片上传 COS 失败，appId={}, url={}", appId, img.url(), e);
                 sb.append(index).append(". 该图上传失败，请跳过\n");
                 index++;
             }

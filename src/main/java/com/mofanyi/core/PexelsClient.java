@@ -10,6 +10,7 @@ import cn.hutool.json.JSONUtil;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -24,8 +25,9 @@ import java.util.List;
 @Slf4j
 @Data
 @Component
+@Order(1)
 @ConfigurationProperties(prefix = "pexels")
-public class PexelsClient {
+public class PexelsClient implements ImageSource {
 
     /**
      * Pexels API 地址
@@ -109,6 +111,27 @@ public class PexelsClient {
             log.warn("Pexels 响应解析失败，query={}", query, e);
         }
         return images;
+    }
+
+    // ---------- ImageSource 适配（图源 SPI） ----------
+
+    @Override
+    public String name() {
+        return "pexels";
+    }
+
+    @Override
+    public List<String> allowedHostSuffixes() {
+        // 检索走 api.pexels.com，图片走 images.pexels.com，同一后缀即覆盖两者
+        return List.of("pexels.com");
+    }
+
+    @Override
+    public List<ImageCandidate> search(String query, String orientation, int perPage) {
+        return searchImages(query, orientation, perPage).stream()
+                .map(img -> new ImageCandidate(img.getUrl(), img.getOriginalUrl(),
+                        img.getWidth(), img.getHeight(), name()))
+                .toList();
     }
 
     /**

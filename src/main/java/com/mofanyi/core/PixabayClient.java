@@ -9,6 +9,7 @@ import cn.hutool.json.JSONUtil;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -24,8 +25,9 @@ import java.util.List;
 @Slf4j
 @Data
 @Component
+@Order(2)
 @ConfigurationProperties(prefix = "pixabay")
-public class PixabayClient {
+public class PixabayClient implements ImageSource {
 
     private static final String SEARCH_URL = "https://pixabay.com/api/";
 
@@ -102,5 +104,26 @@ public class PixabayClient {
             return new ArrayList<>();
         }
         return images;
+    }
+
+    // ---------- ImageSource 适配（图源 SPI） ----------
+
+    @Override
+    public String name() {
+        return "pixabay";
+    }
+
+    @Override
+    public List<String> allowedHostSuffixes() {
+        // 检索走 pixabay.com，图片走 cdn.pixabay.com
+        return List.of("pixabay.com");
+    }
+
+    @Override
+    public List<ImageSource.ImageCandidate> search(String query, String orientation, int perPage) {
+        return searchImages(query, orientation, perPage).stream()
+                .map(img -> new ImageSource.ImageCandidate(img.getUrl(), img.getOriginalUrl(),
+                        img.getWidth(), img.getHeight(), name()))
+                .toList();
     }
 }

@@ -51,19 +51,17 @@ public class ImageMaterialPlanner {
      */
     private static final int MAX_PER_RATIO_BUCKET = 4;
 
-    private final PexelsClient pexelsClient;
-    private final PixabayClient pixabayClient;
     private final SiteImageService siteImageService;
     private final ChatModel chatModel;
+    /** 图源列表（按 @Order），与 searchImage 工具共用同一套编排 */
+    private final List<ImageSource> imageSources;
 
-    public ImageMaterialPlanner(PexelsClient pexelsClient,
-                                PixabayClient pixabayClient,
-                                SiteImageService siteImageService,
-                                @Qualifier("openAiChatModel") ChatModel chatModel) {
-        this.pexelsClient = pexelsClient;
-        this.pixabayClient = pixabayClient;
+    public ImageMaterialPlanner(SiteImageService siteImageService,
+                                @Qualifier("openAiChatModel") ChatModel chatModel,
+                                List<ImageSource> imageSources) {
         this.siteImageService = siteImageService;
         this.chatModel = chatModel;
+        this.imageSources = imageSources;
     }
 
     /**
@@ -93,7 +91,7 @@ public class ImageMaterialPlanner {
                 return List.of();
             }
             // ① 候选池：中文 query + 模型扩写的英文 query，分别搜索（Pexels 优先、Pixabay 兜底）
-            List<PexelsClient.PexelsImage> candidates = new ArrayList<>();
+            List<ImageSource.ImageCandidate> candidates = new ArrayList<>();
             for (String query : queries) {
                 candidates.addAll(searchCandidates(query));
             }
@@ -112,31 +110,31 @@ public class ImageMaterialPlanner {
                         chineseOnly, englishQueries, candidates.size());
             }
             // ② 质量闸门：去重 + 最小分辨率（更深的闸门见 11~13 步）
-            Map<String, PexelsClient.PexelsImage> deduped = new LinkedHashMap<>();
+            Map<String, ImageSource.ImageCandidate> deduped = new LinkedHashMap<>();
             int rejectedBySize = 0;
-            for (PexelsClient.PexelsImage image : candidates) {
-                if (StrUtil.isBlank(image.getUrl()) || deduped.containsKey(image.getUrl())) {
+            for (ImageSource.ImageCandidate image : candidates) {
+                if (StrUtil.isBlank(image.url()) || deduped.containsKey(image.url())) {
                     continue;
                 }
-                if (image.getWidth() == null || image.getHeight() == null
-                        || image.getWidth() < MIN_WIDTH || image.getHeight() < MIN_HEIGHT) {
+                if (image.width() == null || image.height() == null
+                        || image.width() < MIN_WIDTH || image.height() < MIN_HEIGHT) {
                     rejectedBySize++;
                     continue;
                 }
-                deduped.put(image.getUrl(), image);
+                deduped.put(image.url(), image);
             }
             // ③ 挑选：按宽高比分桶限量，避免清单清一色
-            List<PexelsClient.PexelsImage> selected = selectBalanced(deduped.values());
+            List<ImageSource.ImageCandidate> selected = selectBalanced(deduped.values());
             // ④ 上传 COS（下载失败/上传失败的单张跳过）
             List<Material> materials = new ArrayList<>();
-            for (PexelsClient.PexelsImage image : selected) {
+            for (ImageSource.ImageCandidate image : selected) {
                 try {
-                    String cosUrl = siteImageService.downloadAndUpload(appId, image.getUrl());
+                    String cosUrl = siteImageService.downloadAndUpload(appId, image.url());
                     siteImageService.saveAppImage(appId, cosUrl);
-                    materials.add(new Material(cosUrl, image.getWidth(), image.getHeight(),
-                            ratioBucket(image.getWidth(), image.getHeight()), ""));
+                    materials.add(new Material(cosUrl, image.width(), image.height(),
+                            ratioBucket(image.width(), image.height()), ""));
                 } catch (Exception e) {
-                    log.warn("[素材] 上传失败，跳过，url={}", image.getUrl(), e);
+                    log.warn("[素材] 上传失败，跳过，url={}", image.url(), e);
                 }
             }
             log.info("[素材] 预取完成：候选 {} 张（分辨率淘汰 {}），入选 {} 张，appId={}",
@@ -214,28 +212,30 @@ public class ImageMaterialPlanner {
         return List.of(keywords);
     }
 
-    private List<PexelsClient.PexelsImage> searchCandidates(String query) {
-        List<PexelsClient.PexelsImage> images =
-                pexelsClient.searchImages(query, null, CANDIDATES_PER_QUERY);
-        if (!images.isEmpty()) {
-            return images;
+    /**
+     * 单个 query 的候选：按 @Order 依次问各图源，第一个有结果的源胜出（与 searchImage 工具同源同序）。
+     */
+    private List<ImageSource.ImageCandidate> searchCandidates(String query) {
+        for (ImageSource source : imageSources) {
+            List<ImageSource.ImageCandidate> images = source.search(query, null, CANDIDATES_PER_QUERY);
+            if (!images.isEmpty()) {
+                log.info("[素材] query={} 命中源={} 候选={} 张", query, source.name(), images.size());
+                return images;
+            }
         }
-        List<PexelsClient.PexelsImage> alt =
-                pixabayClient.searchImages(query, null, CANDIDATES_PER_QUERY);
-        if (!alt.isEmpty()) {
-            log.info("[素材] Pexels 空/失败，Pixabay 命中 {} 张，query={}", alt.size(), query);
-        }
-        return alt;
+        log.info("[素材] query={} 全部图源无结果", query);
+        return List.of();
     }
 
-    private List<PexelsClient.PexelsImage> selectBalanced(Iterable<PexelsClient.PexelsImage> candidates) {
+    private List<ImageSource.ImageCandidate> selectBalanced(
+            Iterable<ImageSource.ImageCandidate> candidates) {
         Map<String, Integer> perBucket = new LinkedHashMap<>();
-        List<PexelsClient.PexelsImage> selected = new ArrayList<>();
-        for (PexelsClient.PexelsImage image : candidates) {
+        List<ImageSource.ImageCandidate> selected = new ArrayList<>();
+        for (ImageSource.ImageCandidate image : candidates) {
             if (selected.size() >= MAX_MATERIALS) {
                 break;
             }
-            String bucket = ratioBucket(image.getWidth(), image.getHeight());
+            String bucket = ratioBucket(image.width(), image.height());
             int used = perBucket.getOrDefault(bucket, 0);
             if (used >= MAX_PER_RATIO_BUCKET) {
                 continue;
@@ -260,11 +260,11 @@ public class ImageMaterialPlanner {
     /**
      * 先按闸门粗筛一遍数量，用于判断"中文 query 够不够用"（不去重、不上传）
      */
-    private static int countUsable(List<PexelsClient.PexelsImage> candidates) {
+    private static int countUsable(List<ImageSource.ImageCandidate> candidates) {
         return (int) candidates.stream()
-                .filter(image -> StrUtil.isNotBlank(image.getUrl()))
-                .filter(image -> image.getWidth() != null && image.getHeight() != null
-                        && image.getWidth() >= MIN_WIDTH && image.getHeight() >= MIN_HEIGHT)
+                .filter(image -> StrUtil.isNotBlank(image.url()))
+                .filter(image -> image.width() != null && image.height() != null
+                        && image.width() >= MIN_WIDTH && image.height() >= MIN_HEIGHT)
                 .count();
     }
 

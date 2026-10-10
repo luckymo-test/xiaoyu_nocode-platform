@@ -293,6 +293,19 @@ surefire 已在 `spring-boot-starter-test` 中，无需新增依赖。
 > 先做的是"命中不足才扩写"，但实测中文 query 已够 8 张 → 从不触发，等于白写，故改成**每次都追加**（代价是一次小模型调用）。
 > **仍未做（11~13 步）**：候选池进一步扩容（加大 per-query 上限/翻页）、更深的质量闸门（感知去重/水印/视觉打分）、
 > 素材加工（裁切/压缩/命名）。
+>
+> **图源 SPI（2026-10-10，为"加更多图源"铺路）**：新增 [`ImageSource`](src/main/java/com/mofanyi/core/ImageSource.java)
+> 接口（`name()` / `search()` / `allowedHostSuffixes()` + 统一 `ImageCandidate`），Pexels 与 Pixabay 各实现之；
+> `SiteImageService` 与 `ImageMaterialPlanner` 的**两份硬编码回退编排合并为一处**（按 `@Order` 依次问源），
+> `ToolRiskRegistry` 的**出站白名单改为从各图源声明汇总**——消灭了"加了图源忘了加白名单"这类漏接
+> （现象是"接口能搜到、下载全失败"）。新增图源现在是"写一个实现类"，编排与白名单自动生效。
+> 新增可观测：`[素材] query=… 命中源=pexels 候选=12 张`，能直接看出每个 query 落到哪个源。
+> 验证：38 用例通过；同一 prompt 真实生成行为不变（候选 48 张 / 入选 8 张 / 复验 3 档通过）。
+>
+> **新源可行性（实测数据见 [plan-image-sources.md](plan-image-sources.md) 顶部）**：Openverse 与 Wikimedia
+> **国内网络不可达**（CONN-FAIL），原计划作废；Unsplash 可达但条款要求热链+署名，与"转存 COS"冲突，待决策；
+> 四家国内文生图服务（硅基流动 / 阿里百炼 / 火山方舟 / 智谱）**全部可达**——而 `spring-ai-openai` 已自带
+> `OpenAiImageModel`，接 OpenAI 兼容端点**零新依赖**。故下一步新源 = **生成式兜底**（待确定供应商与 key）。
 > 顺带发现两条待办：① `ProjectCodeScanner` 的 URL 正则**看不懂模板字符串拼接**（`${CDN}/x.jpg`），
 > 本次只扫到 2 个 URL（清单 8 张已由 planner 单独落库，故数据不缺，但扫描口径不准）；
 > ② `RenderVerifier` 会把**无 src 属性的 JS 托管 img**（灯箱占位）判成"空 src" → 多走一轮修复。
