@@ -74,6 +74,10 @@ codegen:
     # 单次生成的累计 token 预算（prompt+completion），超限在"轮次之间"拦下。
     # 默认 80 万：实测同一 prompt 在框架路径会烧到 46 万（单次调用总量），20 万会把自管循环的大页面提前掐断。
     max-loop-tokens: ${CODEGEN_MAX_LOOP_TOKENS:800000}
+    # 上下文压缩 L1（历史里旧工具参数/结果换成占位）——实验特性，默认关闭。
+    # 同 app 连续生成时实测反而更贵（模型改用 readFile 把文件读回来），需用全新 app 做控制变量实验后再定。
+    context-slim:
+      enabled: ${CODEGEN_CONTEXT_SLIM:false}
 
 # 封面截图配置（默认值，实际按环境在 profile 文件中覆盖）
 screenshot:

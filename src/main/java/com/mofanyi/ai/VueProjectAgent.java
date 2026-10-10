@@ -2,6 +2,9 @@ package com.mofanyi.ai;
 
 import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.util.StrUtil;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mofanyi.ai.model.VueFileResult;
 import com.mofanyi.ai.model.VueProjectResult;
 import com.mofanyi.ai.memory.AgentMemoryService;
@@ -67,6 +70,13 @@ import java.util.function.Consumer;
 @Component
 public class VueProjectAgent {
 
+    private static final ObjectMapper COMPACT_MAPPER = new ObjectMapper();
+
+    /**
+     * L1 压缩的阈值：小于这个长度的 writeFile 参数不值得动（省不了多少，还多一次改写）
+     */
+    private static final int SLIM_THRESHOLD_CHARS = 300;
+
     /**
      * 单次生成最大工具调用轮数（一个文件一轮），防止模型不收敛无限循环
      */
@@ -96,6 +106,14 @@ public class VueProjectAgent {
      */
     @org.springframework.beans.factory.annotation.Value("${codegen.agent.self-managed-loop.enabled:false}")
     private boolean selfManagedLoopEnabled;
+
+    /**
+     * 上下文压缩 L1 开关（默认 false，实验特性）。实测（2026-10-10）在"同 app 连续生成"的场景下
+     * 压掉历史会让模型改用 readFile 把文件读回来，反而更贵（7 轮/16.3 万 → 13 轮/39.6 万 → 20 轮/44 万），
+     * 故默认关闭，待用"全新 app"做控制变量实验后再决定是否启用。详见 plan-agent-engineering 第三章。
+     */
+    @org.springframework.beans.factory.annotation.Value("${codegen.agent.context-slim.enabled:false}")
+    private boolean contextSlimEnabled;
     private final CodeFileWriteService codeFileWriteService;
     private final AgentMemoryService agentMemoryService;
     private final AppSpecService appSpecService;
@@ -492,8 +510,22 @@ public class VueProjectAgent {
         }
         long loopStart = System.currentTimeMillis();
         int consecutiveFailures = 0;
+        // L1 压缩的边界：本轮新增的消息（assistant + 工具结果）保持原样，只压更早的历史。
+        // 为什么保留最近一轮：全压会把"工作集"也抹掉，模型只能靠 readFile 把文件读回来——
+        // 实测（2026-10-10）那样反而更贵：轮数 7→13、总 prompt 163039→396011。
+        int lastRoundStart = messages.size();
         for (int round = 1; round <= MAX_STEPS; round++) {
             taskRegistry.checkCancelled(appId);
+            // 上下文压缩 L1（plan-agent-engineering 第三章）：把旧历史里"已经落盘"的 writeFile 参数、以及
+            // 体积大的工具结果（典型是 readFile 读回来的整份文件）换成占位。内容本来就在磁盘上（L2），
+            // 需要时重新 readFile 即可。这是 ③ "上下文逐轮膨胀"的直接对策；框架路径的历史由框架自己管，动不了。
+            if (contextSlimEnabled) {
+                int slimmed = slimHistory(messages, lastRoundStart);
+                if (slimmed > 0) {
+                    log.info("[agent] round={} 模式=self L1 压缩：{} 处旧历史（工具参数/结果）已换成占位",
+                            round, slimmed);
+                }
+            }
             checkBudget(loopStart,
                     usage == null ? 0 : usage.promptTokens(),
                     usage == null ? 0 : usage.completionTokens(), maxLoopTokens);
@@ -532,6 +564,8 @@ public class VueProjectAgent {
 
             AssistantMessage out = resp.getResult().getOutput();
             // ① assistant 消息（含 toolCalls）必须入历史，否则下一轮模型看不到自己调过工具
+            //    记下本条消息的落点：下一轮做 L1 压缩时的"保护区"起点（本轮内容不压）
+            lastRoundStart = messages.size();
             messages.add(out);
             if (out.getText() != null && !out.getText().isBlank() && description.get().isBlank()) {
                 description.set(out.getText());
@@ -541,6 +575,8 @@ public class VueProjectAgent {
                 break;
             }
             // ③ 执行工具并成对写回（响应 id 必须与 ToolCall 一致）
+            log.info("[agent] round={} 模式=self 工具调用={}", round,
+                    out.getToolCalls().stream().map(AssistantMessage.ToolCall::name).toList());
             List<ToolResponseMessage.ToolResponse> responses = new ArrayList<>();
             for (AssistantMessage.ToolCall tc : out.getToolCalls()) {
                 ToolCallback callback = byName.get(tc.name());
@@ -570,6 +606,117 @@ public class VueProjectAgent {
     private static void logRoundUsage(String mode, int round, long promptDelta, long completionDelta, long callMs) {
         log.info("[agent] round={} 模式={} 本轮prompt={} 本轮completion={} total={} 调用耗时={}ms",
                 round, mode, promptDelta, completionDelta, promptDelta + completionDelta, callMs);
+    }
+
+    /**
+     * 上下文压缩 L1（plan-agent-engineering 第三章）：把 {@code keepFromIndex} 之前的历史压成占位。
+     *
+     * <p>动机：模型每次 {@code writeFile} 都把整个文件内容放进工具调用参数，这条 assistant 消息会留在历史里、
+     * 每轮重发，于是 prompt 随"已写文件数"线性膨胀（实测末轮/首轮 prompt 比值 3.76~11）。内容<b>本来就在磁盘上</b>
+     * （L2），模型需要时用 {@code readFile} 取回即可 —— 压缩不丢信息。
+     *
+     * <p>压两类东西，缺一不可：
+     * <ol>
+     *   <li>assistant 的 {@code writeFile} 参数（文件全文，最大头）；</li>
+     *   <li>体积大的<b>工具结果</b>——典型是 {@code readFile} 读回来的整份文件。
+     *       只压 (1) 会踩到实测的坑：模型发现文件没了就去 readFile，而 readFile 的结果没人压，
+     *       反而把上下文撑到更大（同一 prompt：7 轮/163039 → 13 轮/396011）。</li>
+     * </ol>
+     *
+     * <p>{@code readFile}/{@code searchImage}/{@code diagram}/{@code finish} 的<b>参数</b>都小，压了没收益，故不动。
+     * 只作用于自管循环——框架路径的历史由框架自己管理，外部改不了。
+     *
+     * @param keepFromIndex 从这个下标起保持原样（放"最近一轮"，保住模型的工作集）
+     * @return 被压掉的处数（0 表示这一轮没有可压的）
+     */
+    private int slimHistory(List<Message> messages, int keepFromIndex) {
+        int slimmed = 0;
+        int limit = Math.min(keepFromIndex, messages.size());
+        for (int i = 0; i < limit; i++) {
+            Message message = messages.get(i);
+            if (message instanceof ToolResponseMessage toolResponses) {
+                if (slimToolResponses(toolResponses, messages, i)) {
+                    slimmed++;
+                }
+                continue;
+            }
+            if (!(message instanceof AssistantMessage assistant) || !assistant.hasToolCalls()) {
+                continue;
+            }
+            List<AssistantMessage.ToolCall> compacted = new ArrayList<>(assistant.getToolCalls().size());
+            boolean changed = false;
+            for (AssistantMessage.ToolCall call : assistant.getToolCalls()) {
+                String compactedArguments = compactWriteFileArguments(call);
+                if (compactedArguments == null) {
+                    compacted.add(call);
+                } else {
+                    compacted.add(new AssistantMessage.ToolCall(
+                            call.id(), call.type(), call.name(), compactedArguments));
+                    changed = true;
+                    slimmed++;
+                }
+            }
+            if (changed) {
+                messages.set(i, AssistantMessage.builder()
+                        .content(assistant.getText())
+                        .toolCalls(compacted)
+                        .build());
+            }
+        }
+        return slimmed;
+    }
+
+    /**
+     * 把一条工具结果消息里"体积大"的结果换成占位；返回是否有改动。
+     * writeFile 的回执本来就只有"已写入 X（N 字符）"，无需处理；readFile 的整份文件才是目标。
+     */
+    private boolean slimToolResponses(ToolResponseMessage message, List<Message> messages, int index) {
+        List<ToolResponseMessage.ToolResponse> original = message.getResponses();
+        List<ToolResponseMessage.ToolResponse> compacted = new ArrayList<>(original.size());
+        boolean changed = false;
+        for (ToolResponseMessage.ToolResponse response : original) {
+            String data = response.responseData();
+            if (data != null && data.length() >= SLIM_THRESHOLD_CHARS) {
+                compacted.add(new ToolResponseMessage.ToolResponse(
+                        response.id(), response.name(),
+                        "（已省略 " + data.length() + " 字符：文件内容在工程目录里，需要时重新 readFile）"));
+                changed = true;
+            } else {
+                compacted.add(response);
+            }
+        }
+        if (changed) {
+            messages.set(index, ToolResponseMessage.builder().responses(compacted).build());
+        }
+        return changed;
+    }
+
+    /**
+     * 把单次 {@code writeFile} 调用的参数压成占位；返回 {@code null} 表示"保持原样"。
+     *
+     * <p>保持原样的三种情况：不是 writeFile、参数不是合法 JSON（例如被截断）、内容太短（压了没收益）。
+     * 占位串仍是<b>合法 JSON 且 path 原样保留</b>，从而与成对的 {@code ToolResponseMessage}（按 call id 配对）
+     * 依旧自洽 —— 若这里产出非法 JSON，反而会把整轮历史带坏。
+     */
+    private String compactWriteFileArguments(AssistantMessage.ToolCall call) {
+        if (!"writeFile".equals(call.name()) || call.arguments() == null) {
+            return null;
+        }
+        try {
+            JsonNode arguments = COMPACT_MAPPER.readTree(call.arguments());
+            String content = arguments.path("content").asText("");
+            if (content.length() < SLIM_THRESHOLD_CHARS) {
+                return null;
+            }
+            String path = arguments.path("path").asText("");
+            ObjectNode compacted = COMPACT_MAPPER.createObjectNode();
+            compacted.put("path", path);
+            compacted.put("content",
+                    "（已省略 " + content.length() + " 字符：内容已写入磁盘，需要时用 readFile 取回）");
+            return COMPACT_MAPPER.writeValueAsString(compacted);
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     private String finishReasonOf(ChatResponse resp) {
