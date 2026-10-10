@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { reactive, ref } from 'vue'
-import { message } from 'ant-design-vue'
+import { computed, reactive, ref } from 'vue'
+import { appMessage as message } from '@/utils/feedback'
+import { SaveOutlined } from '@ant-design/icons-vue'
+import PageContainer from '@/components/PageContainer.vue'
 import { updateUser } from '@/api/userController'
 import { useUserStore } from '@/stores/user'
 
@@ -12,6 +14,11 @@ const form = reactive<API.UserUpdateRequest>({
   userAvatar: userStore.loginUser?.userAvatar ?? '',
   userProfile: userStore.loginUser?.userProfile ?? '',
 })
+
+const avatarPreview = computed(() =>
+  form.userAvatar ? form.userAvatar : undefined,
+)
+const avatarInitial = computed(() => form.userName?.charAt(0) || 'U')
 
 const loading = ref(false)
 
@@ -36,35 +43,68 @@ const handleSave = async () => {
 </script>
 
 <template>
-  <div class="center-container">
-    <a-card title="个人中心" :bordered="false">
-      <a-form :model="form" layout="vertical" style="max-width: 480px">
+  <PageContainer narrow title="个人中心" description="修改头像、昵称与个人简介">
+    <a-card :bordered="false">
+      <div class="profile-head">
+        <a-avatar :src="avatarPreview" :size="64">
+          {{ avatarInitial }}
+        </a-avatar>
+        <div class="profile-meta">
+          <span class="profile-name">{{ form.userName || '未设置昵称' }}</span>
+          <span class="profile-tip">头像支持填写图片链接</span>
+        </div>
+      </div>
+
+      <a-form :model="form" layout="vertical">
         <a-form-item label="用户名">
           <a-input v-model:value="form.userName" placeholder="请输入用户名" />
         </a-form-item>
         <a-form-item label="头像链接">
-          <a-input v-model:value="form.userAvatar" placeholder="请输入头像URL" />
+          <a-input v-model:value="form.userAvatar" placeholder="请输入头像 URL" />
         </a-form-item>
         <a-form-item label="个人简介">
           <a-textarea
             v-model:value="form.userProfile"
-            placeholder="请输入个人简介"
+            placeholder="介绍一下你自己，或写下常用需求"
             :rows="4"
+            :maxlength="200"
+            show-count
           />
         </a-form-item>
         <a-form-item>
           <a-button type="primary" :loading="loading" @click="handleSave">
+            <template #icon><SaveOutlined /></template>
             保存修改
           </a-button>
         </a-form-item>
       </a-form>
     </a-card>
-  </div>
+  </PageContainer>
 </template>
 
 <style scoped>
-.center-container {
-  max-width: 600px;
-  margin: 0 auto;
+.profile-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
+  padding-bottom: var(--space-5);
+  border-bottom: 1px dashed var(--border);
+}
+
+.profile-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.profile-name {
+  font-size: var(--font-lg);
+  font-weight: 600;
+}
+
+.profile-tip {
+  color: var(--text-3);
+  font-size: var(--font-sm);
 }
 </style>

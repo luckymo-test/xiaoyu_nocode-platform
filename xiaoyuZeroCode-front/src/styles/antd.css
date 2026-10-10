@@ -1,0 +1,133 @@
+/**
+ * antd 组件微调。
+ * 说明：当前 antd-vue 版本的组件级 token 类型为空（无法在 theme.ts 里写组件 token），
+ * 因此组件级视觉统一放在这里。选择器统一加 `body` 前缀提高优先级，
+ * 避免被运行时注入的 cssinjs 样式覆盖。
+ */
+
+/* ---------- 卡片 ---------- */
+body .ant-card {
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-1);
+}
+
+body .ant-card > .ant-card-head {
+  border-bottom: 1px solid var(--border);
+  min-height: 52px;
+  font-weight: 600;
+}
+
+/* ---------- 表格 ---------- */
+body .ant-table-wrapper .ant-table {
+  background: transparent;
+}
+
+body .ant-table-wrapper .ant-table-thead > tr > th {
+  background: #f7f8fc;
+  color: var(--text-2);
+  font-weight: 600;
+  border-bottom: 1px solid var(--border);
+}
+
+body .ant-table-wrapper .ant-table-thead > tr > th::before {
+  display: none;
+}
+
+body .ant-table-wrapper .ant-table-tbody > tr > td {
+  border-bottom: 1px solid var(--border);
+}
+
+body .ant-table-wrapper .ant-table-tbody > tr.ant-table-row:hover > td {
+  background: var(--bg-hover);
+}
+
+body .ant-table-wrapper .ant-table-tbody > tr.ant-table-row-selected > td {
+  background: var(--brand-50);
+}
+
+/* ---------- 分页 ---------- */
+body .ant-pagination .ant-pagination-item {
+  border-radius: var(--radius-sm);
+}
+
+body .ant-pagination .ant-pagination-item-active {
+  border-color: transparent;
+  background: var(--gradient-brand);
+}
+
+body .ant-pagination .ant-pagination-item-active a {
+  color: var(--text-inverse);
+}
+
+/* ---------- 浮层 ---------- */
+body .ant-modal .ant-modal-content {
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-3);
+}
+
+body .ant-drawer-right > .ant-drawer-content-wrapper .ant-drawer-content {
+  border-radius: var(--radius-xl) 0 0 var(--radius-xl);
+}
+
+body .ant-dropdown .ant-dropdown-menu {
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-2);
+  padding: 6px;
+}
+
+body .ant-dropdown .ant-dropdown-menu .ant-dropdown-menu-item {
+  border-radius: var(--radius-sm);
+}
+
+/* ---------- 标签 ---------- */
+body .ant-tag {
+  border: none;
+  border-radius: var(--radius-xs);
+  font-weight: 500;
+}
+
+/* ---------- 按钮：主按钮使用品牌渐变 ---------- */
+body .ant-btn {
+  font-weight: 500;
+}
+
+body
+  .ant-btn-primary:not(:disabled):not(.ant-btn-dangerous):not(.ant-btn-background-ghost):not(
+    .ant-btn-text
+  ):not(.ant-btn-link) {
+  background-color: transparent;
+  background-image: linear-gradient(120deg, #4f6bff 0%, #6a5cf7 58%, #8b5cf6 100%);
+  border-color: transparent;
+  box-shadow: 0 6px 16px rgba(79, 107, 255, 0.24);
+}
+
+body
+  .ant-btn-primary:not(:disabled):not(.ant-btn-dangerous):not(.ant-btn-background-ghost):not(
+    .ant-btn-text
+  ):not(.ant-btn-link):hover {
+  background-image: linear-gradient(120deg, #6280ff 0%, #7b6cfb 58%, #9a6cf8 100%);
+  box-shadow: 0 8px 20px rgba(79, 107, 255, 0.3);
+}
+
+body
+  .ant-btn-primary:not(:disabled):not(.ant-btn-dangerous):not(.ant-btn-background-ghost):not(
+    .ant-btn-text
+  ):not(.ant-btn-link):active {
+  box-shadow: 0 2px 8px rgba(79, 107, 255, 0.28);
+  transform: translateY(1px);
+}
+
+body .ant-btn:not(:disabled):active {
+  transform: translateY(1px);
+}
+
+/* ---------- 输入类控件聚焦态 ---------- */
+body .ant-input:focus,
+body .ant-input-focused,
+body .ant-input-affix-wrapper-focused,
+body .ant-input-affix-wrapper:focus-within,
+body .ant-picker-focused {
+  border-color: var(--brand-400);
+  box-shadow: 0 0 0 3px rgba(79, 107, 255, 0.14);
+}

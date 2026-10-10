@@ -6,6 +6,8 @@ import 'highlight.js/styles/github.css'
 
 interface Props {
   content: string
+  /** 深色模式：用于代码预览等深色工作区 */
+  dark?: boolean
 }
 
 const props = defineProps<Props>()
@@ -31,7 +33,7 @@ const rendered = computed(() => md.render(props.content))
 </script>
 
 <template>
-  <div class="markdown-body" v-html="rendered" />
+  <div class="markdown-body" :class="{ 'is-dark': dark }" v-html="rendered" />
 </template>
 
 <style scoped>
@@ -104,5 +106,99 @@ const rendered = computed(() => md.render(props.content))
 .markdown-body :deep(table td) {
   border: 1px solid #d0d7de;
   padding: 6px 12px;
+}
+
+/* ---------- 深色模式（代码预览 / 深色工作区） ---------- */
+.markdown-body.is-dark {
+  color: var(--dark-text-1);
+}
+
+.markdown-body.is-dark :deep(p),
+.markdown-body.is-dark :deep(li) {
+  color: var(--dark-text-1);
+}
+
+.markdown-body.is-dark :deep(h1),
+.markdown-body.is-dark :deep(h2),
+.markdown-body.is-dark :deep(h3),
+.markdown-body.is-dark :deep(h4) {
+  color: #ffffff;
+}
+
+.markdown-body.is-dark :deep(pre) {
+  background: var(--dark-bg-2);
+  border: 1px solid var(--dark-border);
+}
+
+.markdown-body.is-dark :deep(code:not(pre code)) {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--dark-text-1);
+}
+
+.markdown-body.is-dark :deep(a) {
+  color: #8fb0ff;
+}
+
+.markdown-body.is-dark :deep(blockquote) {
+  border-left-color: rgba(255, 255, 255, 0.2);
+  color: var(--dark-text-2);
+}
+
+.markdown-body.is-dark :deep(table th),
+.markdown-body.is-dark :deep(table td) {
+  border-color: rgba(255, 255, 255, 0.16);
+  color: var(--dark-text-1);
+}
+
+/* hljs 默认引入的是浅色（github）主题，这里覆盖主要 token 配色 */
+.markdown-body.is-dark :deep(.hljs) {
+  background: transparent;
+  color: var(--dark-text-1);
+}
+
+.markdown-body.is-dark :deep(.hljs-comment),
+.markdown-body.is-dark :deep(.hljs-quote) {
+  color: #7d8598;
+  font-style: italic;
+}
+
+.markdown-body.is-dark :deep(.hljs-keyword),
+.markdown-body.is-dark :deep(.hljs-selector-tag),
+.markdown-body.is-dark :deep(.hljs-literal),
+.markdown-body.is-dark :deep(.hljs-doctag) {
+  color: #c792ea;
+}
+
+.markdown-body.is-dark :deep(.hljs-string),
+.markdown-body.is-dark :deep(.hljs-regexp),
+.markdown-body.is-dark :deep(.hljs-addition) {
+  color: #a5e075;
+}
+
+.markdown-body.is-dark :deep(.hljs-number),
+.markdown-body.is-dark :deep(.hljs-built_in),
+.markdown-body.is-dark :deep(.hljs-symbol) {
+  color: #ffb86c;
+}
+
+.markdown-body.is-dark :deep(.hljs-title),
+.markdown-body.is-dark :deep(.hljs-section),
+.markdown-body.is-dark :deep(.hljs-name) {
+  color: #82aaff;
+}
+
+.markdown-body.is-dark :deep(.hljs-attr),
+.markdown-body.is-dark :deep(.hljs-attribute),
+.markdown-body.is-dark :deep(.hljs-variable),
+.markdown-body.is-dark :deep(.hljs-template-variable) {
+  color: #ffcb6b;
+}
+
+.markdown-body.is-dark :deep(.hljs-tag) {
+  color: #8b98b8;
+}
+
+.markdown-body.is-dark :deep(.hljs-deletion) {
+  color: #ff6b81;
 }
 </style>

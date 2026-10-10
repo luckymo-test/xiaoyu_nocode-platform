@@ -1,0 +1,4 @@
+/* 样式总入口：顺序 = reset（在 main.ts 引入） → token → 全局基础 → antd 微调 */
+@import './tokens.css';
+@import './global.css';
+@import './antd.css';

@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import { getLoginUser, userLogout } from '@/api/userController'
-import { message } from 'ant-design-vue'
+import { appMessage as message } from '@/utils/feedback'
 
 export const useUserStore = defineStore('user', () => {
   const loginUser = ref<API.LoginUserVO | null>(null)

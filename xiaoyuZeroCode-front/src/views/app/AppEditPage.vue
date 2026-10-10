@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { reactive, ref, computed, onMounted } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { message } from 'ant-design-vue'
+import { appMessage as message } from '@/utils/feedback'
+import { SaveOutlined } from '@ant-design/icons-vue'
+import PageContainer from '@/components/PageContainer.vue'
 import { getAppVoById, updateApp, updateAppByAdmin } from '@/api/appController'
 import { useUserStore } from '@/stores/user'
 
@@ -33,10 +35,7 @@ const loadApp = async () => {
     if (res.data.code === 0 && res.data.data) {
       const app = res.data.data
       // 普通用户只能编辑自己的应用
-      if (
-        !isAdmin.value &&
-        app.userId !== userStore.loginUser?.id
-      ) {
+      if (!isAdmin.value && app.userId !== userStore.loginUser?.id) {
         noPermission.value = true
         return
       }
@@ -102,39 +101,36 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="app-edit-page">
+  <PageContainer narrow title="编辑应用" description="修改应用名称、描述、标签与可见范围">
     <a-spin :spinning="loading">
-      <a-result
-        v-if="noPermission"
-        status="403"
-        title="无权编辑"
-        sub-title="该应用不属于你，无法修改"
-      >
-        <template #extra>
-          <a-button type="primary" @click="router.back()">返回</a-button>
-        </template>
-      </a-result>
+      <a-card :bordered="false">
+        <a-result
+          v-if="noPermission"
+          status="403"
+          title="无权编辑"
+          sub-title="该应用不属于你，无法修改"
+        >
+          <template #extra>
+            <a-button type="primary" @click="router.back()">返回</a-button>
+          </template>
+        </a-result>
 
-      <a-card
-        v-else-if="!loading"
-        :title="`编辑应用 #${form.id}`"
-        :bordered="false"
-        class="edit-card"
-      >
-        <a-form :model="form" layout="vertical" style="max-width: 480px">
-          <a-form-item label="应用名称">
+        <a-form v-else :model="form" layout="vertical">
+          <a-form-item label="应用名称" required>
             <a-input
               v-model:value="form.appName"
               placeholder="请输入应用名称"
               :maxlength="50"
+              show-count
             />
           </a-form-item>
           <a-form-item label="应用描述">
             <a-textarea
               v-model:value="form.description"
-              placeholder="请输入应用描述"
+              placeholder="一句话介绍这个应用"
               :rows="3"
               :maxlength="200"
+              show-count
             />
           </a-form-item>
           <a-form-item label="标签">
@@ -151,9 +147,11 @@ onMounted(() => {
               <a-radio value="private">私有</a-radio>
             </a-radio-group>
           </a-form-item>
+
           <template v-if="isAdmin">
+            <a-divider orientation="left">管理员选项</a-divider>
             <a-form-item label="封面链接">
-              <a-input v-model:value="form.cover" placeholder="请输入封面图片URL" />
+              <a-input v-model:value="form.cover" placeholder="请输入封面图片 URL" />
             </a-form-item>
             <a-form-item label="优先级">
               <a-input-number
@@ -162,29 +160,36 @@ onMounted(() => {
                 :max="999"
                 style="width: 100%"
               />
+              <span class="form-tip">设为 999 表示置顶</span>
             </a-form-item>
           </template>
-          <a-form-item>
-            <a-space>
-              <a-button type="primary" :loading="saving" @click="handleSave">
-                保存
-              </a-button>
-              <a-button @click="router.back()">取消</a-button>
-            </a-space>
-          </a-form-item>
+
+          <div class="form-actions">
+            <a-button @click="router.back()">取消</a-button>
+            <a-button type="primary" :loading="saving" @click="handleSave">
+              <template #icon><SaveOutlined /></template>
+              保存
+            </a-button>
+          </div>
         </a-form>
       </a-card>
     </a-spin>
-  </div>
+  </PageContainer>
 </template>
 
 <style scoped>
-.app-edit-page {
-  max-width: 700px;
-  margin: 0 auto;
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: 1px dashed var(--border);
 }
 
-.edit-card {
-  min-height: 300px;
+.form-tip {
+  margin-left: var(--space-2);
+  color: var(--text-3);
+  font-size: var(--font-xs);
 }
 </style>

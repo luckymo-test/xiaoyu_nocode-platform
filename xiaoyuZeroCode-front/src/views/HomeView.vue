@@ -1,22 +1,33 @@
 <script setup lang="ts">
-import { reactive, ref, computed, onMounted } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { message } from 'ant-design-vue'
+import { appMessage as message } from '@/utils/feedback'
+import {
+  DownOutlined,
+  PlusOutlined,
+  RocketOutlined,
+  SearchOutlined,
+  ThunderboltFilled,
+} from '@ant-design/icons-vue'
 import {
   addApp,
   deleteApp,
-  listMyAppVoByPage,
   listFeaturedAppVoByPage,
+  listMyAppVoByPage,
   listPublicAppVoByPage,
 } from '@/api/appController'
-import { visibilityText } from '@/utils/appStatus'
+import AppCard from '@/components/AppCard.vue'
+import EmptyState from '@/components/EmptyState.vue'
+import TableSkeleton from '@/components/TableSkeleton.vue'
 
 const router = useRouter()
+
+/* ---------------- 创作台 ---------------- */
 
 const prompt = ref('')
 const creating = ref(false)
 
-// 生成模式：single / multi / single-stream / multi-stream
+/** 生成模式：single / multi / single-stream / multi-stream */
 interface GenerateMode {
   label: string
   codeGenType: string
@@ -32,39 +43,28 @@ const generateModes: GenerateMode[] = [
 ]
 
 const selectedModeIndex = ref(2)
-const selectedMode = computed(
-  () => generateModes[selectedModeIndex.value],
-)
+const selectedMode = computed(() => generateModes[selectedModeIndex.value])
 
-// 创建时的可见范围（默认公开）
+/** 创建时的可见范围（默认公开） */
 const createVisibility = ref<'public' | 'private'>('public')
+const visibilityOptions = [
+  { label: '公开', value: 'public' },
+  { label: '私有', value: 'private' },
+]
+const modeOptions = generateModes.map((m, i) => ({ label: m.label, value: i }))
 
-// 我的应用
-const myAppList = ref<API.AppVO[]>([])
-const myAppLoading = ref(false)
-const myAppPagination = reactive({ current: 1, pageSize: 8, total: 0 })
-const myAppKeyword = ref('')
-
-// 精选应用
-const featuredList = ref<API.AppVO[]>([])
-const featuredLoading = ref(false)
-const featuredPagination = reactive({ current: 1, pageSize: 8, total: 0 })
-const featuredKeyword = ref('')
-
-// 公开应用（普通用户看别人公开应用的主入口）
-const publicList = ref<API.AppVO[]>([])
-const publicLoading = ref(false)
-const publicPagination = reactive({ current: 1, pageSize: 12, total: 0 })
-const publicKeyword = ref('')
-const publicTag = ref<string | undefined>(undefined)
-
-// 常用标签快捷筛选
-const hotTags = ['个人', '电商', '时钟', '登录', '计划', '天气']
+/** 冷启动引导：点一下就能填进输入框 */
+const examplePrompts = [
+  '生成一个简洁美观的个人计划页面',
+  '做一个产品落地页，带功能区和价格表',
+  '写一个番茄钟计时器，支持暂停',
+  '做一个数据看板，展示销售趋势',
+]
 
 const handleCreate = async () => {
   const text = prompt.value.trim()
   if (!text) {
-    message.warning('请输入应用描述')
+    message.warning('请先描述你想创建的网站应用')
     return
   }
   creating.value = true
@@ -89,6 +89,31 @@ const handleCreate = async () => {
     creating.value = false
   }
 }
+
+/* ---------------- 三个列表：按 Tab 懒加载 ---------------- */
+
+const activeTab = ref<'mine' | 'featured' | 'public'>('mine')
+const tabLoaded = reactive<Record<string, boolean>>({})
+
+// 我的应用
+const myAppList = ref<API.AppVO[]>([])
+const myAppLoading = ref(false)
+const myAppPagination = reactive({ current: 1, pageSize: 8, total: 0 })
+const myAppKeyword = ref('')
+
+// 精选应用
+const featuredList = ref<API.AppVO[]>([])
+const featuredLoading = ref(false)
+const featuredPagination = reactive({ current: 1, pageSize: 8, total: 0 })
+const featuredKeyword = ref('')
+
+// 公开应用
+const publicList = ref<API.AppVO[]>([])
+const publicLoading = ref(false)
+const publicPagination = reactive({ current: 1, pageSize: 12, total: 0 })
+const publicKeyword = ref('')
+const publicTag = ref<string | undefined>(undefined)
+const hotTags = ['个人', '电商', '时钟', '登录', '计划', '天气']
 
 const fetchMyApps = async () => {
   myAppLoading.value = true
@@ -143,6 +168,20 @@ const fetchPublicApps = async () => {
   }
 }
 
+const loadTab = (key: string) => {
+  if (tabLoaded[key]) return
+  tabLoaded[key] = true
+  if (key === 'mine') fetchMyApps()
+  if (key === 'featured') fetchFeaturedApps()
+  if (key === 'public') fetchPublicApps()
+}
+
+const handleTabChange = (key: string | number) => {
+  loadTab(String(key))
+}
+
+/* ---------------- 交互 ---------------- */
+
 const handlePublicSearch = () => {
   publicPagination.current = 1
   fetchPublicApps()
@@ -163,401 +202,535 @@ const handleEdit = (id?: number) => {
   router.push(`/app/edit/${id}`)
 }
 
-const handleDelete = async (id?: number) => {
+/** 删除走二次确认弹窗：不可逆操作不用裸链接 */
+const deleteModalOpen = ref(false)
+const deleteTarget = ref<API.AppVO | null>(null)
+const deleting = ref(false)
+
+const askDelete = (record: API.AppVO) => {
+  deleteTarget.value = record
+  deleteModalOpen.value = true
+}
+
+const confirmDelete = async () => {
+  const id = deleteTarget.value?.id
   if (!id) return
+  deleting.value = true
   try {
     const res = await deleteApp({ id })
     if (res.data.code === 0) {
-      message.success('删除成功')
+      message.success('已删除到回收站')
+      deleteModalOpen.value = false
       fetchMyApps()
     } else {
       message.error(res.data.message || '删除失败')
     }
   } catch {
     message.error('删除失败')
+  } finally {
+    deleting.value = false
   }
 }
 
+const handleMoreClick = ({ key }: { key: string | number }, record: API.AppVO) => {
+  if (key === 'edit') handleEdit(record.id)
+  if (key === 'delete') askDelete(record)
+}
+
+const focusStudio = () => {
+  document.querySelector<HTMLTextAreaElement>('.studio-input')?.focus()
+}
+
 onMounted(() => {
-  fetchMyApps()
-  fetchFeaturedApps()
-  fetchPublicApps()
+  loadTab('mine')
 })
 
 const columns = [
-  { title: '应用名称', dataIndex: 'appName', key: 'appName' },
-  { title: '类型', dataIndex: 'codeGenType', key: 'codeGenType', width: 120 },
-  {
-    title: '创建时间',
-    dataIndex: 'createTime',
-    key: 'createTime',
-    width: 180,
-  },
-  { title: '操作', key: 'action', width: 220, fixed: 'right' },
+  { title: '应用名称', dataIndex: 'appName', key: 'appName', width: 240, ellipsis: true },
+  { title: '类型', dataIndex: 'codeGenType', key: 'codeGenType', width: 110 },
+  { title: '创建时间', dataIndex: 'createTime', key: 'createTime', width: 180 },
+  { title: '操作', key: 'action', width: 200, fixed: 'right' },
 ]
+
+const codeGenTypeText = (type?: string) =>
+  type === 'multi_file' ? '多文件' : type === 'vue' ? 'Vue3 工程' : '单文件'
+
+const codeGenTypeColor = (type?: string) =>
+  type === 'multi_file' ? 'purple' : type === 'vue' ? 'green' : 'blue'
 </script>
 
 <template>
   <div class="home-page">
-    <div class="hero">
-      <h1 class="hero-title">小玉零代码</h1>
-      <p class="hero-subtitle">输入你的需求，AI 为你生成网站应用</p>
-    </div>
+    <section class="hero">
+      <span class="hero-badge">
+        <ThunderboltFilled />
+        AI 驱动 · 一句话生成应用
+      </span>
+      <h1 class="hero-title">把想法说出来，剩下的交给小玉</h1>
+      <p class="hero-subtitle">描述你想要的网站应用，AI 自动生成可预览、可部署的完整代码</p>
+    </section>
 
-    <a-card :bordered="false" class="prompt-card">
+    <a-card :bordered="false" class="studio-card">
       <a-textarea
         v-model:value="prompt"
+        class="studio-input"
         placeholder="描述你想创建的网站应用，例如：生成一个简洁美观的个人计划页面"
         :rows="3"
+        :maxlength="500"
         @keydown.ctrl.enter="handleCreate"
       />
-      <div class="prompt-actions">
-        <a-space>
-          <a-select
-            v-model:value="createVisibility"
-            style="width: 90px"
-            :options="[
-              { label: '公开', value: 'public' },
-              { label: '私有', value: 'private' },
-            ]"
-          />
+
+      <div class="studio-examples">
+        <span class="examples-label">没想好？试试：</span>
+        <button
+          v-for="ex in examplePrompts"
+          :key="ex"
+          type="button"
+          class="example-chip"
+          @click="prompt = ex"
+        >
+          {{ ex }}
+        </button>
+      </div>
+
+      <div class="studio-actions">
+        <div class="studio-options">
+          <a-segmented v-model:value="createVisibility" :options="visibilityOptions" />
           <a-select
             v-model:value="selectedModeIndex"
-            style="width: 180px"
-            :options="generateModes.map((m, i) => ({ label: m.label, value: i }))"
+            :options="modeOptions"
+            style="width: 190px"
           />
-          <a-button
-            type="primary"
-            size="large"
-            :loading="creating"
-            @click="handleCreate"
-          >
-            创建应用
-          </a-button>
-        </a-space>
-      </div>
-    </a-card>
-
-    <a-card
-      :bordered="false"
-      title="我的应用"
-      class="list-card"
-    >
-      <div class="search-bar">
-        <a-input
-          v-model:value="myAppKeyword"
-          placeholder="搜索应用名称"
-          allow-clear
-          style="width: 240px"
-          @press-enter="myAppPagination.current = 1; fetchMyApps()"
-        />
-        <a-button
-          type="primary"
-          @click="myAppPagination.current = 1; fetchMyApps()"
-        >
-          搜索
+          <span class="shortcut-hint">Ctrl + Enter 快速创建</span>
+        </div>
+        <a-button type="primary" size="large" :loading="creating" @click="handleCreate">
+          <template #icon><RocketOutlined /></template>
+          创建应用
         </a-button>
       </div>
-
-      <a-table
-        :columns="columns"
-        :data-source="myAppList"
-        :loading="myAppLoading"
-        :pagination="{
-          current: myAppPagination.current,
-          pageSize: myAppPagination.pageSize,
-          total: myAppPagination.total,
-          showSizeChanger: false,
-        }"
-        row-key="id"
-        :scroll="{ x: 700 }"
-        @change="({ current }: any) => (myAppPagination.current = current, fetchMyApps())"
-      >
-        <template #bodyCell="{ column, record }">
-          <template v-if="column.key === 'action'">
-            <a-space>
-              <a-button type="link" size="small" @click="handleOpenApp(record.id)">
-                进入对话
-              </a-button>
-              <a-button type="link" size="small" @click="handleEdit(record.id)">
-                编辑
-              </a-button>
-              <a-popconfirm title="确定删除该应用？" @confirm="handleDelete(record.id)">
-                <a-button type="link" size="small" danger>删除</a-button>
-              </a-popconfirm>
-            </a-space>
-          </template>
-        </template>
-      </a-table>
     </a-card>
 
-    <a-card
-      :bordered="false"
-      title="精选应用"
-      class="list-card"
-    >
-      <div class="search-bar">
-        <a-input
-          v-model:value="featuredKeyword"
-          placeholder="搜索应用名称"
-          allow-clear
-          style="width: 240px"
-          @press-enter="featuredPagination.current = 1; fetchFeaturedApps()"
-        />
-        <a-button
-          type="primary"
-          @click="featuredPagination.current = 1; fetchFeaturedApps()"
-        >
-          搜索
-        </a-button>
-      </div>
-
-      <div v-if="featuredLoading" class="featured-empty">
-        <a-spin />
-      </div>
-      <div v-else-if="featuredList.length === 0" class="featured-empty">
-        <a-empty description="暂无精选应用" />
-      </div>
-      <div v-else class="featured-grid">
-        <a-card
-          v-for="app in featuredList"
-          :key="app.id"
-          hoverable
-          class="featured-card"
-          @click="handleOpenApp(app.id)"
-        >
-          <template #cover>
-            <a-image
-              v-if="app.cover || app.compressPictures"
-              :src="app.compressPictures || app.cover"
-              :preview="{ src: app.cover }"
-              alt="cover"
-              class="featured-cover"
-              @click.stop
-            />
-            <div v-else class="featured-cover featured-cover-placeholder">
-              {{ app.appName?.charAt(0) || 'A' }}
+    <a-tabs v-model:activeKey="activeTab" class="home-tabs" size="large" @change="handleTabChange">
+      <!-- 我的应用 -->
+      <a-tab-pane key="mine" tab="我的应用">
+        <a-card :bordered="false">
+          <div class="pane-toolbar">
+            <div class="toolbar-filter">
+              <a-input
+                v-model:value="myAppKeyword"
+                placeholder="搜索应用名称"
+                allow-clear
+                class="toolbar-input"
+                @press-enter="myAppPagination.current = 1; fetchMyApps()"
+              >
+                <template #prefix><SearchOutlined /></template>
+              </a-input>
+              <a-button
+                type="primary"
+                @click="myAppPagination.current = 1; fetchMyApps()"
+              >
+                查询
+              </a-button>
+              <a-button @click="myAppKeyword = ''; myAppPagination.current = 1; fetchMyApps()">
+                重置
+              </a-button>
             </div>
-          </template>
-          <a-card-meta
-            :title="app.appName || '未命名应用'"
-            :description="app.initPrompt || '暂无描述'"
-          />
-        </a-card>
-      </div>
+            <a-button type="primary" @click="focusStudio">
+              <template #icon><PlusOutlined /></template>
+              新建应用
+            </a-button>
+          </div>
 
-      <div class="featured-pagination">
-        <a-pagination
-          :current="featuredPagination.current"
-          :page-size="featuredPagination.pageSize"
-          :total="featuredPagination.total"
-          :show-size-changer="false"
-          @change="(page: number) => (featuredPagination.current = page, fetchFeaturedApps())"
-        />
-      </div>
-    </a-card>
-
-    <a-card
-      :bordered="false"
-      title="公开应用"
-      class="list-card"
-    >
-      <div class="search-bar">
-        <a-input
-          v-model:value="publicKeyword"
-          placeholder="搜索名称/描述/标签"
-          allow-clear
-          style="width: 240px"
-          @press-enter="handlePublicSearch"
-        />
-        <a-button type="primary" @click="handlePublicSearch">搜索</a-button>
-        <a-button @click="publicKeyword = ''; publicTag = undefined; handlePublicSearch()">重置</a-button>
-      </div>
-
-      <div class="tag-filter">
-        <a-tag
-          v-for="tag in hotTags"
-          :key="tag"
-          :color="publicTag === tag ? 'blue' : ''"
-          class="tag-chip"
-          @click="handlePublicTagClick(tag)"
-        >
-          {{ tag }}
-        </a-tag>
-      </div>
-
-      <div v-if="publicLoading" class="featured-empty">
-        <a-spin />
-      </div>
-      <div v-else-if="publicList.length === 0" class="featured-empty">
-        <a-empty description="暂无公开应用" />
-      </div>
-      <div v-else class="featured-grid">
-        <a-card
-          v-for="app in publicList"
-          :key="app.id"
-          hoverable
-          class="featured-card"
-          @click="handleOpenApp(app.id)"
-        >
-          <template #cover>
-            <a-image
-              v-if="app.cover || app.compressPictures"
-              :src="app.compressPictures || app.cover"
-              :preview="{ src: app.cover }"
-              alt="cover"
-              class="featured-cover"
-              @click.stop
-            />
-            <div v-else class="featured-cover featured-cover-placeholder">
-              {{ app.appName?.charAt(0) || 'A' }}
-            </div>
-          </template>
-          <a-card-meta
-            :title="app.appName || '未命名应用'"
-            :description="app.description || app.initPrompt || '暂无描述'"
+          <TableSkeleton v-if="myAppLoading && myAppList.length === 0" :rows="5" :cols="4" />
+          <a-table
+            v-else
+            :columns="columns"
+            :data-source="myAppList"
+            :loading="myAppLoading"
+            :pagination="{
+              current: myAppPagination.current,
+              pageSize: myAppPagination.pageSize,
+              total: myAppPagination.total,
+              showSizeChanger: false,
+            }"
+            row-key="id"
+            :scroll="{ x: 700 }"
+            @change="({ current }: any) => (myAppPagination.current = current, fetchMyApps())"
           >
-            <template #description>
-              <span>{{ app.description || app.initPrompt || '暂无描述' }}</span>
-              <div class="public-tags">
-                <a-tag
-                  v-for="t in (app.tags ? app.tags.split(',') : []).slice(0, 3)"
-                  :key="t"
-                  color="blue"
-                  style="margin-top: 4px"
-                >
-                  {{ t }}
-                </a-tag>
-                <a-tag
-                  v-if="app.visibility"
-                  :color="app.visibility === 'public' ? 'green' : 'default'"
-                  style="margin-top: 4px"
-                >
-                  {{ visibilityText(app.visibility).text }}
-                </a-tag>
-              </div>
+            <template #emptyText>
+              <EmptyState title="还没有应用" description="在上面描述你的想法，几秒钟就能生成第一个应用">
+                <a-button type="primary" @click="focusStudio">
+                  <template #icon><PlusOutlined /></template>
+                  开始创建
+                </a-button>
+              </EmptyState>
             </template>
-          </a-card-meta>
+            <template #bodyCell="{ column, record }">
+              <template v-if="column.key === 'codeGenType'">
+                <a-tag :color="codeGenTypeColor(record.codeGenType)">
+                  {{ codeGenTypeText(record.codeGenType) }}
+                </a-tag>
+              </template>
+              <template v-if="column.key === 'action'">
+                <a-space :size="4">
+                  <a-button type="link" size="small" @click="handleOpenApp(record.id)">
+                    进入对话
+                  </a-button>
+                  <a-dropdown trigger="click">
+                    <a-button type="text" size="small">
+                      更多
+                      <DownOutlined />
+                    </a-button>
+                    <template #overlay>
+                      <a-menu @click="(info: any) => handleMoreClick(info, record)">
+                        <a-menu-item key="edit">编辑信息</a-menu-item>
+                        <a-menu-divider />
+                        <a-menu-item key="delete" danger>删除到回收站</a-menu-item>
+                      </a-menu>
+                    </template>
+                  </a-dropdown>
+                </a-space>
+              </template>
+            </template>
+          </a-table>
         </a-card>
-      </div>
+      </a-tab-pane>
 
-      <div class="featured-pagination">
-        <a-pagination
-          :current="publicPagination.current"
-          :page-size="publicPagination.pageSize"
-          :total="publicPagination.total"
-          :show-size-changer="false"
-          @change="(page: number) => (publicPagination.current = page, fetchPublicApps())"
-        />
-      </div>
-    </a-card>
+      <!-- 精选应用 -->
+      <a-tab-pane key="featured" tab="精选应用">
+        <a-card :bordered="false">
+          <div class="pane-toolbar">
+            <div class="toolbar-filter">
+              <a-input
+                v-model:value="featuredKeyword"
+                placeholder="搜索精选应用"
+                allow-clear
+                class="toolbar-input"
+                @press-enter="featuredPagination.current = 1; fetchFeaturedApps()"
+              >
+                <template #prefix><SearchOutlined /></template>
+              </a-input>
+              <a-button
+                type="primary"
+                @click="featuredPagination.current = 1; fetchFeaturedApps()"
+              >
+                查询
+              </a-button>
+              <a-button
+                @click="featuredKeyword = ''; featuredPagination.current = 1; fetchFeaturedApps()"
+              >
+                重置
+              </a-button>
+            </div>
+          </div>
+
+          <div v-if="featuredLoading && featuredList.length === 0" class="app-grid">
+            <a-card v-for="n in 4" :key="n" :bordered="false" class="skeleton-card">
+              <a-skeleton active :paragraph="{ rows: 2 }" />
+            </a-card>
+          </div>
+          <EmptyState
+            v-else-if="featuredList.length === 0"
+            title="暂无精选应用"
+            description="精选应用由管理员从公开应用中审核推荐"
+          />
+          <div v-else class="app-grid">
+            <AppCard
+              v-for="app in featuredList"
+              :key="app.id"
+              :app="app"
+              @open="handleOpenApp"
+            />
+          </div>
+
+          <div v-if="featuredPagination.total > featuredPagination.pageSize" class="pane-pagination">
+            <a-pagination
+              :current="featuredPagination.current"
+              :page-size="featuredPagination.pageSize"
+              :total="featuredPagination.total"
+              :show-size-changer="false"
+              @change="(page: number) => (featuredPagination.current = page, fetchFeaturedApps())"
+            />
+          </div>
+        </a-card>
+      </a-tab-pane>
+
+      <!-- 公开应用 -->
+      <a-tab-pane key="public" tab="公开应用">
+        <a-card :bordered="false">
+          <div class="pane-toolbar">
+            <div class="toolbar-filter">
+              <a-input
+                v-model:value="publicKeyword"
+                placeholder="搜索名称 / 描述 / 标签"
+                allow-clear
+                class="toolbar-input"
+                @press-enter="handlePublicSearch"
+              >
+                <template #prefix><SearchOutlined /></template>
+              </a-input>
+              <a-button type="primary" @click="handlePublicSearch">查询</a-button>
+              <a-button
+                @click="publicKeyword = ''; publicTag = undefined; handlePublicSearch()"
+              >
+                重置
+              </a-button>
+            </div>
+          </div>
+
+          <div class="tag-filter">
+            <button
+              v-for="tag in hotTags"
+              :key="tag"
+              type="button"
+              class="tag-chip"
+              :class="{ active: publicTag === tag }"
+              @click="handlePublicTagClick(tag)"
+            >
+              {{ tag }}
+            </button>
+          </div>
+
+          <div v-if="publicLoading && publicList.length === 0" class="app-grid">
+            <a-card v-for="n in 6" :key="n" :bordered="false" class="skeleton-card">
+              <a-skeleton active :paragraph="{ rows: 2 }" />
+            </a-card>
+          </div>
+          <EmptyState
+            v-else-if="publicList.length === 0"
+            title="暂无公开应用"
+            description="换个关键词或标签试试，也可以把自己的应用设为公开"
+          />
+          <div v-else class="app-grid">
+            <AppCard
+              v-for="app in publicList"
+              :key="app.id"
+              :app="app"
+              show-tags
+              show-visibility
+              @open="handleOpenApp"
+            />
+          </div>
+
+          <div v-if="publicPagination.total > publicPagination.pageSize" class="pane-pagination">
+            <a-pagination
+              :current="publicPagination.current"
+              :page-size="publicPagination.pageSize"
+              :total="publicPagination.total"
+              :show-size-changer="false"
+              @change="(page: number) => (publicPagination.current = page, fetchPublicApps())"
+            />
+          </div>
+        </a-card>
+      </a-tab-pane>
+    </a-tabs>
+
+    <a-modal
+      v-model:open="deleteModalOpen"
+      title="删除应用"
+      ok-text="删除到回收站"
+      ok-type="danger"
+      cancel-text="取消"
+      :confirm-loading="deleting"
+      @ok="confirmDelete"
+    >
+      <p>确定要把「{{ deleteTarget?.appName || '未命名应用' }}」删除到回收站吗？</p>
+      <p class="modal-tip">删除后可以在「我的项目 → 回收站」里恢复。</p>
+    </a-modal>
   </div>
 </template>
 
 <style scoped>
 .home-page {
-  max-width: 1000px;
+  max-width: 1080px;
   margin: 0 auto;
 }
 
+/* ---------- Hero ---------- */
 .hero {
+  padding: var(--space-6) 0 var(--space-5);
   text-align: center;
-  margin: 24px 0 32px;
+}
+
+.hero-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg-surface);
+  box-shadow: var(--shadow-1);
+  color: var(--brand-600);
+  font-size: var(--font-sm);
+  font-weight: 500;
 }
 
 .hero-title {
-  font-size: 40px;
-  font-weight: bold;
-  margin-bottom: 8px;
-  background: linear-gradient(90deg, #1677ff, #722ed1);
-  -webkit-background-clip: text;
+  margin-top: var(--space-4);
+  background: var(--gradient-brand);
   background-clip: text;
   color: transparent;
+  font-size: 42px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  -webkit-background-clip: text;
 }
 
 .hero-subtitle {
-  color: #666;
-  font-size: 16px;
+  margin-top: var(--space-3);
+  color: var(--text-2);
+  font-size: var(--font-lg);
 }
 
-.prompt-card {
-  margin-bottom: 24px;
+/* ---------- 创作台 ---------- */
+.studio-card {
+  margin-bottom: var(--space-5);
 }
 
-.prompt-actions {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 16px;
+.studio-input {
+  border-radius: var(--radius-lg);
+  font-size: 15px;
+  line-height: 1.7;
 }
 
-.list-card {
-  margin-bottom: 24px;
-}
-
-.search-bar {
-  margin-bottom: 16px;
-  display: flex;
-  gap: 8px;
-}
-
-.featured-empty {
-  padding: 32px 0;
-  text-align: center;
-}
-
-.featured-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 16px;
-}
-
-.featured-card {
-  cursor: pointer;
-}
-
-.featured-cover {
-  height: 140px;
-  width: 100%;
-  object-fit: cover;
-}
-
-.featured-cover :deep(.ant-image-img) {
-  height: 140px;
-  width: 100%;
-  object-fit: cover;
-}
-
-.featured-cover-placeholder {
+.studio-examples {
   display: flex;
   align-items: center;
-  justify-content: center;
-  font-size: 40px;
-  font-weight: bold;
-  color: #fff;
-  background: linear-gradient(135deg, #1677ff, #722ed1);
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-top: var(--space-3);
 }
 
-.featured-pagination {
+.examples-label {
+  color: var(--text-3);
+  font-size: var(--font-sm);
+}
+
+.example-chip {
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg-surface);
+  color: var(--text-2);
+  font-size: var(--font-sm);
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+}
+
+.example-chip:hover {
+  border-color: var(--brand-300);
+  background: var(--brand-50);
+  color: var(--brand-600);
+  transform: translateY(-1px);
+}
+
+.studio-actions {
   display: flex;
-  justify-content: flex-end;
-  margin-top: 16px;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px dashed var(--border);
+}
+
+.studio-options {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.shortcut-hint {
+  color: var(--text-3);
+  font-size: var(--font-xs);
+}
+
+/* ---------- 列表区 ---------- */
+.home-tabs :deep(.ant-tabs-nav) {
+  margin-bottom: var(--space-4);
+}
+
+.home-tabs :deep(.ant-tabs-tab) {
+  font-weight: 500;
 }
 
 .tag-filter {
   display: flex;
+  align-items: center;
+  gap: var(--space-2);
   flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 16px;
+  margin-bottom: var(--space-4);
 }
 
 .tag-chip {
+  padding: 3px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg-surface);
+  color: var(--text-2);
+  font-size: var(--font-sm);
   cursor: pointer;
-  user-select: none;
+  transition: all var(--dur) var(--ease);
 }
 
-.public-tags {
+.tag-chip:hover {
+  border-color: var(--brand-300);
+  color: var(--brand-600);
+}
+
+.tag-chip.active {
+  border-color: transparent;
+  background: var(--gradient-brand-soft);
+  color: var(--brand-700);
+  font-weight: 500;
+}
+
+.app-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--space-4);
+}
+
+.skeleton-card {
+  border-radius: var(--radius-xl);
+}
+
+.pane-pagination {
   display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
+  justify-content: flex-end;
+  margin-top: var(--space-5);
+}
+
+.modal-tip {
+  margin-top: var(--space-2);
+  color: var(--text-3);
+  font-size: var(--font-sm);
+}
+
+@media (max-width: 768px) {
+  .hero {
+    padding: var(--space-4) 0 var(--space-3);
+  }
+
+  .hero-title {
+    font-size: 28px;
+  }
+
+  .hero-subtitle {
+    font-size: var(--font-base);
+  }
+
+  .studio-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .app-grid {
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: var(--space-3);
+  }
 }
 </style>

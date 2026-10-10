@@ -1,13 +1,16 @@
 <script setup lang="ts">
-import { reactive, ref, onMounted } from 'vue'
+import { onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { message } from 'ant-design-vue'
+import { appMessage as message } from '@/utils/feedback'
+import { DownOutlined, SearchOutlined } from '@ant-design/icons-vue'
+import PageContainer from '@/components/PageContainer.vue'
+import TableSkeleton from '@/components/TableSkeleton.vue'
 import {
-  listAppByPage,
-  deleteAppByAdmin,
-  updateAppByAdmin,
   auditFeatured,
   cancelFeatured,
+  deleteAppByAdmin,
+  listAppByPage,
+  updateAppByAdmin,
 } from '@/api/appController'
 import { featuredStatusText } from '@/utils/appStatus'
 
@@ -69,18 +72,33 @@ const handleEdit = (record: API.App) => {
   router.push(`/app/edit/${record.id}`)
 }
 
-const handleDelete = async (id?: number) => {
+/* 删除：不可逆操作走二次确认弹窗 */
+const deleteModalOpen = ref(false)
+const deleteTarget = ref<API.App | null>(null)
+const deleting = ref(false)
+
+const askDelete = (record: API.App) => {
+  deleteTarget.value = record
+  deleteModalOpen.value = true
+}
+
+const confirmDelete = async () => {
+  const id = deleteTarget.value?.id
   if (!id) return
+  deleting.value = true
   try {
     const res = await deleteAppByAdmin({ id })
     if (res.data.code === 0) {
       message.success('删除成功')
+      deleteModalOpen.value = false
       fetchData()
     } else {
       message.error(res.data.message || '删除失败')
     }
   } catch {
     message.error('删除失败')
+  } finally {
+    deleting.value = false
   }
 }
 
@@ -159,6 +177,23 @@ const handleUnpin = async (record: API.App) => {
   }
 }
 
+/**
+ * 行内「更多」菜单：把审核、置顶这些管理动作收起来。
+ * 之前 6 个按钮平铺在操作列里，既挤又容易点错。
+ */
+const handleRowMore = ({ key }: { key: string | number }, record: API.App) => {
+  const actions: Record<string, () => void> = {
+    edit: () => handleEdit(record),
+    pass: () => handleAuditPass(record),
+    reject: () => handleAuditReject(record),
+    cancelFeatured: () => handleCancelFeatured(record),
+    pin: () => handlePin(record),
+    unpin: () => handleUnpin(record),
+    delete: () => askDelete(record),
+  }
+  actions[String(key)]?.()
+}
+
 onMounted(() => {
   fetchData()
 })
@@ -170,60 +205,51 @@ const codeGenTypeColor = (type?: string) =>
   type === 'multi_file' ? 'purple' : type === 'vue' ? 'green' : 'blue'
 
 const columns = [
-  { title: 'ID', dataIndex: 'id', key: 'id', width: 200 },
-  { title: '应用名称', dataIndex: 'appName', key: 'appName' },
-  {
-    title: '类型',
-    dataIndex: 'codeGenType',
-    key: 'codeGenType',
-    width: 100,
-  },
-  {
-    title: '精选状态',
-    dataIndex: 'featuredStatus',
-    key: 'featuredStatus',
-    width: 90,
-  },
-  { title: '优先级', dataIndex: 'priority', key: 'priority', width: 100 },
-  { title: '用户ID', dataIndex: 'userId', key: 'userId', width: 200 },
-  {
-    title: '创建时间',
-    dataIndex: 'createTime',
-    key: 'createTime',
-    width: 180,
-  },
-  { title: '操作', key: 'action', width: 300, fixed: 'right' },
+  { title: 'ID', dataIndex: 'id', key: 'id', width: 180 },
+  { title: '应用名称', dataIndex: 'appName', key: 'appName', width: 200, ellipsis: true },
+  { title: '类型', dataIndex: 'codeGenType', key: 'codeGenType', width: 90 },
+  { title: '精选状态', dataIndex: 'featuredStatus', key: 'featuredStatus', width: 90 },
+  { title: '优先级', dataIndex: 'priority', key: 'priority', width: 80 },
+  { title: '用户ID', dataIndex: 'userId', key: 'userId', width: 180 },
+  { title: '创建时间', dataIndex: 'createTime', key: 'createTime', width: 170 },
+  { title: '操作', key: 'action', width: 150, fixed: 'right' },
 ]
 </script>
 
 <template>
-  <div class="admin-app-page">
+  <PageContainer title="应用管理" description="审核精选、置顶与删除平台应用">
     <a-card :bordered="false">
-      <div class="search-bar">
-        <a-space>
+      <div class="pane-toolbar">
+        <div class="toolbar-filter">
           <a-input
             v-model:value="searchForm.appName"
+            class="toolbar-input"
             placeholder="搜索应用名称"
             allow-clear
-            style="width: 240px"
             @press-enter="handleSearch"
-          />
+          >
+            <template #prefix><SearchOutlined /></template>
+          </a-input>
           <a-select
             v-model:value="searchForm.codeGenType"
             placeholder="应用类型"
             allow-clear
-            style="width: 140px"
+            style="width: 150px"
             @change="handleSearch"
           >
             <a-select-option value="html">单文件</a-select-option>
             <a-select-option value="multi_file">多文件</a-select-option>
+            <a-select-option value="vue">Vue3 工程</a-select-option>
           </a-select>
-          <a-button type="primary" @click="handleSearch">搜索</a-button>
+          <a-button type="primary" @click="handleSearch">查询</a-button>
           <a-button @click="handleReset">重置</a-button>
-        </a-space>
+        </div>
+        <span v-if="!loading" class="toolbar-total">共 {{ pagination.total }} 个应用</span>
       </div>
 
+      <TableSkeleton v-if="loading && appList.length === 0" :rows="6" :cols="8" />
       <a-table
+        v-else
         :columns="columns"
         :data-source="appList"
         :loading="loading"
@@ -234,7 +260,7 @@ const columns = [
           showSizeChanger: false,
         }"
         row-key="id"
-        :scroll="{ x: 1000 }"
+        :scroll="{ x: 1140 }"
         @change="({ current }: any) => handlePageChange(current)"
       >
         <template #bodyCell="{ column, record }">
@@ -248,70 +274,68 @@ const columns = [
               {{ featuredStatusText(record.featuredStatus).text }}
             </a-tag>
           </template>
+          <template v-if="column.key === 'priority'">
+            <a-tag v-if="record.priority === 999" color="gold">置顶</a-tag>
+            <span v-else class="cell-muted">{{ record.priority ?? '—' }}</span>
+          </template>
           <template v-if="column.key === 'action'">
-            <a-space>
-              <a-button
-                type="link"
-                size="small"
-                @click="handleEdit(record)"
-              >
-                编辑
-              </a-button>
-              <template v-if="record.featuredStatus === 1">
-                <a-popconfirm
-                  title="确定通过该应用推荐？"
-                  @confirm="handleAuditPass(record)"
-                >
-                  <a-button type="link" size="small">通过</a-button>
-                </a-popconfirm>
-                <a-popconfirm
-                  title="确定拒绝该应用推荐？"
-                  @confirm="handleAuditReject(record)"
-                >
-                  <a-button type="link" size="small" danger>拒绝</a-button>
-                </a-popconfirm>
-              </template>
-              <a-popconfirm
-                v-if="record.featuredStatus === 2"
-                title="确定取消该应用推荐？"
-                @confirm="handleCancelFeatured(record)"
-              >
-                <a-button type="link" size="small">取消精选</a-button>
-              </a-popconfirm>
-              <a-popconfirm
-                v-if="record.priority !== 999"
-                title="确定置顶该应用？"
-                @confirm="handlePin(record)"
-              >
-                <a-button type="link" size="small">置顶</a-button>
-              </a-popconfirm>
-              <a-popconfirm
-                v-if="record.priority === 999"
-                title="确定取消置顶？"
-                @confirm="handleUnpin(record)"
-              >
-                <a-button type="link" size="small">取消置顶</a-button>
-              </a-popconfirm>
-              <a-popconfirm
-                title="确定删除该应用？"
-                @confirm="handleDelete(record.id)"
-              >
-                <a-button type="link" size="small" danger>删除</a-button>
-              </a-popconfirm>
+            <a-space :size="4">
+              <a-button type="link" size="small" @click="handleEdit(record)">编辑</a-button>
+              <a-dropdown trigger="click">
+                <a-button type="text" size="small">
+                  更多
+                  <DownOutlined />
+                </a-button>
+                <template #overlay>
+                  <a-menu @click="(info: any) => handleRowMore(info, record)">
+                    <a-menu-item v-if="record.featuredStatus === 1" key="pass">通过推荐</a-menu-item>
+                    <a-menu-item v-if="record.featuredStatus === 1" key="reject" danger>
+                      拒绝推荐
+                    </a-menu-item>
+                    <a-menu-item v-if="record.featuredStatus === 2" key="cancelFeatured">
+                      取消精选
+                    </a-menu-item>
+                    <a-menu-item v-if="record.priority !== 999" key="pin">置顶</a-menu-item>
+                    <a-menu-item v-if="record.priority === 999" key="unpin">取消置顶</a-menu-item>
+                    <a-menu-divider />
+                    <a-menu-item key="delete" danger>删除应用</a-menu-item>
+                  </a-menu>
+                </template>
+              </a-dropdown>
             </a-space>
           </template>
         </template>
       </a-table>
     </a-card>
-  </div>
+
+    <a-modal
+      v-model:open="deleteModalOpen"
+      title="删除应用"
+      ok-text="删除"
+      ok-type="danger"
+      cancel-text="取消"
+      :confirm-loading="deleting"
+      @ok="confirmDelete"
+    >
+      <p>确定要删除「{{ deleteTarget?.appName || '未命名应用' }}」吗？</p>
+      <p class="modal-tip">删除后该应用对用户不可见，请确认后再操作。</p>
+    </a-modal>
+  </PageContainer>
 </template>
 
 <style scoped>
-.admin-app-page {
-  margin: 0 auto;
+.toolbar-total {
+  color: var(--text-3);
+  font-size: var(--font-sm);
 }
 
-.search-bar {
-  margin-bottom: 16px;
+.cell-muted {
+  color: var(--text-3);
+}
+
+.modal-tip {
+  margin-top: var(--space-2);
+  color: var(--text-3);
+  font-size: var(--font-sm);
 }
 </style>

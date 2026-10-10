@@ -1,8 +1,22 @@
 <script setup lang="ts">
 import { ref, reactive, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { message } from 'ant-design-vue'
-import { ArrowLeftOutlined, UserOutlined, RobotOutlined, DoubleRightOutlined, DoubleLeftOutlined, LinkOutlined, FileTextOutlined, DownloadOutlined } from '@ant-design/icons-vue'
+import { appMessage as message } from '@/utils/feedback'
+import {
+  ArrowLeftOutlined,
+  CloudUploadOutlined,
+  DoubleLeftOutlined,
+  DoubleRightOutlined,
+  DownOutlined,
+  DownloadOutlined,
+  EditOutlined,
+  FileTextOutlined,
+  LinkOutlined,
+  RobotOutlined,
+  StopOutlined,
+  UndoOutlined,
+  UserOutlined,
+} from '@ant-design/icons-vue'
 import { getAppVoById, getAppCode, getVuePreview, deployApp, unDeployApp, downloadCode } from '@/api/appController'
 import { chat, chatMulti, stopGenerate, undoAiModify } from '@/api/aiChatController'
 import {
@@ -69,6 +83,49 @@ const previewMode = ref<PreviewMode>('code')
 const generationDone = ref(false)
 // 右侧预览面板是否展开（伸缩框）
 const previewExpanded = ref(true)
+
+/* ---------- 对话区 / 预览区：可拖拽分隔条 ---------- */
+const SPLIT_STORAGE_KEY = 'xy-gen-panel-ratio'
+const genBodyRef = ref<HTMLElement | null>(null)
+const splitRatio = ref(Number(localStorage.getItem(SPLIT_STORAGE_KEY)) || 0.45)
+const resizing = ref(false)
+
+const startResize = (event: PointerEvent) => {
+  if (!previewExpanded.value) return
+  resizing.value = true
+  const move = (ev: PointerEvent) => {
+    const el = genBodyRef.value
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    const ratio = (ev.clientX - rect.left) / rect.width
+    splitRatio.value = Math.min(0.7, Math.max(0.28, ratio))
+  }
+  const up = () => {
+    resizing.value = false
+    window.removeEventListener('pointermove', move)
+    window.removeEventListener('pointerup', up)
+    localStorage.setItem(SPLIT_STORAGE_KEY, String(splitRatio.value))
+  }
+  window.addEventListener('pointermove', move)
+  window.addEventListener('pointerup', up)
+  event.preventDefault()
+}
+
+/** 对话区空态里的示例指令（点击填入输入框，不直接发送） */
+const chatExamples = [
+  '把页面主色换成暗色主题',
+  '加一个「联系我们」的表单',
+  '标题再大一点，卡片改成圆角',
+]
+
+/** 预览区模式切换（分段控件） */
+const previewModeOptions = [
+  { label: '代码预览', value: 'code' },
+  { label: '网页预览', value: 'web' },
+]
+const handlePreviewModeChange = (value: string | number) => {
+  previewMode.value = value as PreviewMode
+}
 
 // 对话历史每页条数（与后端默认一致）
 const HISTORY_PAGE_SIZE = 10
@@ -208,6 +265,7 @@ const armPreviewEditor = () => {
     }
     clearHover()
     hovered = t
+    // 这段样式是写进 iframe 内部文档的：父页面的 CSS 变量不会跨进 iframe，所以必须写字面色值
     ;(t as HTMLElement).style.outline = '1px dashed #1677ff'
     e.stopPropagation()
   }
@@ -700,8 +758,9 @@ const loadApp = async () => {
       app.value = res.data.data
       const isOwner = app.value.userId === userStore.loginUser?.id
       const records = await loadChatHistory()
-      // 网站展示：至少 2 条对话记录（即至少完成过一轮对话）才展示对应的网站
-      if (records.length >= 2) {
+      // 已有生成结果就加载产物：只按对话条数判断会让"已生成但只剩 1 条记录"的应用打开后工作区是空的
+      const hasGeneratedCode = app.value?.generateStatus === 'done' || records.length >= 2
+      if (hasGeneratedCode) {
         await tryLoadWebsite()
       }
       // 自动发送初始消息：仅自己的应用且没有对话历史时，将 initPrompt 作为第一条消息触发对话
@@ -1354,52 +1413,74 @@ onUnmounted(() => {
 <template>
   <div class="gen-page">
     <div class="gen-header">
-      <a-space size="middle">
-        <a-button type="text" @click="router.back()">
+      <div class="gen-header-left">
+        <a-button type="text" class="back-btn" aria-label="返回" @click="router.back()">
           <template #icon><ArrowLeftOutlined /></template>
         </a-button>
-        <span class="app-name">{{ app?.appName || '应用生成' }}</span>
-        <a-tag v-if="app && isVue" color="green">Vue3 工程</a-tag>
-        <a-tag v-else-if="app && isMultiFile" color="purple">多文件</a-tag>
-        <a-tag v-else-if="app" color="blue">单文件</a-tag>
-        <a-tag
-          v-if="app?.generateStatus"
-          :color="generateStatusText(app.generateStatus).color"
-        >
-          {{ generateStatusText(app.generateStatus).text }}
-        </a-tag>
-      </a-space>
-      <a-space>
-        <a-button
-          v-if="generating"
-          danger
-          @click="handleStop"
-        >
+        <div class="gen-title">
+          <span class="app-name">{{ app?.appName || '应用生成' }}</span>
+          <div class="gen-tags">
+            <a-tag v-if="app && isVue" color="green">Vue3 工程</a-tag>
+            <a-tag v-else-if="app && isMultiFile" color="purple">多文件</a-tag>
+            <a-tag v-else-if="app" color="blue">单文件</a-tag>
+            <a-tag v-if="app?.deployKey" color="cyan">已部署</a-tag>
+            <a-tag
+              v-if="app?.generateStatus"
+              :color="generateStatusText(app.generateStatus).color"
+            >
+              {{ generateStatusText(app.generateStatus).text }}
+            </a-tag>
+          </div>
+        </div>
+      </div>
+
+      <div class="gen-header-right">
+        <span v-if="deployStatus" class="deploy-status">
+          <a-spin v-if="deploying" size="small" />
+          {{ deployStatus }}
+        </span>
+
+        <!-- 生成中：破坏性操作单独放最左，避免误点主按钮 -->
+        <a-button v-if="generating" danger ghost @click="handleStop">
+          <template #icon><StopOutlined /></template>
           停止生成
         </a-button>
-        <a-button
-          v-if="app?.deployKey"
-          @click="openDeployedSite"
-        >
+
+        <a-button v-if="app?.deployKey" @click="openDeployedSite">
           <template #icon><LinkOutlined /></template>
           打开网站
         </a-button>
+
         <a-button @click="handleDownloadCode">
           <template #icon><DownloadOutlined /></template>
           下载代码
         </a-button>
-        <a-button
-          type="primary"
-          :loading="deploying"
-          @click="handleDeploy"
-        >
-          {{ app?.deployKey ? '下线' : '部署' }}
+
+        <!-- 已部署时不再让「部署」按钮兼职下线，收进更多菜单 -->
+        <a-dropdown v-if="app?.deployKey" placement="bottomRight">
+          <a-button>
+            更多
+            <DownOutlined />
+          </a-button>
+          <template #overlay>
+            <a-menu>
+              <a-menu-item key="offline" danger @click="handleDeploy">下线部署</a-menu-item>
+            </a-menu>
+          </template>
+        </a-dropdown>
+        <a-button v-else type="primary" :loading="deploying" @click="handleDeploy">
+          <template #icon><CloudUploadOutlined /></template>
+          部署
         </a-button>
-        <span v-if="deployStatus" class="deploy-status">{{ deployStatus }}</span>
-      </a-space>
+      </div>
     </div>
 
-    <div class="gen-body">
+    <div
+      ref="genBodyRef"
+      class="gen-body"
+      :class="{ 'with-preview': previewExpanded, resizing }"
+      :style="`--chat-ratio: ${splitRatio}`"
+    >
       <div class="chat-panel">
         <div ref="msgListRef" class="msg-list">
           <a-spin v-if="loading" class="msg-loading" />
@@ -1407,6 +1488,26 @@ onUnmounted(() => {
             <a-button type="link" size="small" :loading="historyLoading" @click="loadMoreHistory">
               加载更多
             </a-button>
+          </div>
+
+          <!-- 空态：给第一次进入 / 新建应用的用户一个起点 -->
+          <div v-if="!loading && messages.length === 0" class="chat-empty">
+            <span class="chat-empty-icon"><RobotOutlined /></span>
+            <h3 class="chat-empty-title">描述你想要的页面，AI 直接写代码</h3>
+            <p class="chat-empty-desc">
+              生成的代码会出现在右侧，可以切换网页预览、可视化编辑，也能一键部署。
+            </p>
+            <div class="chat-empty-chips">
+              <button
+                v-for="ex in chatExamples"
+                :key="ex"
+                type="button"
+                class="chat-chip"
+                @click="input = ex"
+              >
+                {{ ex }}
+              </button>
+            </div>
           </div>
           <div
             v-for="(msg, index) in messages"
@@ -1480,43 +1581,48 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <div class="panel-toggle" @click="previewExpanded = !previewExpanded">
-        <DoubleRightOutlined v-if="!previewExpanded" />
-        <DoubleLeftOutlined v-else />
+      <div
+        class="panel-divider"
+        :class="{ collapsed: !previewExpanded }"
+        @pointerdown="startResize($event)"
+      >
+        <button
+          class="divider-toggle"
+          type="button"
+          :aria-label="previewExpanded ? '收起预览面板' : '展开预览面板'"
+          @pointerdown.stop
+          @click.stop="previewExpanded = !previewExpanded"
+        >
+          <DoubleRightOutlined v-if="!previewExpanded" />
+          <DoubleLeftOutlined v-else />
+        </button>
       </div>
 
       <div v-show="previewExpanded" class="preview-panel">
         <div class="preview-header">
-          <a-space size="small">
-            <a-select
-              v-model:value="previewMode"
-              style="width: 110px"
-              :options="[
-                { label: '代码预览', value: 'code' },
-                { label: '网页预览', value: 'web' },
-              ]"
-              :disabled="!generationDone"
-            />
+          <a-segmented
+            :value="previewMode"
+            :options="previewModeOptions"
+            :disabled="!generationDone"
+            @change="handlePreviewModeChange"
+          />
+          <div class="preview-tools">
             <a-button
               v-if="previewMode === 'web' && generationDone && !isVue"
-              size="small"
               :type="editMode ? 'primary' : 'default'"
               :disabled="modifying"
               @click="toggleVisualEdit"
             >
+              <template #icon><EditOutlined /></template>
               {{ editMode ? '退出编辑' : '可视化编辑' }}
             </a-button>
-            <a-button
-              v-if="undoSnapshot.length"
-              size="small"
-              :disabled="modifying"
-              @click="undoLastModify"
-            >
+            <a-button v-if="undoSnapshot.length" :disabled="modifying" @click="undoLastModify">
+              <template #icon><UndoOutlined /></template>
               撤销修改
             </a-button>
             <a-spin v-if="previewLoading || modifying" size="small" />
-          </a-space>
-          <span v-if="editStatus" class="deploy-status">{{ editStatus }}</span>
+            <span v-if="editStatus" class="edit-status">{{ editStatus }}</span>
+          </div>
         </div>
         <div class="preview-content">
           <template v-if="previewMode === 'code'">
@@ -1537,6 +1643,7 @@ onUnmounted(() => {
               <MarkdownView
                 v-if="selectedFileContent"
                 :content="selectedFileMarkdown"
+                dark
                 class="preview-md"
               />
               <div v-else class="preview-empty">
@@ -1736,8 +1843,8 @@ onUnmounted(() => {
 .gen-page {
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 64px - 50px - 48px);
-  max-width: 1200px;
+  height: calc(100vh - var(--header-h) - var(--main-pad) * 2);
+  max-width: var(--page-max);
   margin: 0 auto;
 }
 
@@ -1745,22 +1852,71 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 16px;
-  background: #fff;
-  border-radius: 8px 8px 0 0;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
   flex-shrink: 0;
 }
 
+.gen-header-left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.back-btn {
+  flex-shrink: 0;
+}
+
+.gen-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
 .app-name {
-  font-size: 16px;
+  overflow: hidden;
+  font-size: var(--font-lg);
   font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gen-tags {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex-wrap: wrap;
+}
+
+.gen-tags :deep(.ant-tag) {
+  margin-inline-end: 0;
+}
+
+.gen-header-right {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  flex-wrap: wrap;
 }
 
 .deploy-status {
-  font-size: 13px;
-  color: #1677ff;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   max-width: 260px;
   overflow: hidden;
+  padding: 2px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--brand-50);
+  color: var(--brand-600);
+  font-size: var(--font-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1769,46 +1925,100 @@ onUnmounted(() => {
   display: flex;
   flex: 1;
   min-height: 0;
-  background: #fff;
-  border-top: 1px solid #f0f0f0;
-  border-radius: 0 0 8px 8px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 0 0 var(--radius-xl) var(--radius-xl);
   overflow: hidden;
+}
+
+.gen-body.resizing {
+  cursor: col-resize;
+  user-select: none;
 }
 
 .chat-panel {
   display: flex;
   flex-direction: column;
-  flex: 1;
+  flex: 1 1 auto;
   min-width: 0;
 }
 
-.panel-toggle {
+/* 展开预览时，对话区宽度由分隔条拖拽决定（比例存 localStorage） */
+.gen-body.with-preview .chat-panel {
+  flex: 0 1 calc(var(--chat-ratio) * 100%);
+  min-width: 260px;
+}
+
+/* ---------- 分隔条：可拖拽调整宽度 + 点中间圆点收起/展开 ---------- */
+.panel-divider {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 18px;
-  cursor: pointer;
-  color: #999;
-  background: #fafafa;
-  border-left: 1px solid #f0f0f0;
-  border-right: 1px solid #f0f0f0;
+  width: 20px;
   flex-shrink: 0;
+  background: var(--bg-sunken);
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  cursor: col-resize;
   user-select: none;
-  transition: background 0.2s;
+  transition: background var(--dur) var(--ease);
 }
 
-.panel-toggle:hover {
-  background: #f0f5ff;
-  color: #1677ff;
+.panel-divider::before {
+  content: '';
+  position: absolute;
+  top: 12%;
+  bottom: 12%;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--border-strong);
+  transition: background var(--dur) var(--ease);
+}
+
+.panel-divider:hover {
+  background: var(--brand-50);
+}
+
+.panel-divider:hover::before {
+  background: var(--brand-300);
+}
+
+.panel-divider.collapsed {
+  cursor: pointer;
+}
+
+.divider-toggle {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 40px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg-surface);
+  color: var(--text-2);
+  font-size: 10px;
+  cursor: pointer;
+  transition: border-color var(--dur) var(--ease), color var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease);
+}
+
+.divider-toggle:hover {
+  border-color: var(--brand-300);
+  color: var(--brand-600);
+  box-shadow: var(--shadow-1);
 }
 
 .msg-list {
   flex: 1;
   overflow-y: auto;
-  padding: 16px;
+  padding: var(--space-5) var(--space-4);
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--space-4);
 }
 
 .msg-loading {
@@ -1821,10 +2031,69 @@ onUnmounted(() => {
   flex-shrink: 0;
 }
 
+/* ---------- 对话空态 ---------- */
+.chat-empty {
+  max-width: 520px;
+  margin: auto;
+  padding: var(--space-6) var(--space-4);
+  text-align: center;
+}
+
+.chat-empty-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-lg);
+  background: var(--gradient-brand-soft);
+  color: var(--brand-500);
+  font-size: 24px;
+}
+
+.chat-empty-title {
+  margin-top: var(--space-4);
+  font-size: var(--font-lg);
+  font-weight: 600;
+}
+
+.chat-empty-desc {
+  margin-top: var(--space-2);
+  color: var(--text-2);
+  font-size: var(--font-sm);
+}
+
+.chat-empty-chips {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-5);
+}
+
+.chat-chip {
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  color: var(--text-1);
+  font-size: var(--font-sm);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease),
+    color var(--dur) var(--ease), transform var(--dur) var(--ease);
+}
+
+.chat-chip:hover {
+  border-color: var(--brand-300);
+  background: var(--brand-50);
+  color: var(--brand-700);
+  transform: translateY(-1px);
+}
+
 .msg-row {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .msg-row.user {
@@ -1843,36 +2112,49 @@ onUnmounted(() => {
   margin-top: 2px;
 }
 
+.msg-row.ai .msg-avatar {
+  background: var(--gradient-brand);
+  color: var(--text-inverse);
+}
+
+.msg-row.user .msg-avatar {
+  background: var(--bg-sunken);
+  color: var(--text-2);
+}
+
 .msg-bubble {
-  max-width: 85%;
-  padding: 10px 14px;
-  border-radius: 12px;
-  font-size: 14px;
-  line-height: 1.6;
+  max-width: 88%;
+  padding: 12px 16px;
+  border-radius: var(--radius-lg);
+  font-size: var(--font-base);
+  line-height: 1.7;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
 .msg-row.user .msg-bubble {
-  background: #1677ff;
-  color: #fff;
-  border-bottom-right-radius: 4px;
+  background: var(--gradient-brand);
+  color: var(--text-inverse);
+  border-bottom-right-radius: var(--radius-xs);
+  box-shadow: var(--shadow-glow);
 }
 
 .msg-row.ai .msg-bubble {
-  background: #f5f5f5;
-  color: #333;
-  border-bottom-left-radius: 4px;
+  background: var(--bg-surface);
+  color: var(--text-1);
+  border: 1px solid var(--border);
+  border-bottom-left-radius: var(--radius-xs);
+  box-shadow: var(--shadow-1);
 }
 
 .msg-bubble.msg-streaming {
-  background: #f5f5f5;
+  border-color: var(--brand-200);
 }
 
 .msg-file-list {
-  margin-top: 8px;
-  border-top: 1px dashed #d9d9d9;
-  padding-top: 8px;
+  margin-top: 10px;
+  border-top: 1px dashed var(--border);
+  padding-top: 10px;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -1882,65 +2164,69 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 4px 8px;
-  border-radius: 6px;
-  font-size: 13px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  font-size: var(--font-sm);
   cursor: pointer;
-  color: #1677ff;
-  background: #fff;
-  transition: background 0.2s;
+  transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease);
 }
 
 .msg-file-item:hover {
-  background: #e6f4ff;
+  border-color: var(--brand-300);
+  background: var(--brand-50);
 }
 
 .msg-file-icon {
-  color: #8c8c8c;
+  color: var(--brand-500);
 }
 
 .msg-file-path {
   flex: 1;
   min-width: 0;
   overflow: hidden;
+  color: var(--text-1);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .msg-file-size {
-  font-size: 12px;
-  color: #999;
+  font-size: var(--font-xs);
+  color: var(--text-3);
   flex-shrink: 0;
 }
 
 .msg-usage {
-  margin-top: 6px;
-  font-size: 12px;
-  color: #999;
+  margin-top: 8px;
+  font-size: var(--font-xs);
+  color: var(--text-3);
 }
 
+/* 思考过程：局部深色块，和浅色界面形成"工作区"对比 */
 .msg-reasoning {
-  margin: 0 0 8px;
-  padding: 6px 10px;
-  background: #fafafa;
-  border: 1px solid #eee;
-  border-radius: 6px;
-  font-size: 12px;
+  margin: 0 0 10px;
+  padding: 8px 12px;
+  background: var(--dark-bg-2);
+  border: 1px solid var(--dark-border);
+  border-radius: var(--radius-md);
+  font-size: var(--font-xs);
 }
 
 .msg-reasoning summary {
   cursor: pointer;
-  color: #666;
+  color: var(--dark-text-2);
   user-select: none;
   outline: none;
 }
 
 .msg-reasoning-text {
-  margin-top: 6px;
-  max-height: 180px;
+  margin-top: 8px;
+  max-height: 200px;
   overflow-y: auto;
-  color: #888;
-  line-height: 1.5;
+  color: var(--dark-text-2);
+  font-family: 'Consolas', 'Courier New', monospace;
+  line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -1949,14 +2235,14 @@ onUnmounted(() => {
   margin: 0;
   font-size: 12px;
   line-height: 1.5;
-  color: #666;
+  color: var(--text-2);
   white-space: pre-wrap;
   word-break: break-all;
 }
 
 .stream-text::after {
   content: '▌';
-  color: #1677ff;
+  color: var(--brand-500);
   animation: blink 1s step-end infinite;
 }
 
@@ -1972,36 +2258,39 @@ onUnmounted(() => {
 
 .input-bar {
   display: flex;
-  gap: 8px;
-  padding: 12px 16px;
-  border-top: 1px solid #f0f0f0;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border);
+  background: var(--bg-surface);
   align-items: flex-end;
   flex-shrink: 0;
 }
 
 .input-bar :deep(.ant-input) {
   resize: none;
+  border-radius: var(--radius-md);
 }
 
 .gen-progress-bar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 16px;
-  border-top: 1px solid #f0f0f0;
-  background: #fafafa;
+  gap: var(--space-2);
+  padding: 8px var(--space-4);
+  border-top: 1px solid var(--border);
+  background: linear-gradient(90deg, var(--brand-50) 0%, rgba(255, 255, 255, 0) 70%);
   flex-shrink: 0;
 }
 
 .gen-progress-text {
-  font-size: 13px;
-  color: #666;
+  font-size: var(--font-sm);
+  color: var(--brand-700);
 }
 
 .preview-panel {
   display: flex;
   flex-direction: column;
-  flex: 1.2;
+  /* 基准用 0：否则预览内容的宽度会反过来挤压对话区，拖拽比例就不生效了 */
+  flex: 1 1 0;
   min-width: 0;
 }
 
@@ -2009,22 +2298,40 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 16px;
-  font-weight: 600;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+}
+
+.preview-tools {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.edit-status {
+  max-width: 220px;
+  overflow: hidden;
+  color: var(--brand-600);
+  font-size: var(--font-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .preview-content {
   flex: 1;
   min-height: 0;
-  background: #fafafa;
+  background: var(--bg-sunken);
 }
 
 .preview-frame {
   width: 100%;
   height: 100%;
   border: none;
-  background: #fff;
+  background: var(--bg-surface);
 }
 
 .web-preview-wrap {
@@ -2039,25 +2346,28 @@ onUnmounted(() => {
   transform: translateX(-50%);
   padding: 4px 14px;
   border-radius: 14px;
-  background: rgba(22, 119, 255, 0.12);
-  border: 1px solid rgba(22, 119, 255, 0.35);
-  color: #1677ff;
+  background: rgba(79, 107, 255, 0.12);
+  border: 1px solid rgba(79, 107, 255, 0.35);
+  color: var(--brand-600);
   font-size: 13px;
   pointer-events: none;
   z-index: 10;
   white-space: nowrap;
 }
 
+/* 选中元素的编辑浮层：毛玻璃 + 强阴影，浮在网页预览之上 */
 .edit-card {
   position: absolute;
   top: 10px;
   right: 12px;
   width: 300px;
-  background: #fff;
-  border: 1px solid #d9d9d9;
-  border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
-  padding: 10px 12px;
+  background: var(--bg-glass-strong);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-3);
+  backdrop-filter: blur(14px) saturate(160%);
+  -webkit-backdrop-filter: blur(14px) saturate(160%);
+  padding: var(--space-3);
   z-index: 10;
   display: flex;
   flex-direction: column;
@@ -2074,8 +2384,8 @@ onUnmounted(() => {
 
 .edit-card-tag {
   font-weight: 400;
-  color: #1677ff;
-  background: #e6f4ff;
+  color: var(--brand-600);
+  background: var(--brand-50);
   border-radius: 4px;
   padding: 0 6px;
   font-family: 'Consolas', monospace;
@@ -2084,8 +2394,8 @@ onUnmounted(() => {
 
 .edit-card-text {
   font-size: 12px;
-  color: #666;
-  background: #fafafa;
+  color: var(--text-2);
+  background: var(--bg-sunken);
   border-radius: 4px;
   padding: 4px 8px;
   word-break: break-all;
@@ -2095,7 +2405,7 @@ onUnmounted(() => {
 
 .edit-card-selector {
   font-size: 11px;
-  color: #999;
+  color: var(--text-3);
   font-family: 'Consolas', monospace;
   word-break: break-all;
 }
@@ -2113,27 +2423,27 @@ onUnmounted(() => {
 }
 
 .edit-card-close {
-  color: #999;
+  color: var(--text-3);
 }
 
 .edit-tabs {
   display: flex;
   gap: 4px;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid var(--border);
 }
 
 .edit-tab {
   padding: 4px 10px;
   font-size: 13px;
-  color: #666;
+  color: var(--text-2);
   cursor: pointer;
   border-bottom: 2px solid transparent;
   user-select: none;
 }
 
 .edit-tab.active {
-  color: #1677ff;
-  border-bottom-color: #1677ff;
+  color: var(--brand-600);
+  border-bottom-color: var(--brand-500);
   font-weight: 500;
 }
 
@@ -2154,14 +2464,14 @@ onUnmounted(() => {
 
 .style-label {
   font-size: 12px;
-  color: #555;
+  color: var(--text-2);
   flex-shrink: 0;
 }
 
 .style-color {
   width: 34px;
   height: 22px;
-  border: 1px solid #d9d9d9;
+  border: 1px solid var(--border-strong);
   border-radius: 4px;
   padding: 0;
   background: transparent;
@@ -2171,7 +2481,7 @@ onUnmounted(() => {
 .style-num {
   width: 110px;
   font-size: 12px;
-  border: 1px solid #d9d9d9;
+  border: 1px solid var(--border-strong);
   border-radius: 4px;
   padding: 2px 6px;
   text-align: right;
@@ -2180,14 +2490,14 @@ onUnmounted(() => {
 .style-select {
   width: 110px;
   font-size: 12px;
-  border: 1px solid #d9d9d9;
+  border: 1px solid var(--border-strong);
   border-radius: 4px;
   padding: 2px 4px;
 }
 
 .edit-history {
   margin-top: 8px;
-  border-top: 1px dashed #eee;
+  border-top: 1px dashed var(--border);
   padding-top: 6px;
 }
 
@@ -2196,7 +2506,7 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   font-size: 12px;
-  color: #666;
+  color: var(--text-2);
 }
 
 .edit-history-list {
@@ -2220,7 +2530,7 @@ onUnmounted(() => {
   white-space: nowrap;
   font-family: 'Consolas', monospace;
   font-size: 11px;
-  color: #888;
+  color: var(--text-3);
 }
 
 .edit-history-kind {
@@ -2232,27 +2542,27 @@ onUnmounted(() => {
 }
 
 .edit-history-kind.style {
-  background: #e6f4ff;
-  color: #1677ff;
+  background: var(--brand-50);
+  color: var(--brand-600);
 }
 
 .edit-history-kind.text {
-  background: #fff7e6;
-  color: #d46b08;
+  background: rgba(245, 158, 11, 0.14);
+  color: var(--warning);
 }
 
 .style-divider {
   margin-top: 6px;
   font-size: 11px;
-  color: #999;
-  border-top: 1px dashed #eee;
+  color: var(--text-3);
+  border-top: 1px dashed var(--border);
   padding-top: 6px;
 }
 
 .style-text {
   width: 100%;
   font-size: 12px;
-  border: 1px solid #d9d9d9;
+  border: 1px solid var(--border-strong);
   border-radius: 4px;
   padding: 4px 6px;
   resize: vertical;
@@ -2267,7 +2577,7 @@ onUnmounted(() => {
 
 .style-tip {
   font-size: 11px;
-  color: #bbb;
+  color: var(--text-3);
 }
 
 .code-frame {
@@ -2275,8 +2585,8 @@ onUnmounted(() => {
   margin: 0;
   padding: 16px;
   overflow: auto;
-  background: #1e1e1e;
-  color: #d4d4d4;
+  background: var(--dark-bg);
+  color: var(--dark-text-1);
   font-family: 'Consolas', 'Courier New', monospace;
   font-size: 12px;
   line-height: 1.5;
@@ -2287,7 +2597,9 @@ onUnmounted(() => {
 .preview-md {
   height: 100%;
   overflow: auto;
-  padding: 16px;
+  padding: var(--space-4);
+  background: var(--dark-bg);
+  color: var(--dark-text-1);
 }
 
 .preview-md :deep(pre) {
@@ -2308,36 +2620,40 @@ onUnmounted(() => {
 
 .vue-file-tree {
   width: 220px;
-  border-right: 1px solid #f0f0f0;
+  border-right: 1px solid var(--border);
   overflow-y: auto;
-  padding: 8px 0;
-  background: #fafafa;
+  padding: var(--space-2) 0;
+  background: var(--bg-sunken);
   flex-shrink: 0;
 }
 
 .vue-progress {
   padding: 4px 12px;
-  font-size: 12px;
-  color: #666;
+  font-size: var(--font-xs);
+  color: var(--text-3);
 }
 
 .vue-file-item {
   padding: 6px 12px;
-  font-size: 13px;
+  border-left: 2px solid transparent;
+  color: var(--text-2);
+  font-size: var(--font-sm);
   cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  transition: background 0.2s;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
 }
 
 .vue-file-item:hover {
-  background: #f0f5ff;
+  background: var(--bg-hover);
+  color: var(--text-1);
 }
 
 .vue-file-item.active {
-  background: #e6f4ff;
-  color: #1677ff;
+  background: var(--bg-surface);
+  border-left-color: var(--brand-500);
+  color: var(--brand-600);
   font-weight: 500;
 }
 
@@ -2351,18 +2667,56 @@ onUnmounted(() => {
     height: auto;
   }
 
+  .gen-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .gen-header-right {
+    justify-content: flex-start;
+  }
+
   .gen-body {
     flex-direction: column;
   }
 
+  .gen-body.with-preview .chat-panel {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
   .chat-panel {
+    min-height: 420px;
+  }
+
+  /* 窄屏分隔条横过来：拖拽变成上下分栏 */
+  .panel-divider {
+    width: 100%;
+    height: 20px;
+    cursor: pointer;
+    border-top: 1px solid var(--border);
     border-right: none;
-    border-bottom: 1px solid #f0f0f0;
-    min-height: 400px;
+    border-bottom: 1px solid var(--border);
+    border-left: none;
+  }
+
+  .panel-divider::before {
+    top: 50%;
+    bottom: auto;
+    left: 12%;
+    right: 12%;
+    width: auto;
+    height: 2px;
+  }
+
+  .divider-toggle {
+    width: 40px;
+    height: 18px;
+    transform: rotate(90deg);
   }
 
   .preview-panel {
-    min-height: 400px;
+    min-height: 420px;
   }
 }
 </style>

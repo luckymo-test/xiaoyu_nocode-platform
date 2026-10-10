@@ -1,0 +1,157 @@
+/* 全局基础样式：只放全站级的基础规则，页面样式仍留在各自 SFC 内 */
+
+html,
+body,
+#app {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg-app);
+  color: var(--text-1);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', system-ui, sans-serif;
+  font-size: var(--font-base);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5 {
+  margin: 0;
+  color: var(--text-1);
+  font-weight: 600;
+}
+
+p {
+  margin: 0;
+}
+
+::selection {
+  background: rgba(79, 107, 255, 0.18);
+}
+
+/* 统一的键盘焦点环（可访问性硬要求） */
+:focus-visible {
+  outline: 2px solid var(--brand-400);
+  outline-offset: 2px;
+}
+
+/* 滚动条 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: var(--radius-pill);
+  background: var(--border-strong);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-3);
+  background-clip: content-box;
+}
+
+/* 路由页面进入动画 */
+@keyframes page-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ---------- 列表页工具栏（排版规范见 plan-frontend-redesign.md 第 6.3 节） ---------- */
+.pane-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-4);
+}
+
+/* 左侧筛选组：输入框 + 查询 + 重置 */
+.toolbar-filter {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+/* 右侧操作组：批量操作 + 主操作（危险操作靠右、视觉最弱） */
+.toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.toolbar-input {
+  width: 260px;
+}
+
+/* Tab 上的数量徽标 */
+.tab-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 18px;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-sunken);
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.ant-tabs-tab-active .tab-count {
+  background: var(--brand-50);
+  color: var(--brand-600);
+}
+
+@media (max-width: 768px) {
+  .toolbar-input {
+    width: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .app-main > * {
+    animation: page-in 240ms var(--ease) both;
+  }
+}
+
+/* 尊重系统的"减少动态效果"设置 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

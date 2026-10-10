@@ -1,15 +1,12 @@
 <script setup lang="ts">
-import { reactive, ref, onMounted } from 'vue'
-import { message } from 'ant-design-vue'
-import { listUserVoByPage, deleteUser, updateUser } from '@/api/userController'
+import { onMounted, reactive, ref } from 'vue'
+import { appMessage as message } from '@/utils/feedback'
+import { SearchOutlined } from '@ant-design/icons-vue'
+import PageContainer from '@/components/PageContainer.vue'
+import TableSkeleton from '@/components/TableSkeleton.vue'
+import { deleteUser, listUserVoByPage, updateUser } from '@/api/userController'
 
-interface SearchParams {
-  userName: string
-}
-
-const searchForm = reactive<SearchParams>({
-  userName: '',
-})
+const searchForm = reactive({ userName: '' })
 
 const userList = ref<API.UserVO[]>([])
 const loading = ref(false)
@@ -39,7 +36,7 @@ const fetchData = async () => {
     })
     if (res.data.code === 0 && res.data.data) {
       userList.value = res.data.data.records ?? []
-      pagination.total = res.data.data.totalRow ?? 0
+      pagination.total = Number(res.data.data.totalRow ?? 0)
     }
   } finally {
     loading.value = false
@@ -49,6 +46,11 @@ const fetchData = async () => {
 const handleSearch = () => {
   pagination.current = 1
   fetchData()
+}
+
+const handleReset = () => {
+  searchForm.userName = ''
+  handleSearch()
 }
 
 const handlePageChange = (page: number) => {
@@ -105,43 +107,38 @@ onMounted(() => {
 
 const columns = [
   { title: 'ID', dataIndex: 'id', key: 'id', width: 200 },
-  { title: '用户名', dataIndex: 'userName', key: 'userName' },
-  { title: '账号', dataIndex: 'userAccount', key: 'userAccount' },
-  {
-    title: '头像',
-    dataIndex: 'userAvatar',
-    key: 'userAvatar',
-    width: 80,
-  },
-  { title: '角色', dataIndex: 'userRole', key: 'userRole', width: 80 },
-  {
-    title: '创建时间',
-    dataIndex: 'createTime',
-    key: 'createTime',
-    width: 180,
-  },
-  { title: '操作', key: 'action', width: 160, fixed: 'right' },
+  { title: '用户名', dataIndex: 'userName', key: 'userName', width: 180, ellipsis: true },
+  { title: '账号', dataIndex: 'userAccount', key: 'userAccount', width: 180, ellipsis: true },
+  { title: '头像', dataIndex: 'userAvatar', key: 'userAvatar', width: 80 },
+  { title: '角色', dataIndex: 'userRole', key: 'userRole', width: 100 },
+  { title: '创建时间', dataIndex: 'createTime', key: 'createTime', width: 180 },
+  { title: '操作', key: 'action', width: 140, fixed: 'right' },
 ]
 </script>
 
 <template>
-  <div class="admin-user-page">
+  <PageContainer title="用户管理" description="查看、编辑与删除平台用户（仅管理员可见）">
     <a-card :bordered="false">
-      <div class="search-bar">
-        <a-space>
+      <div class="pane-toolbar">
+        <div class="toolbar-filter">
           <a-input
             v-model:value="searchForm.userName"
+            class="toolbar-input"
             placeholder="搜索用户名"
             allow-clear
-            style="width: 240px"
             @press-enter="handleSearch"
-          />
-          <a-button type="primary" @click="handleSearch">搜索</a-button>
-          <a-button @click="searchForm.userName = ''; handleSearch()">重置</a-button>
-        </a-space>
+          >
+            <template #prefix><SearchOutlined /></template>
+          </a-input>
+          <a-button type="primary" @click="handleSearch">查询</a-button>
+          <a-button @click="handleReset">重置</a-button>
+        </div>
+        <span v-if="!loading" class="toolbar-total">共 {{ pagination.total }} 位用户</span>
       </div>
 
+      <TableSkeleton v-if="loading && userList.length === 0" :rows="6" :cols="7" />
       <a-table
+        v-else
         :columns="columns"
         :data-source="userList"
         :loading="loading"
@@ -157,18 +154,26 @@ const columns = [
       >
         <template #bodyCell="{ column, record }">
           <template v-if="column.key === 'userAvatar'">
-            <a-avatar :src="record.userAvatar" size="small" />
+            <a-avatar :src="record.userAvatar" size="small">
+              {{ record.userName?.charAt(0) || 'U' }}
+            </a-avatar>
+          </template>
+          <template v-if="column.key === 'userRole'">
+            <a-tag :color="record.userRole === 'admin' ? 'gold' : 'default'">
+              {{ record.userRole === 'admin' ? '管理员' : '普通用户' }}
+            </a-tag>
           </template>
           <template v-if="column.key === 'action'">
-            <a-space>
-              <a-button type="link" size="small" @click="handleEdit(record)">
-                编辑
-              </a-button>
+            <a-space :size="4">
+              <a-button type="link" size="small" @click="handleEdit(record)">编辑</a-button>
               <a-popconfirm
                 title="确定删除该用户？"
+                description="删除后该用户将无法登录。"
+                ok-text="删除"
+                cancel-text="取消"
                 @confirm="handleDelete(record.id)"
               >
-                <a-button type="link" size="small" danger>删除</a-button>
+                <a-button type="text" size="small" danger>删除</a-button>
               </a-popconfirm>
             </a-space>
           </template>
@@ -179,15 +184,17 @@ const columns = [
     <a-modal
       v-model:open="editModalVisible"
       title="编辑用户信息"
+      ok-text="保存"
+      cancel-text="取消"
       @ok="handleEditSubmit"
       :confirm-loading="editLoading"
     >
       <a-form :model="editForm" layout="vertical">
-        <a-form-item label="用户名">
-          <a-input v-model:value="editForm.userName" />
+        <a-form-item label="用户名" required>
+          <a-input v-model:value="editForm.userName" placeholder="请输入用户名" />
         </a-form-item>
         <a-form-item label="头像链接">
-          <a-input v-model:value="editForm.userAvatar" />
+          <a-input v-model:value="editForm.userAvatar" placeholder="请输入头像 URL" />
         </a-form-item>
         <a-form-item label="个人简介">
           <a-textarea v-model:value="editForm.userProfile" :rows="3" />
@@ -200,15 +207,12 @@ const columns = [
         </a-form-item>
       </a-form>
     </a-modal>
-  </div>
+  </PageContainer>
 </template>
 
 <style scoped>
-.admin-user-page {
-  margin: 0 auto;
-}
-
-.search-bar {
-  margin-bottom: 16px;
+.toolbar-total {
+  color: var(--text-3);
+  font-size: var(--font-sm);
 }
 </style>

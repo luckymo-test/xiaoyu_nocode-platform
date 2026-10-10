@@ -1,7 +1,10 @@
 <script setup lang="ts">
-import { reactive, ref, onMounted } from 'vue'
-import { listChatAppByAdmin, listAllByAdmin } from '@/api/chatHistoryController'
+import { onMounted, reactive, ref } from 'vue'
+import { DownloadOutlined } from '@ant-design/icons-vue'
+import PageContainer from '@/components/PageContainer.vue'
+import TableSkeleton from '@/components/TableSkeleton.vue'
 import MarkdownView from '@/components/MarkdownView.vue'
+import { listAllByAdmin, listChatAppByAdmin } from '@/api/chatHistoryController'
 
 const searchForm = reactive<{
   appId?: number
@@ -63,8 +66,7 @@ const handlePageChange = (page: number) => {
   fetchData()
 }
 
-const messageRole = (type?: string): 'user' | 'ai' =>
-  type === 'user' ? 'user' : 'ai'
+const messageRole = (type?: string): 'user' | 'ai' => (type === 'user' ? 'user' : 'ai')
 
 // 导出：是否正在生成/下载
 const exporting = ref(false)
@@ -190,25 +192,20 @@ onMounted(() => {
 })
 
 const columns = [
-  { title: '应用名称', dataIndex: 'appName', key: 'appName' },
-  { title: '应用ID', dataIndex: 'appId', key: 'appId', width: 200 },
-  { title: '用户ID', dataIndex: 'userId', key: 'userId', width: 200 },
+  { title: '应用名称', dataIndex: 'appName', key: 'appName', width: 220, ellipsis: true },
+  { title: '应用ID', dataIndex: 'appId', key: 'appId', width: 190 },
+  { title: '用户ID', dataIndex: 'userId', key: 'userId', width: 190 },
   { title: '消息数', dataIndex: 'messageCount', key: 'messageCount', width: 100 },
-  {
-    title: '最近对话时间',
-    dataIndex: 'lastCreateTime',
-    key: 'lastCreateTime',
-    width: 180,
-  },
-  { title: '操作', key: 'action', width: 100, fixed: 'right' },
+  { title: '最近对话时间', dataIndex: 'lastCreateTime', key: 'lastCreateTime', width: 170 },
+  { title: '操作', key: 'action', width: 120, fixed: 'right' },
 ]
 </script>
 
 <template>
-  <div class="admin-chat-page">
+  <PageContainer title="对话管理" description="按应用或用户查看历史对话，可导出为 Markdown">
     <a-card :bordered="false">
-      <div class="search-bar">
-        <a-space>
+      <div class="pane-toolbar">
+        <div class="toolbar-filter">
           <a-input-number
             v-model:value="searchForm.appId"
             placeholder="应用ID"
@@ -225,12 +222,15 @@ const columns = [
             style="width: 180px"
             @keydown.enter="handleSearch"
           />
-          <a-button type="primary" @click="handleSearch">搜索</a-button>
+          <a-button type="primary" @click="handleSearch">查询</a-button>
           <a-button @click="handleReset">重置</a-button>
-        </a-space>
+        </div>
+        <span v-if="!loading" class="toolbar-total">共 {{ pagination.total }} 个应用有对话</span>
       </div>
 
+      <TableSkeleton v-if="loading && appList.length === 0" :rows="6" :cols="6" />
       <a-table
+        v-else
         :columns="columns"
         :data-source="appList"
         :loading="loading"
@@ -245,10 +245,11 @@ const columns = [
         @change="({ current }: any) => handlePageChange(current)"
       >
         <template #bodyCell="{ column, record }">
+          <template v-if="column.key === 'messageCount'">
+            <span class="cell-strong">{{ record.messageCount ?? 0 }}</span>
+          </template>
           <template v-if="column.key === 'action'">
-            <a-button type="link" size="small" @click="handleView(record)">
-              查看对话
-            </a-button>
+            <a-button type="link" size="small" @click="handleView(record)">查看对话</a-button>
           </template>
         </template>
       </a-table>
@@ -256,29 +257,30 @@ const columns = [
 
     <a-drawer
       v-model:open="drawerVisible"
-      :title="`对话历史 - ${currentApp?.appName || '应用'}`"
+      :title="`对话历史 · ${currentApp?.appName || '应用'}`"
       width="760px"
       destroy-on-close
     >
       <template #extra>
-        <a-space>
-          <a-tag v-if="currentApp">共 {{ currentApp.messageCount }} 条</a-tag>
-          <a-button
-            type="primary"
-            size="small"
-            :loading="exporting"
-            :disabled="!currentApp || (currentApp.messageCount ?? 0) === 0"
-            @click="handleExport"
-          >
-            导出 Markdown
-          </a-button>
-        </a-space>
+        <a-button
+          type="primary"
+          size="small"
+          :loading="exporting"
+          :disabled="!currentApp || (currentApp.messageCount ?? 0) === 0"
+          @click="handleExport"
+        >
+          <template #icon><DownloadOutlined /></template>
+          导出 Markdown
+        </a-button>
       </template>
+
       <div v-if="currentApp" class="drawer-meta">
-        <span>应用ID：{{ currentApp.appId }}</span>
-        <span>用户ID：{{ currentApp.userId }}</span>
-        <span>最近对话：{{ currentApp.lastCreateTime }}</span>
+        <a-tag>应用 ID：{{ currentApp.appId }}</a-tag>
+        <a-tag>用户 ID：{{ currentApp.userId }}</a-tag>
+        <a-tag>消息数：{{ currentApp.messageCount ?? 0 }}</a-tag>
+        <a-tag>最近：{{ formatTime(currentApp.lastCreateTime) }}</a-tag>
       </div>
+
       <div class="drawer-body">
         <template v-if="drawerMsgs.length === 0">
           <div class="drawer-empty">
@@ -306,42 +308,46 @@ const columns = [
               <a-avatar class="msg-avatar" :class="messageRole(msg.messageType)">
                 {{ messageRole(msg.messageType) === 'user' ? 'U' : 'AI' }}
               </a-avatar>
-              <div class="msg-bubble" :class="messageRole(msg.messageType)">
-                <MarkdownView
-                  v-if="msg.messageType === 'assistant'"
-                  :content="msg.message ?? ''"
-                />
-                <span v-else>{{ msg.message }}</span>
+              <div class="msg-main">
+                <div class="msg-bubble" :class="messageRole(msg.messageType)">
+                  <MarkdownView
+                    v-if="msg.messageType === 'assistant'"
+                    :content="msg.message ?? ''"
+                  />
+                  <span v-else>{{ msg.message }}</span>
+                </div>
+                <span class="msg-time">{{ formatTime(msg.createTime) }}</span>
               </div>
-              <span class="msg-time">{{ msg.createTime }}</span>
             </div>
           </div>
         </template>
       </div>
     </a-drawer>
-  </div>
+  </PageContainer>
 </template>
 
 <style scoped>
-.admin-chat-page {
-  margin: 0 auto;
+.toolbar-total {
+  color: var(--text-3);
+  font-size: var(--font-sm);
 }
 
-.search-bar {
-  margin-bottom: 16px;
+.cell-strong {
+  font-weight: 600;
+  color: var(--brand-600);
 }
 
 .drawer-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 16px;
-  margin-bottom: 12px;
-  color: #666;
-  font-size: 13px;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+  padding-bottom: var(--space-4);
+  border-bottom: 1px dashed var(--border);
 }
 
 .drawer-body {
-  height: calc(100vh - 220px);
+  height: calc(100vh - 240px);
   overflow-y: auto;
 }
 
@@ -358,13 +364,13 @@ const columns = [
 .msg-list {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: var(--space-4);
 }
 
 .msg-row {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .msg-row.user {
@@ -377,44 +383,53 @@ const columns = [
 }
 
 .msg-avatar.user {
-  background: #1677ff;
+  background: var(--bg-sunken);
+  color: var(--text-2);
 }
 
 .msg-avatar.ai {
-  background: #8c8c8c;
+  background: var(--gradient-brand);
+  color: var(--text-inverse);
+}
+
+.msg-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 82%;
+  min-width: 0;
+}
+
+.msg-row.user .msg-main {
+  align-items: flex-end;
 }
 
 .msg-bubble {
-  max-width: 80%;
   padding: 10px 14px;
-  border-radius: 12px;
-  font-size: 14px;
-  line-height: 1.6;
+  border-radius: var(--radius-lg);
+  font-size: var(--font-base);
+  line-height: 1.7;
   word-break: break-word;
   white-space: pre-wrap;
 }
 
 .msg-row.user .msg-bubble {
-  background: #1677ff;
-  color: #fff;
-  border-bottom-right-radius: 4px;
+  background: var(--gradient-brand);
+  color: var(--text-inverse);
+  border-bottom-right-radius: var(--radius-xs);
+  box-shadow: var(--shadow-glow);
 }
 
 .msg-row.ai .msg-bubble {
-  background: #f5f5f5;
-  color: #333;
-  border-bottom-left-radius: 4px;
-}
-
-.msg-row.ai .msg-bubble :deep(.markdown-body) {
-  color: #333;
+  background: var(--bg-surface);
+  color: var(--text-1);
+  border: 1px solid var(--border);
+  border-bottom-left-radius: var(--radius-xs);
+  box-shadow: var(--shadow-1);
 }
 
 .msg-time {
-  font-size: 12px;
-  color: #999;
-  align-self: flex-end;
-  flex-shrink: 0;
-  margin-top: 10px;
+  color: var(--text-3);
+  font-size: var(--font-xs);
 }
 </style>

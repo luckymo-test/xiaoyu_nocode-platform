@@ -1,4 +1,36 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
-  <rect width="32" height="32" rx="6" fill="#1677ff"/>
-  <text x="16" y="22" text-anchor="middle" font-size="18" font-weight="bold" fill="white">小</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" role="img" aria-label="小玉零代码">
+  <defs>
+    <linearGradient id="xyTile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5b7cff" />
+      <stop offset="0.55" stop-color="#7c5cf6" />
+      <stop offset="1" stop-color="#a855f7" />
+    </linearGradient>
+    <linearGradient id="xyTileSheen" x1="0" y1="0" x2="0.4" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.28" />
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0" />
+    </linearGradient>
+    <linearGradient id="xyGem" x1="0" y1="0" x2="0.5" y2="1">
+      <stop offset="0" stop-color="#ffffff" />
+      <stop offset="1" stop-color="#dfe5ff" />
+    </linearGradient>
+  </defs>
+
+  <!-- 圆角磁贴底 -->
+  <rect width="32" height="32" rx="9" fill="url(#xyTile)" />
+  <rect width="32" height="32" rx="9" fill="url(#xyTileSheen)" />
+
+  <!-- 宝石（玉）主体：皇冠面 + 亭面，用透明度切出切面 -->
+  <g>
+    <path d="M16 5.6 6.6 12.6 16 12.6Z" fill="url(#xyGem)" />
+    <path d="M16 5.6 25.4 12.6 16 12.6Z" fill="url(#xyGem)" opacity="0.74" />
+    <path d="M6.6 12.6 16 12.6 16 26.4Z" fill="url(#xyGem)" opacity="0.9" />
+    <path d="M16 12.6 25.4 12.6 16 26.4Z" fill="url(#xyGem)" opacity="0.62" />
+  </g>
+
+  <!-- 右上角星芒 -->
+  <path
+    d="M25.9 4.1 26.7 6 28.6 6.8 26.7 7.6 25.9 9.5 25.1 7.6 23.2 6.8 25.1 6Z"
+    fill="#ffffff"
+    opacity="0.92"
+  />
 </svg>

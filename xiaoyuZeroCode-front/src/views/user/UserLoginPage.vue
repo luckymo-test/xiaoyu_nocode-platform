@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { message } from 'ant-design-vue'
-import { UserOutlined, LockOutlined } from '@ant-design/icons-vue'
+import { appMessage as message } from '@/utils/feedback'
+import { LockOutlined, UserOutlined } from '@ant-design/icons-vue'
+import AuthLayout from '@/components/AuthLayout.vue'
 import { userLogin } from '@/api/userController'
 import { useUserStore } from '@/stores/user'
 
@@ -38,81 +39,51 @@ const handleLogin = async () => {
 </script>
 
 <template>
-  <div class="login-container">
-    <a-card class="login-card" :bordered="false">
-      <h2 class="login-title">小玉零代码</h2>
-      <p class="login-subtitle">用户登录</p>
-      <a-form :model="form" @finish="handleLogin">
-        <a-form-item>
-          <a-input
-            v-model:value="form.userAccount"
-            size="large"
-            placeholder="请输入账号"
-          >
-            <template #prefix>
-              <UserOutlined style="color: rgba(0, 0, 0, 0.25)" />
-            </template>
-          </a-input>
-        </a-form-item>
-        <a-form-item>
-          <a-input-password
-            v-model:value="form.userPassword"
-            size="large"
-            placeholder="请输入密码"
-          >
-            <template #prefix>
-              <LockOutlined style="color: rgba(0, 0, 0, 0.25)" />
-            </template>
-          </a-input-password>
-        </a-form-item>
-        <a-form-item>
-          <a-button
-            type="primary"
-            size="large"
-            html-type="submit"
-            :loading="loading"
-            block
-          >
-            登录
-          </a-button>
-        </a-form-item>
-      </a-form>
-      <div class="login-footer">
-        还没有账号？<a-button type="link" @click="router.push('/user/register')">
-          立即注册
+  <AuthLayout>
+    <h2 class="auth-title">欢迎回来</h2>
+    <p class="auth-subtitle">登录后继续管理你的应用</p>
+
+    <a-form class="auth-form-body" :model="form" layout="vertical" @finish="handleLogin">
+      <a-form-item>
+        <a-input
+          v-model:value="form.userAccount"
+          size="large"
+          placeholder="请输入账号"
+          autocomplete="username"
+        >
+          <template #prefix>
+            <UserOutlined class="input-icon" />
+          </template>
+        </a-input>
+      </a-form-item>
+      <a-form-item>
+        <a-input-password
+          v-model:value="form.userPassword"
+          size="large"
+          placeholder="请输入密码"
+          autocomplete="current-password"
+        >
+          <template #prefix>
+            <LockOutlined class="input-icon" />
+          </template>
+        </a-input-password>
+      </a-form-item>
+      <a-form-item>
+        <a-button type="primary" size="large" html-type="submit" :loading="loading" block>
+          登录
         </a-button>
-      </div>
-    </a-card>
-  </div>
+      </a-form-item>
+    </a-form>
+
+    <div class="auth-footer">
+      还没有账号？
+      <a-button type="link" @click="router.push('/user/register')">立即注册</a-button>
+    </div>
+  </AuthLayout>
 </template>
 
 <style scoped>
-.login-container {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  min-height: 80vh;
-}
-
-.login-card {
-  width: 400px;
-  padding: 24px;
-}
-
-.login-title {
-  text-align: center;
-  font-size: 24px;
-  margin-bottom: 4px;
-}
-
-.login-subtitle {
-  text-align: center;
-  color: rgba(0, 0, 0, 0.45);
-  margin-bottom: 24px;
-}
-
-.login-footer {
-  text-align: center;
-  color: rgba(0, 0, 0, 0.45);
+.input-icon {
+  color: var(--text-3);
 }
 </style>

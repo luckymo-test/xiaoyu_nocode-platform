@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { message } from 'ant-design-vue'
+import { appMessage as message } from '@/utils/feedback'
 
 // 开发环境走 vite proxy（相对路径 /api）；部署时用 .env 的 VITE_API_BASE_URL 覆盖
 export const BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
