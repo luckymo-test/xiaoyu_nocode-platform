@@ -590,3 +590,21 @@ export const antdTheme: ThemeConfig = {
 | 5 骨架屏 / toast 主题化 / 回归基线 | ✅ |
 
 **唯一仍未实测的**：实时生成态（思考过程深色块、流式气泡、停止生成的按钮态）——需要跑一次真实生成才能看到；其余页面均已用真实数据在三档宽度下验证。
+
+### 2026-10-10 · 提示词输入长度放宽
+
+| 位置 | 原来 | 现在 |
+|---|---|---|
+| 首页创作台 | `:rows=3` + `maxlength=500` | 自适应 4–12 行 + `maxlength=2000` + 字数计数 |
+| 生成页对话输入 | 自适应 2–6 行、无上限 | 自适应 3–12 行 + `maxlength=2000` + 字数计数 |
+| 新建应用弹窗「初始提示词」 | `:rows=3` + `maxlength=300` | 自适应 3–10 行 + `maxlength=2000` + 字数计数 |
+| 可视化编辑「AI 修改」输入 | 自适应 2–4 行 | 自适应 3–8 行 |
+
+**取 2000 的依据**：后端 `app.initPrompt` / `chat_history.message` 都是 MySQL `text` 列，DTO 无长度校验；
+唯一相关的是记忆服务 `AgentMemoryService.MAX_MESSAGE_CHARS = 2000`（单条记忆回灌上限），所以 2000 是与之对齐的合理上限。
+
+**已知后端行为（本次未改）**：`FIRST_REQUIREMENT_MAX_CHARS = 500` —— 长对话回灌时，"最初的需求"提示只保留前 500 字并标注"…(已截断)"。
+也就是说超长初始提示词在**首轮生成**会被完整使用，但**后续轮次的记忆回灌**只会带上前 500 字。如需放宽需要后端调整并评估 token 预算。
+
+**踩坑**：`show-count` 会给 textarea 外包一层 `.ant-input-textarea`，在 flex 行（生成页输入区）里这层 wrapper 没有 `width:100%`，会把输入框挤成窄条；
+已用 `.input-bar :deep(.ant-input-textarea) { flex: 1; min-width: 0 }` 修掉。块级布局（首页创作台、弹窗）不受影响。

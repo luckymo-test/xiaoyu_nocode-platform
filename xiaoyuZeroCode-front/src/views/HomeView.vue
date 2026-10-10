@@ -275,8 +275,9 @@ const codeGenTypeColor = (type?: string) =>
         v-model:value="prompt"
         class="studio-input"
         placeholder="描述你想创建的网站应用，例如：生成一个简洁美观的个人计划页面"
-        :rows="3"
-        :maxlength="500"
+        :auto-size="{ minRows: 4, maxRows: 12 }"
+        :maxlength="2000"
+        show-count
         @keydown.ctrl.enter="handleCreate"
       />
 

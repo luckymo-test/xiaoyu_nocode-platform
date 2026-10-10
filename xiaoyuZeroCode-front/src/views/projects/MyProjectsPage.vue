@@ -529,8 +529,9 @@ const recycleColumns = [
           <a-textarea
             v-model:value="addForm.initPrompt"
             placeholder="描述应用的用途，如：生成一个个人计划页面"
-            :rows="3"
-            :maxlength="300"
+            :auto-size="{ minRows: 3, maxRows: 10 }"
+            :maxlength="2000"
+            show-count
           />
         </a-form-item>
         <a-form-item label="生成类型">

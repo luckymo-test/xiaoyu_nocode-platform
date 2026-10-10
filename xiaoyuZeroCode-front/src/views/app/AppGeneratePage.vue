@@ -1566,7 +1566,9 @@ onUnmounted(() => {
           <a-textarea
             v-model:value="input"
             placeholder="描述你的需求，回车发送（Shift+Enter 换行）"
-            :auto-size="{ minRows: 2, maxRows: 6 }"
+            :auto-size="{ minRows: 3, maxRows: 12 }"
+            :maxlength="2000"
+            show-count
             :disabled="generating"
             @keydown="handleKeydown"
           />
@@ -1780,7 +1782,7 @@ onUnmounted(() => {
                     <a-textarea
                       v-model:value="editInstruction"
                       placeholder="想怎么改这个元素？如：把标题改成「XX」、文字改成蓝色、加一个按钮…（Ctrl+Enter 应用）"
-                      :auto-size="{ minRows: 2, maxRows: 4 }"
+                      :auto-size="{ minRows: 3, maxRows: 8 }"
                       :disabled="modifying"
                       @keydown="handleEditKeydown"
                     />
@@ -2269,6 +2271,12 @@ onUnmounted(() => {
 .input-bar :deep(.ant-input) {
   resize: none;
   border-radius: var(--radius-md);
+}
+
+/* show-count 会给 textarea 套一层 wrapper，flex 行里要显式让它撑满 */
+.input-bar :deep(.ant-input-textarea) {
+  flex: 1;
+  min-width: 0;
 }
 
 .gen-progress-bar {
