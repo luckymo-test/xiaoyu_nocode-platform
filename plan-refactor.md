@@ -31,7 +31,7 @@
 | **P1** ✅ | ~~手动编辑被重新生成整文件覆盖~~ | 已按方案 B 修复（生成前快照 + 生成后幂等重放） | `ManualEditService` vs `writeFile` 覆盖 |
 | **P1** ✅ | ~~素材"事后正则补图"而非素材先行~~ | 已按 6.6 改为素材先行（`ImageMaterialPlanner`），`ImageAutoFiller` 已删除 | 见 6.6 的实测结论 |
 | **P1** | 核心链路零测试 | 后续重构无安全网 | `src/test` 无文件 |
-| **P1** | 无数据库迁移工具 | 换环境/回滚靠手工 | `sql/` 散落 ALTER |
+| **P1** ✅ | ~~无数据库迁移工具~~ | 已引入 Flyway（`V1__init.sql`），空库/已有库两条路径实测通过 | 见 6.4 |
 | **P1** | `AiCallListener` 自建线程池 | 违反项目自身规范 #63 | `AiCallListener` L27 |
 | **P2** | 巨型类 / 重复代码 / 死代码 / 命名不一致 | 维护成本高 | 见第五章 |
 | **P2** | 类注释与实现自相矛盾 | 误导后续维护者 | `VueProjectAgent` 类注释 vs `runToolLoop` |
@@ -255,6 +255,18 @@ surefire 已在 `spring-boot-starter-test` 中，无需新增依赖。
 现状：`sql/` 是散落的手工 `ALTER TABLE`，无版本、无回滚。
 
 改法：引入 **Flyway**（Spring Boot 内置支持），把现有 `sql/*.sql` 收敛为 `V1__init.sql` 等带版本脚本，`baseline-on-migrate=true` 兼容已有库。
+
+> **已完成（2026-10-10，4 步）**：`sql/*.sql`（4 个幂等建表脚本）已收敛为
+> [V1__init.sql](src/main/resources/db/migration/V1__init.sql)，`sql/` 目录删除；`pom.xml` 加 `flyway-core` +
+> `flyway-mysql`；`application.yml` 配 `baseline-on-migrate=true` + `baseline-version=0`（**刻意取 0**：
+> 已有库基线在 0，V1 仍会执行一次，靠脚本的 `if not exists` 幂等收尾——若取默认 1，V1 会被跳过，
+> 新库反而少建表）。
+>
+> 两条路径都用**真实启动**验过：
+> - **空库**：新建 `xiaoyu_migrate_test`（0 张表）→ 启动 → `Migrating schema ... to version "1 - init"` →
+>   `Successfully applied 1 migration ... now at version v1` → 库里 5 张业务表 + `flyway_schema_history` 齐全。
+> - **已有库**：直接启动主后端 → `Successfully baselined schema with version: 0` → V1 幂等执行 → 应用正常启动、
+>   数据无损（登录与查库实测正常）。
 
 ### 6.5 线程池归 Spring 管理
 
@@ -668,5 +680,5 @@ com.mofanyi
 - [ ] 全项目归属校验只剩 1 处实现。
 - [ ] 手动编辑在 AI 重新生成后不丢失。
 - [ ] `mvn test` 有可运行的测试且覆盖 `ToolPaths` 路径穿越。
-- [ ] 数据库可由迁移脚本一键重建。
+- [x] 数据库可由迁移脚本一键重建（2026-10-10 实测：空库启动即建全 5 张表）。
 - [ ] 无 `GENERATING_TASKS` 式死代码、无与实现矛盾的类注释。

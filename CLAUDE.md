@@ -14,5 +14,6 @@
 
 - **后端编译/测试**：JDK 21 在 `C:\Users\莫凡毅\.jdks\corretto-21.0.10`，Maven 在 `C:\Users\莫凡毅\.m2\wrapper\dists\apache-maven-3.9.14\...\bin\mvn`（均不在 PATH）。先 `export JAVA_HOME="$HOME/.jdks/corretto-21.0.10"`，依赖已缓存可离线编译。
 - **后端启动**：端口 8124，接口前缀 `/api`。
+- **数据库表结构**：由 Flyway 管理，脚本在 `src/main/resources/db/migration/`（随应用启动自动执行；已有库靠 `baseline-on-migrate` 接入）。不要再用手工 `sql/*.sql`。
 - **前端**：`cd xiaoyuZeroCode-front && npm run dev`（Vite）。
 - **openapi2ts**：跑完 `npm run openapi2ts` 必须检查 `src/api/` 手写文件是否被删（如 `aiStream.ts`），被删则 `git checkout --` 恢复。

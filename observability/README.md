@@ -26,7 +26,7 @@
 前置：本机装了 Docker；后端在宿主机运行（业务端口 8124、**指标端口 8125**）。
 
 ```bash
-# 建表（首次）：用任意 MySQL 客户端执行 sql/create_ai_call_log.sql
+# 建表：已由 Flyway 迁移接管（src/main/resources/db/migration/V1__init.sql，随后端启动自动执行）
 cd observability
 MYSQL_PASSWORD=你的库密码 docker compose up -d
 ```
