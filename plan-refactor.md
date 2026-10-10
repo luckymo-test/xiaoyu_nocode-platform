@@ -286,7 +286,13 @@ surefire 已在 `spring-boot-starter-test` 中，无需新增依赖。
 > 实测（新 app、图片主导 prompt）：`[素材] 预取完成：候选 12 张（分辨率淘汰 0），入选 8 张` 出现在 `round=1` 之前；
 > 模型**未调用 searchImage**（工具序列 `writeFile×5 → finish`），直接用了清单——页面 `js/app.js` 里 8 幅作品的 src
 > **全部**来自清单（逐 UUID 比对）；渲染验证 → 异步修复 → **复验 3 档视口全部通过**。
-> **仍未做（11~13 步）**：候选池进一步扩容、更深的质量闸门（感知去重/水印/视觉打分）、素材加工（裁切/压缩/命名）。
+> **英文 query 化（2026-10-10 追加，部分兑现"候选池扩容"）**：实测发现**多 query 的第二条（`xx background`）恒为空**
+> —— 3 次运行候选都恰好 12 张（= 单 query 上限），池子一直是半个。改为"中文 query + 模型扩写的 2 个英文 query"：
+> 候选池 **12 → 36**（`query：中文可用 12 张；英文扩写 [hanfu woman traditional chinese costume portrait,
+> ancient chinese style photography elegant hanfu garden]（候选池增至 36 张）`），冷门中文词（汉服）也能拿到准的英文检索词。
+> 先做的是"命中不足才扩写"，但实测中文 query 已够 8 张 → 从不触发，等于白写，故改成**每次都追加**（代价是一次小模型调用）。
+> **仍未做（11~13 步）**：候选池进一步扩容（加大 per-query 上限/翻页）、更深的质量闸门（感知去重/水印/视觉打分）、
+> 素材加工（裁切/压缩/命名）。
 > 顺带发现两条待办：① `ProjectCodeScanner` 的 URL 正则**看不懂模板字符串拼接**（`${CDN}/x.jpg`），
 > 本次只扫到 2 个 URL（清单 8 张已由 planner 单独落库，故数据不缺，但扫描口径不准）；
 > ② `RenderVerifier` 会把**无 src 属性的 JS 托管 img**（灯箱占位）判成"空 src" → 多走一轮修复。

@@ -2,12 +2,19 @@ package com.mofanyi.core;
 
 import cn.hutool.core.util.StrUtil;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.ai.chat.messages.SystemMessage;
+import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 素材先行（plan-refactor 6.6 / plan-agent-pipeline 6.3）：页面构建<b>之前</b>把图片素材准备好，
@@ -47,13 +54,16 @@ public class ImageMaterialPlanner {
     private final PexelsClient pexelsClient;
     private final PixabayClient pixabayClient;
     private final SiteImageService siteImageService;
+    private final ChatModel chatModel;
 
     public ImageMaterialPlanner(PexelsClient pexelsClient,
                                 PixabayClient pixabayClient,
-                                SiteImageService siteImageService) {
+                                SiteImageService siteImageService,
+                                @Qualifier("openAiChatModel") ChatModel chatModel) {
         this.pexelsClient = pexelsClient;
         this.pixabayClient = pixabayClient;
         this.siteImageService = siteImageService;
+        this.chatModel = chatModel;
     }
 
     /**
@@ -82,10 +92,24 @@ public class ImageMaterialPlanner {
             if (queries.isEmpty()) {
                 return List.of();
             }
-            // ① 候选池：多 query 分别搜索，Pexels 优先、Pixabay 兜底
+            // ① 候选池：中文 query + 模型扩写的英文 query，分别搜索（Pexels 优先、Pixabay 兜底）
             List<PexelsClient.PexelsImage> candidates = new ArrayList<>();
             for (String query : queries) {
                 candidates.addAll(searchCandidates(query));
+            }
+            int chineseOnly = countUsable(candidates);
+            // ①' 追加英文 query。实测（2026-10-10）三点推动了这个改法：
+            //   1) Pexels/Pixabay 是英文索引，中文 query 能出结果但**多 query 的第二条恒为空**（3 次运行候选都恰好 12 = 单 query 上限）；
+            //   2) 中文冷门主题（汉服）虽也够 8 张，但池子只有 12 张，挑选余地小；
+            //   3) 先做的是"命中不足才扩写"，实测中文已够数 → 从不触发，等于白写。
+            //   代价是每次生成多一次小模型调用（原本的"xx background"变体是零成本但零收益）。
+            List<String> englishQueries = expandQueriesWithModel(userMessage);
+            if (!englishQueries.isEmpty()) {
+                for (String query : englishQueries) {
+                    candidates.addAll(searchCandidates(query));
+                }
+                log.info("[素材] query：中文可用 {} 张；英文扩写 {}（候选池增至 {} 张）",
+                        chineseOnly, englishQueries, candidates.size());
             }
             // ② 质量闸门：去重 + 最小分辨率（更深的闸门见 11~13 步）
             Map<String, PexelsClient.PexelsImage> deduped = new LinkedHashMap<>();
@@ -187,12 +211,7 @@ public class ImageMaterialPlanner {
         if (keywords.isBlank()) {
             return List.of();
         }
-        List<String> queries = new ArrayList<>();
-        queries.add(keywords);
-        if (keywords.length() <= 20) {
-            queries.add(keywords + " background");
-        }
-        return queries;
+        return List.of(keywords);
     }
 
     private List<PexelsClient.PexelsImage> searchCandidates(String query) {
@@ -236,5 +255,51 @@ public class ImageMaterialPlanner {
             return "landscape";
         }
         return ratio <= 0.8 ? "portrait" : "square";
+    }
+
+    /**
+     * 先按闸门粗筛一遍数量，用于判断"中文 query 够不够用"（不去重、不上传）
+     */
+    private static int countUsable(List<PexelsClient.PexelsImage> candidates) {
+        return (int) candidates.stream()
+                .filter(image -> StrUtil.isNotBlank(image.getUrl()))
+                .filter(image -> image.getWidth() != null && image.getHeight() != null
+                        && image.getWidth() >= MIN_WIDTH && image.getHeight() >= MIN_HEIGHT)
+                .count();
+    }
+
+    /**
+     * 用模型把中文需求转成 2~3 个英文图库检索词。
+     *
+     * <p>为什么要它：Pexels/Pixabay 的索引以英文为主（Pixabay 官方也建议英文关键词），而用户需求基本都是中文——
+     * 直接把中文丢过去，冷门主题常常命中个位数。改造只在"中文命中不足"时触发，故不给常态生成加时延。
+     * 失败/解析不出就返回空列表，调用方按"没有扩写"继续（绝不因为扩写失败而让预取失败）。
+     */
+    private List<String> expandQueriesWithModel(String userMessage) {
+        try {
+            String answer = chatModel.call(new Prompt(List.of(
+                    new SystemMessage("你是图库检索助手。把用户的中文需求转成 2~3 个英文图片检索词，"
+                            + "面向 Pexels/Pixabay 这类摄影图库，尽量具体（主体 + 场景 + 风格）。"
+                            + "只输出检索词，用英文逗号分隔，不要编号、不要解释、不要引号。"),
+                    new UserMessage(userMessage))))
+                    .getResult().getOutput().getText();
+            if (StrUtil.isBlank(answer)) {
+                return List.of();
+            }
+            Set<String> queries = new LinkedHashSet<>();
+            for (String part : answer.split("[,，\\n]")) {
+                String query = part.trim().replaceAll("^[\\d.、)\\s]+", "").replace("\"", "");
+                if (!query.isBlank() && query.length() <= 60) {
+                    queries.add(query);
+                }
+                if (queries.size() >= 3) {
+                    break;
+                }
+            }
+            return new ArrayList<>(queries);
+        } catch (RuntimeException e) {
+            log.warn("[素材] 英文 query 扩写失败，沿用中文 query", e);
+            return List.of();
+        }
     }
 }
