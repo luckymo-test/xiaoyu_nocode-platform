@@ -44,6 +44,13 @@ public class PixabayClient {
      * @return 候选图片列表；失败/无结果返回空列表（不抛异常）
      */
     public List<PexelsClient.PexelsImage> searchImages(String query, String orientation) {
+        return searchImages(query, orientation, pageSize);
+    }
+
+    /**
+     * 按语义描述搜索图片（可指定本次候选数）——素材先行预取用
+     */
+    public List<PexelsClient.PexelsImage> searchImages(String query, String orientation, int perPage) {
         List<PexelsClient.PexelsImage> images = new ArrayList<>();
         if (StrUtil.isBlank(apiKey)) {
             log.warn("Pixabay api-key 未配置，无法搜索图片");
@@ -57,7 +64,7 @@ public class PixabayClient {
                     .form("image_type", "photo")
                     .form("safesearch", "true")
                     .form("orientation", orientation == null || orientation.isBlank() ? "all" : orientation)
-                    .form("per_page", pageSize)
+                    .form("per_page", perPage)
                     .timeout(10_000)
                     .execute();
         } catch (Exception e) {

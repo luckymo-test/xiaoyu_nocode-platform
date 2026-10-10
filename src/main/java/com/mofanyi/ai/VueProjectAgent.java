@@ -20,7 +20,7 @@ import com.mofanyi.core.AiCallContext;
 import com.mofanyi.core.AiCallListener;
 import com.mofanyi.core.CodeFileWriteService;
 import com.mofanyi.core.ProjectCodeScanner;
-import com.mofanyi.core.ImageAutoFiller;
+import com.mofanyi.core.ImageMaterialPlanner;
 import com.mofanyi.core.TokenUsageAccumulator;
 import com.mofanyi.core.SiteImageService;
 import com.mofanyi.core.ToolPaths;
@@ -120,7 +120,7 @@ public class VueProjectAgent {
     private final GenerationTaskRegistry taskRegistry;
     private final ManualEditService manualEditService;
     private final ProjectCodeScanner projectCodeScanner;
-    private final ImageAutoFiller imageAutoFiller;
+    private final ImageMaterialPlanner imageMaterialPlanner;
     private final com.mofanyi.mapper.AppImageMapper appImageMapper;
     private final WriteFileTool writeFileTool;
     private final ReadFileTool readFileTool;
@@ -137,7 +137,7 @@ public class VueProjectAgent {
                            GenerationTaskRegistry taskRegistry,
                            ManualEditService manualEditService,
                            ProjectCodeScanner projectCodeScanner,
-                           ImageAutoFiller imageAutoFiller,
+                           ImageMaterialPlanner imageMaterialPlanner,
                            com.mofanyi.mapper.AppImageMapper appImageMapper,
                            WriteFileTool writeFileTool,
                            ReadFileTool readFileTool,
@@ -153,7 +153,7 @@ public class VueProjectAgent {
         this.taskRegistry = taskRegistry;
         this.manualEditService = manualEditService;
         this.projectCodeScanner = projectCodeScanner;
-        this.imageAutoFiller = imageAutoFiller;
+        this.imageMaterialPlanner = imageMaterialPlanner;
         this.appImageMapper = appImageMapper;
         this.writeFileTool = writeFileTool;
         this.readFileTool = readFileTool;
@@ -213,6 +213,13 @@ public class VueProjectAgent {
         if (StrUtil.isNotBlank(specSection)) {
             messages.add(new SystemMessage(specSection));
         }
+        // 素材先行（plan-refactor 6.6）：页面构建**之前**把图片素材备好，并把清单作为事实注入。
+        // 取代原先"页面先生成、事后用正则补图"（ImageAutoFiller 已删除）——那次序导致页面围绕空占位设计、补图靠猜。
+        List<ImageMaterialPlanner.Material> materials = imageMaterialPlanner.plan(appId, userMessage);
+        String materialSection = imageMaterialPlanner.toPromptSection(materials);
+        if (StrUtil.isNotBlank(materialSection)) {
+            messages.add(new SystemMessage(materialSection));
+        }
         // 注入对话记忆作为前置上下文（优先 Redis 热窗口，miss 时从 MySQL 冷启动回灌）
         messages.addAll(agentMemoryService.loadContext(appId, userMessage));
         messages.add(new UserMessage(userMessage));
@@ -222,10 +229,8 @@ public class VueProjectAgent {
         // 生成前快照用户手动修改：重新生成是整文件覆盖，会把 @user-edit 标记块一起抹掉（plan-refactor 6.2）
         ManualEditService.UserEditSnapshot userEdits = manualEditService.snapshot(type, appId);
         try {
-            runToolLoop(type, appId, messages, files, finished, description, usage, ctx, listener);
-            // 强制补图：模型可能漏调 searchImage，导致页面缺图。扫描代码中的空图片字段/占位图并填真实图。
-            imageAutoFiller.autoFill(type, appId, userMessage);
-            // 生成完成后扫描项目代码，把嵌入的图片 URL 落库（含补图后的真实 URL）
+            runToolLoop(type, appId, messages, files, finished, description, usage, ctx, listener, materials);
+            // 生成完成后扫描项目代码，把嵌入的图片 URL 落库
             projectCodeScanner.scanAndSaveImages(type, appId);
         } finally {
             // 成功 / 失败 / 被手动停止都要重放，用户手动改动不因一次生成而丢失
@@ -281,7 +286,7 @@ public class VueProjectAgent {
                 + "\n\n当前工程相关文件内容：\n" + buildFilesContext(appId)
                 + "\n\n请修复导致报错的文件后调用 finish 结束。"));
 
-        runToolLoop(CodeGenTypeEnum.VUE, appId, messages, files, finished, description, null, ctx, listener);
+        runToolLoop(CodeGenTypeEnum.VUE, appId, messages, files, finished, description, null, ctx, listener, List.of());
         appSpecService.recordChange(CodeGenTypeEnum.VUE, appId, "构建修复",
                 "修复构建错误；改动文件：" + String.join("、", files.keySet()));
     }
@@ -315,7 +320,7 @@ public class VueProjectAgent {
         // 修复也是整文件覆盖，同样要保住用户的手动修改
         ManualEditService.UserEditSnapshot userEdits = manualEditService.snapshot(type, appId);
         try {
-            runToolLoop(type, appId, messages, files, finished, description, null, ctx, listener);
+            runToolLoop(type, appId, messages, files, finished, description, null, ctx, listener, List.of());
         } finally {
             manualEditService.replay(type, appId, userEdits);
         }
@@ -355,7 +360,7 @@ public class VueProjectAgent {
         // 可视化修改同样是整文件覆盖，先快照再重放，避免顺手抹掉用户的手动修改
         ManualEditService.UserEditSnapshot userEdits = manualEditService.snapshot(type, appId);
         try {
-            runToolLoop(type, appId, messages, files, finished, description, usage, ctx, listener);
+            runToolLoop(type, appId, messages, files, finished, description, usage, ctx, listener, List.of());
         } finally {
             manualEditService.replay(type, appId, userEdits);
         }
@@ -388,11 +393,12 @@ public class VueProjectAgent {
      */
     private void runToolLoop(CodeGenTypeEnum type, Long appId, List<Message> messages, Map<String, String> files,
                              AtomicBoolean finished, AtomicReference<String> description, TokenUsageAccumulator usage,
-                             AiCallContext ctx, VueProgressListener listener) {
+                             AiCallContext ctx, VueProgressListener listener,
+                             List<ImageMaterialPlanner.Material> materials) {
         List<ToolCallback> toolCallbacks = List.of(
                 writeFileTool.build(type, appId, files, listener),
                 readFileTool.build(type, appId),
-                searchImageTool.build(appId),
+                searchImageTool.build(appId, materials),
                 diagramTool.build(appId),
                 finishTool.build(finished, description));
         var options = DefaultToolCallingChatOptions.builder().toolCallbacks(toolCallbacks).build();

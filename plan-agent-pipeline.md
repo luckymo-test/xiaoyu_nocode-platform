@@ -149,6 +149,11 @@ Preflight(能力盘点：图源可达? node 可用? COS 可写?)
 
 ### 6.3 素材先行（P1）
 
+> **已完成（2026-10-10）**：`ImageMaterialPlanner` 落地上表 1~3 条（多 query 候选池 → 闸门 → top-K 上传 →
+> 清单注入页面构建 prompt → 删掉 `ImageAutoFiller` 正则补图）。第 4 条（素材加工）留给 6.5。
+> 实测：新 app + 图片主导 prompt，8 幅作品 src **全部**来自清单、模型未再自行搜图、全链路复验 3 档通过。
+> 细节与待办见 [plan-refactor.md](plan-refactor.md) 6.6。
+
 1. 需要图片时**先生成素材清单**：多 query 扩大候选池（5 → 20~30），加质量闸门，选 top-K；
 2. 把清单（url / 宽高 / 用途）作为事实注入**页面构建** prompt；
 3. **删除 `autoFillImages` 正则补图**；

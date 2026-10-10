@@ -50,6 +50,16 @@ public class PexelsClient {
      * @return 候选图片列表（含 CDN URL 与宽高信息）
      */
     public List<PexelsImage> searchImages(String query, String orientation) {
+        return searchImages(query, orientation, pageSize);
+    }
+
+    /**
+     * 按语义描述搜索图片（可指定本次候选数）。
+     * 素材先行的预取需要"大候选池、少量入选"，与工具按需搜索的规模不同，故单列重载。
+     *
+     * @param perPage 本次返回的最大候选数
+     */
+    public List<PexelsImage> searchImages(String query, String orientation, int perPage) {
         List<PexelsImage> images = new ArrayList<>();
         if (StrUtil.isBlank(apiKey)) {
             log.warn("Pexels api-key 未配置，无法搜索图片");
@@ -63,7 +73,7 @@ public class PexelsClient {
                     .header("Authorization", apiKey)
                     .form("query", query)
                     .form("orientation", orientation == null || orientation.isBlank() ? null : orientation)
-                    .form("per_page", pageSize)
+                    .form("per_page", perPage)
                     .timeout(10_000)
                     .execute();
             status = resp.getStatus();

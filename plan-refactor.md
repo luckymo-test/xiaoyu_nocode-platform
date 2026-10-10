@@ -29,7 +29,7 @@
 | **P0** | 交付前无渲染验证（html/multi_file 开环） | 图裂/布局错/0 图只能靠人发现 | 唯一渲染是 `CoverImageService` 部署后截图，结果不回灌 |
 | **P1** | 归属校验散落 3 处 | 越权遗漏风险 | AiChatController×4、ManualEditController×1、AppServiceImpl×1 |
 | **P1** ✅ | ~~手动编辑被重新生成整文件覆盖~~ | 已按方案 B 修复（生成前快照 + 生成后幂等重放） | `ManualEditService` vs `writeFile` 覆盖 |
-| **P1** | 素材"事后正则补图"而非素材先行 | 页面围绕空占位设计，补图靠猜 | `VueProjectAgent.autoFillImages` 在 `runToolLoop` 之后 |
+| **P1** ✅ | ~~素材"事后正则补图"而非素材先行~~ | 已按 6.6 改为素材先行（`ImageMaterialPlanner`），`ImageAutoFiller` 已删除 | 见 6.6 的实测结论 |
 | **P1** | 核心链路零测试 | 后续重构无安全网 | `src/test` 无文件 |
 | **P1** | 无数据库迁移工具 | 换环境/回滚靠手工 | `sql/` 散落 ALTER |
 | **P1** | `AiCallListener` 自建线程池 | 违反项目自身规范 #63 | `AiCallListener` L27 |
@@ -267,6 +267,17 @@ surefire 已在 `spring-boot-starter-test` 中，无需新增依赖。
 ### 6.6 素材先行（替代事后正则补图）
 
 > 详见 [plan-agent-pipeline.md](plan-agent-pipeline.md)——素材先行的完整论证与方法论对照。
+
+> **已完成（2026-10-10，10 步）**：新增 `ImageMaterialPlanner`（多 query 候选池 → 去重 + 最小分辨率闸门 +
+> 宽高比分桶 top-K → 上传 COS），在 `runToolLoop` **之前**把清单作为 system 消息注入；`searchImage` 在有清单时
+> 直接返回清单（保证页面 URL 落在清单内）；`ImageAutoFiller` 及 `SiteImageService.fetchOneImage` 已删除。
+> 实测（新 app、图片主导 prompt）：`[素材] 预取完成：候选 12 张（分辨率淘汰 0），入选 8 张` 出现在 `round=1` 之前；
+> 模型**未调用 searchImage**（工具序列 `writeFile×5 → finish`），直接用了清单——页面 `js/app.js` 里 8 幅作品的 src
+> **全部**来自清单（逐 UUID 比对）；渲染验证 → 异步修复 → **复验 3 档视口全部通过**。
+> **仍未做（11~13 步）**：候选池进一步扩容、更深的质量闸门（感知去重/水印/视觉打分）、素材加工（裁切/压缩/命名）。
+> 顺带发现两条待办：① `ProjectCodeScanner` 的 URL 正则**看不懂模板字符串拼接**（`${CDN}/x.jpg`），
+> 本次只扫到 2 个 URL（清单 8 张已由 planner 单独落库，故数据不缺，但扫描口径不准）；
+> ② `RenderVerifier` 会把**无 src 属性的 JS 托管 img**（灯箱占位）判成"空 src" → 多走一轮修复。
 
 证据：`VueProjectAgent.generate` 先 `runToolLoop`（写页面）、再 `autoFillImages`（正则补图）。页面是在不知道素材的情况下写出来的，所以会出现 `image: ""` 占位，补图只能靠正则猜。候选池仅 `pageSize=5`（`PexelsClient`），无筛选闸门；`downloadAndUpload` 原样上传原图（`SiteImageService`）。
 
@@ -653,7 +664,7 @@ com.mofanyi
 - [ ] 同一应用并发生成被拒绝或排队，磁盘无交叉写入。
 - [ ] 崩溃/超时的 `generating` 记录能被自动回收为 `failed`。
 - [ ] 生成后经 3 档视口渲染验证，图裂/溢出/console error 能被自动发现并进入修复。
-- [ ] 图片主导页面围绕预选素材清单构建，`autoFillImages` 正则补图被移除。
+- [x] 图片主导页面围绕预选素材清单构建（2026-10-10 实测：8 幅作品 src 全部来自清单），`autoFillImages` 正则补图被移除。
 - [ ] 全项目归属校验只剩 1 处实现。
 - [ ] 手动编辑在 AI 重新生成后不丢失。
 - [ ] `mvn test` 有可运行的测试且覆盖 `ToolPaths` 路径穿越。

@@ -12,7 +12,7 @@ import java.util.UUID;
 
 /**
  * 站点图片基础服务：Pexels 搜索 → 下载 → 上传 COS → 落库 app_image。
- * 供生成 agent 的 searchImage 工具、以及生成后自动补图（autoFill）共用。
+ * 供生成 agent 的 searchImage 工具、以及生成前的素材预取（{@link ImageMaterialPlanner}）共用。
  */
 @Slf4j
 @Service
@@ -93,27 +93,6 @@ public class SiteImageService {
             }
         }
         return sb.toString();
-    }
-
-    /**
-     * 从 Pexels 搜一张图并上传 COS，返回 COS URL；失败返回 null
-     */
-    public String fetchOneImage(Long appId, String query) {
-        try {
-            List<PexelsClient.PexelsImage> images = searchPhotos(query, null).images();
-            if (images == null || images.isEmpty()) {
-                return null;
-            }
-            String url = downloadAndUpload(appId, images.get(0).getUrl());
-            if (url == null) {
-                return null;
-            }
-            saveAppImage(appId, url);
-            return url;
-        } catch (Exception e) {
-            log.warn("[补图] 获取图片失败，appId={}", appId, e);
-            return null;
-        }
     }
 
     /**
