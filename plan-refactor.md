@@ -619,12 +619,33 @@ B = `839 / 234 / 450 / 6617 / 7691 / 3951 / 6607 / 5349`（合计 31738）。两
 
 | 重复项 | 现状 | 改法 |
 |---|---|---|
-| 生成入口 | `generate{Html,MultiFile,Vue}Project` + `streamGenerate*` 逐行复制 | 统一为 `generate(type, ...)` / `streamGenerate(type, ...)` |
+| 生成入口 ✅ | ~~`generate{Html,MultiFile,Vue}Project` + `streamGenerate*` 逐行复制~~ | **已完成（2026-10-10，6 步）**：统一为 `generate(type, userMessage, appId)` / `streamGenerate(type, ...)` 两个入口，6 个旧方法删除、控制器 6 处调用点切换。详见下方 |
 | SSE 方法 | `AiChatController` 4 个方法几乎一致 | 抽私有 `sseTemplate(Supplier, StreamCallback)` |
 | JSON 转义 | `AiCodeGeneratorFacade.toJsonString` 手写 + 内联 3 处 | 改用注入的 `ObjectMapper` |
 | 文件遍历 | `VueProjectAgent.collectCodeFiles/relativePath` 与 `CodeFileWriteService.walkDir/relativePath` 两份 | 收敛到 `CodeFileWriteService` |
 
 ### 7.3 死代码 / 命名 / 注释
+
+#### 7.2.1 生成入口收敛实测（2026-10-10，6 步）
+
+收敛后只剩两个入口：`generate(type, userMessage, appId)`（阻塞）与
+`streamGenerate(type, userMessage, appId, callback)`（线程池 + 回调）。
+**唯一按类型分叉的地方被抽成了 `afterGenerate(type, appId)`**：
+
+```
+vue        → codeFileWriteService.deleteVueDist(appId)   // 源码更新后失效旧构建产物
+html / multi_file → verifyAndScheduleFix(type, appId)     // 交付前渲染验证
+```
+
+三条路径（含原先独立实现的 vue 流式入口）此前是**四份近乎逐行复制**的代码，现在共用一套收尾。
+
+**顺带修掉一个不一致（行为变更，已实测）**：原先 **vue 的非流式入口没有 appId 互斥**
+（html/multi_file 与 vue 的*流式*入口都有），与 plan-refactor P0-2"所有生成入口统一走互斥"不符。
+收敛后 vue 也走同一层包装。实测：对同一 appId 连发两次 vue 生成，第二次被拒
+（`{"code":50001,"message":"该应用正在生成或修改中，请稍候再试"}`），第一次正常完成。
+
+**三种类型各跑一次真实生成**：html（200 / `done` / 渲染验证 3/3 转修复）、multi_file（200 / `done` /
+渲染验证 1/3 转修复）、vue（200 / `done`，且**未**误跑渲染验证——走的 vue 分支）；38 用例通过。
 
 - 删除 [`Main.java`](src/main/java/com/mofanyi/Main.java)（无引用的 `Hello world`）。
 - **移除死依赖 Sa-Token**：`sa-token-spring-boot3-starter` 与 `sa-token-redis-jackson` 仅在 `pom.xml` 声明，`src` 与 `resources` 均零引用（`rg "StpUtil|SaCheck|cn.dev33" src/main/java` 与 yml 搜索均为空）；鉴权实际走 `HttpSession` + 自写 `@AuthCheck` AOP。

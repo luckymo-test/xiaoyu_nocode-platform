@@ -53,7 +53,7 @@ public class AiChatController {
                                   HttpServletRequest request) {
         ChatHistory userMsg = saveUserMessage(appId, message, request);
         try {
-            AiCodeGenResultVO vo = aiCodeGeneratorFacade.generateHtmlProject(message, appId);
+            AiCodeGenResultVO vo = aiCodeGeneratorFacade.generate(CodeGenTypeEnum.HTML, message, appId);
             saveAssistantMessage(appId, userMsg, vo);
             return vo;
         } catch (RuntimeException e) {
@@ -68,7 +68,7 @@ public class AiChatController {
                                        HttpServletRequest request) {
         ChatHistory userMsg = saveUserMessage(appId, message, request);
         try {
-            AiCodeGenResultVO vo = aiCodeGeneratorFacade.generateMultiFileProject(message, appId);
+            AiCodeGenResultVO vo = aiCodeGeneratorFacade.generate(CodeGenTypeEnum.MULTI_FILE, message, appId);
             saveAssistantMessage(appId, userMsg, vo);
             return vo;
         } catch (RuntimeException e) {
@@ -83,7 +83,7 @@ public class AiChatController {
                                  HttpServletRequest request) {
         ChatHistory userMsg = saveUserMessage(appId, message, request);
         SseEmitter emitter = new SseEmitter(600_000L);
-        aiCodeGeneratorFacade.streamGenerateHtmlProject(message, appId, new StreamCallback(
+        aiCodeGeneratorFacade.streamGenerate(CodeGenTypeEnum.HTML, message, appId, new StreamCallback(
                 token -> send(emitter, "agent_progress", token),
                 reasoning -> send(emitter, "reasoning", reasoning),
                 vo -> {
@@ -105,7 +105,7 @@ public class AiChatController {
                                       HttpServletRequest request) {
         ChatHistory userMsg = saveUserMessage(appId, message, request);
         SseEmitter emitter = new SseEmitter(600_000L);
-        aiCodeGeneratorFacade.streamGenerateMultiFileProject(message, appId, new StreamCallback(
+        aiCodeGeneratorFacade.streamGenerate(CodeGenTypeEnum.MULTI_FILE, message, appId, new StreamCallback(
                 token -> send(emitter, "agent_progress", token),
                 reasoning -> send(emitter, "reasoning", reasoning),
                 vo -> {
@@ -127,7 +127,7 @@ public class AiChatController {
                                      HttpServletRequest request) {
         ChatHistory userMsg = saveUserMessage(appId, message, request);
         try {
-            AiCodeGenResultVO vo = aiCodeGeneratorFacade.generateVueProject(message, appId);
+            AiCodeGenResultVO vo = aiCodeGeneratorFacade.generate(CodeGenTypeEnum.VUE, message, appId);
             saveAssistantMessage(appId, userMsg, vo);
             return vo;
         } catch (RuntimeException e) {
@@ -146,7 +146,7 @@ public class AiChatController {
                                     HttpServletRequest request) {
         ChatHistory userMsg = saveUserMessage(appId, message, request);
         SseEmitter emitter = new SseEmitter(600_000L);
-        aiCodeGeneratorFacade.streamGenerateVueProject(message, appId, new StreamCallback(
+        aiCodeGeneratorFacade.streamGenerate(CodeGenTypeEnum.VUE, message, appId, new StreamCallback(
                 token -> send(emitter, "agent_progress", token),
                 reasoning -> send(emitter, "reasoning", reasoning),
                 vo -> {

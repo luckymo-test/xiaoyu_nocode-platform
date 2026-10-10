@@ -81,16 +81,19 @@ public class AiCodeGeneratorFacade {
      * @param appId       应用 id（用于项目文件夹命名）
      * @return 生成结果 VO（含项目路径与代码）
      */
-    public AiCodeGenResultVO generateHtmlProject(String userMessage, Long appId) {
+    public AiCodeGenResultVO generate(CodeGenTypeEnum type, String userMessage, Long appId) {
+        ThrowUtils.throwIf(type == null, ErrorCode.PARAMS_ERROR);
         checkGenerateParams(userMessage, appId);
-        GenerationTask task = acquireOrThrow(appId, "html");
+        // 互斥：同一 appId 只允许一个生成在跑（plan-refactor P0-2）。原先 vue 非流式入口漏了这一层，现统一补齐。
+        GenerationTask task = acquireOrThrow(appId, callTypeOf(type));
         try {
             task.bind(Thread.currentThread());
             appService.updateGenerateStatus(appId, AppGenerateStatusEnum.GENERATING.getValue());
-            VueProjectAgent.GenerateResult result = vueProjectAgent.generate(CodeGenTypeEnum.HTML, appId, userMessage, callContext(appId, "html"), null);
+            VueProjectAgent.GenerateResult result = vueProjectAgent.generate(
+                    type, appId, userMessage, callContext(appId, callTypeOf(type)), null);
             appService.updateGenerateStatus(appId, AppGenerateStatusEnum.DONE.getValue());
-            verifyAndScheduleFix(CodeGenTypeEnum.HTML, appId);
-            AiCodeGenResultVO vo = readResult(CodeGenTypeEnum.HTML, appId);
+            afterGenerate(type, appId);
+            AiCodeGenResultVO vo = readResult(type, appId);
             applyUsage(vo, result);
             return vo;
         } catch (RuntimeException e) {
@@ -102,59 +105,25 @@ public class AiCodeGeneratorFacade {
     }
 
     /**
-     * 生成多文件项目并落盘
-     *
-     * @param userMessage 用户需求描述
-     * @param appId       应用 id（用于项目文件夹命名）
-     * @return 生成结果 VO（含项目路径与代码）
+     * 生成后的类型分支——**统一入口里唯一按类型分叉的地方**：
+     * html / multi_file 交付前要做渲染验证（plan-agent-pipeline P0-4）；vue 用构建产物预览，只失效旧 dist。
+     * 抽成一个方法，正是为了让"三条生成路径"共用同一套收尾。
      */
-    public AiCodeGenResultVO generateMultiFileProject(String userMessage, Long appId) {
-        checkGenerateParams(userMessage, appId);
-        GenerationTask task = acquireOrThrow(appId, "multi_file");
-        try {
-            task.bind(Thread.currentThread());
-            appService.updateGenerateStatus(appId, AppGenerateStatusEnum.GENERATING.getValue());
-            VueProjectAgent.GenerateResult result = vueProjectAgent.generate(CodeGenTypeEnum.MULTI_FILE, appId, userMessage, callContext(appId, "multi_file"), null);
-            appService.updateGenerateStatus(appId, AppGenerateStatusEnum.DONE.getValue());
-            verifyAndScheduleFix(CodeGenTypeEnum.MULTI_FILE, appId);
-            AiCodeGenResultVO vo = readResult(CodeGenTypeEnum.MULTI_FILE, appId);
-            applyUsage(vo, result);
-            return vo;
-        } catch (RuntimeException e) {
-            appService.updateGenerateStatus(appId, failureStatus(e));
-            throw e;
-        } finally {
-            taskRegistry.release(appId, task);
+    private void afterGenerate(CodeGenTypeEnum type, Long appId) {
+        if (type == CodeGenTypeEnum.VUE) {
+            // 源码更新后失效旧构建产物，下次预览/部署重新构建
+            codeFileWriteService.deleteVueDist(appId);
+            return;
         }
+        verifyAndScheduleFix(type, appId);
     }
 
     /**
-     * 流式生成单文件 HTML 项目，通过回调逐段接收文件进度、完成结果 VO 或异常
-     *
-     * @param userMessage 用户需求描述
-     * @param appId       应用 id（用于项目文件夹命名）
-     * @param callback    流式回调（token / done / error）
+     * 流式生成（html / multi_file / vue 统一入口）：在独立线程执行通用 agent，
+     * 逐文件进度（agent_progress）、思考增量（reasoning）与最终结果 VO（done）通过回调返回。
      */
-    public void streamGenerateHtmlProject(String userMessage, Long appId, StreamCallback callback) {
-        streamGenerateByAgent(CodeGenTypeEnum.HTML, userMessage, appId, callback);
-    }
-
-    /**
-     * 流式生成多文件项目，通过回调逐段接收文件进度、完成结果 VO 或异常
-     *
-     * @param userMessage 用户需求描述
-     * @param appId       应用 id（用于项目文件夹命名）
-     * @param callback    流式回调（token / done / error）
-     */
-    public void streamGenerateMultiFileProject(String userMessage, Long appId, StreamCallback callback) {
-        streamGenerateByAgent(CodeGenTypeEnum.MULTI_FILE, userMessage, appId, callback);
-    }
-
-    /**
-     * html / multi_file 流式生成：在独立线程执行通用 agent，逐文件进度与最终结果通过回调返回。
-     * 与 vue 模式一致，逐文件进度通过 agent_progress 事件推送（JSON {"path":...,"content":...}）。
-     */
-    private void streamGenerateByAgent(CodeGenTypeEnum type, String userMessage, Long appId, StreamCallback callback) {
+    public void streamGenerate(CodeGenTypeEnum type, String userMessage, Long appId, StreamCallback callback) {
+        ThrowUtils.throwIf(type == null, ErrorCode.PARAMS_ERROR);
         checkGenerateParams(userMessage, appId);
         ThrowUtils.throwIf(callback == null, ErrorCode.PARAMS_ERROR);
         GenerationTask task = acquireOrThrow(appId, callTypeOf(type));
@@ -177,7 +146,7 @@ public class AiCodeGeneratorFacade {
                             }
                         });
                 appService.updateGenerateStatus(appId, AppGenerateStatusEnum.DONE.getValue());
-                verifyAndScheduleFix(type, appId);
+                afterGenerate(type, appId);
                 AiCodeGenResultVO vo = readResult(type, appId);
                 applyUsage(vo, result);
                 callback.onDone(vo);
@@ -251,77 +220,6 @@ public class AiCodeGeneratorFacade {
         if (taskRegistry.cancel(appId)) {
             appService.updateGenerateStatus(appId, AppGenerateStatusEnum.STOPPED.getValue());
         }
-    }
-
-    /**
-     * 生成 Vue3 工程并落盘（阻塞，agent 逐文件写）。供非流式接口用。
-     *
-     * @param userMessage 用户需求
-     * @param appId       应用 id
-     * @return 生成结果 VO（含 files 文件清单）
-     */
-    public AiCodeGenResultVO generateVueProject(String userMessage, Long appId) {
-        checkGenerateParams(userMessage, appId);
-        appService.updateGenerateStatus(appId, AppGenerateStatusEnum.GENERATING.getValue());
-        try {
-            VueProjectAgent.GenerateResult result = vueProjectAgent.generate(CodeGenTypeEnum.VUE, appId, userMessage, callContext(appId, "vue"), null);
-            appService.updateGenerateStatus(appId, AppGenerateStatusEnum.DONE.getValue());
-            // 源码更新后失效旧构建产物，下次预览/部署重新构建
-            codeFileWriteService.deleteVueDist(appId);
-            AiCodeGenResultVO vo = readResult(CodeGenTypeEnum.VUE, appId);
-            applyUsage(vo, result);
-            return vo;
-        } catch (RuntimeException e) {
-            appService.updateGenerateStatus(appId, AppGenerateStatusEnum.FAILED.getValue());
-            throw e;
-        }
-    }
-
-    /**
-     * 流式生成 Vue3 工程：在独立线程执行 agent，逐文件进度与最终结果通过回调返回。
-     *
-     * @param userMessage 用户需求
-     * @param appId       应用 id
-     * @param callback    token=文件进度、done=最终结果、error=异常
-     */
-    public void streamGenerateVueProject(String userMessage, Long appId, StreamCallback callback) {
-        checkGenerateParams(userMessage, appId);
-        ThrowUtils.throwIf(callback == null, ErrorCode.PARAMS_ERROR);
-        GenerationTask task = acquireOrThrow(appId, "vue");
-        appService.updateGenerateStatus(appId, AppGenerateStatusEnum.GENERATING.getValue());
-        vueThreadPoolExecutor.execute(() -> {
-            task.bind(Thread.currentThread());
-            try {
-                VueProjectAgent.GenerateResult result = vueProjectAgent.generate(CodeGenTypeEnum.VUE, appId, userMessage,
-                        callContext(appId, "vue"),
-                        new VueProjectAgent.VueProgressListener() {
-                            @Override
-                            public void onFileWritten(String path, int size, String content) {
-                                // 每个文件写入时推送完整内容（供前端流式展示代码，逐文件出现）
-                                // 格式为 JSON 对象字符串 {"path":"...","content":"..."}
-                                callback.onToken("{\"path\":" + toJsonString(path)
-                                        + ",\"content\":" + toJsonString(content) + "}");
-                            }
-
-                            @Override
-                            public void onReasoning(String reasoning) {
-                                callback.onReasoning(reasoning);
-                            }
-                        });
-                appService.updateGenerateStatus(appId, AppGenerateStatusEnum.DONE.getValue());
-                // 源码更新后失效旧构建产物，下次预览/部署重新构建
-                codeFileWriteService.deleteVueDist(appId);
-                AiCodeGenResultVO vo = readResult(CodeGenTypeEnum.VUE, appId);
-                applyUsage(vo, result);
-                callback.onDone(vo);
-            } catch (RuntimeException e) {
-                appService.updateGenerateStatus(appId, failureStatus(e));
-                log.error("[agent] 生成失败，type={}, appId={}", CodeGenTypeEnum.VUE, appId, e);
-                callback.onError(e);
-            } finally {
-                taskRegistry.release(appId, task);
-            }
-        });
     }
 
     /**
