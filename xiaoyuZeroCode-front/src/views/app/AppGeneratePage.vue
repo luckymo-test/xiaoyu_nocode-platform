@@ -1567,7 +1567,7 @@ onUnmounted(() => {
             v-model:value="input"
             placeholder="描述你的需求，回车发送（Shift+Enter 换行）"
             :auto-size="{ minRows: 3, maxRows: 12 }"
-            :maxlength="2000"
+            :maxlength="4000"
             show-count
             :disabled="generating"
             @keydown="handleKeydown"

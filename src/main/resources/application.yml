@@ -42,6 +42,11 @@ spring:
           max-tokens: 32768
 server:
   port: 8124
+  # 请求头上限：前端用 EventSource（SSE 只能 GET）把提示词放在查询串里，中文经 URL 编码后是 9 字节/字，
+  # 默认 8KB 意味着超过约 900 个中文字符就在 Tomcat 解析阶段被拒（"Request header is too large"）——
+  # 现象是前端发完需求一直没反馈、app 状态停在 not_generated（请求根本没进 Spring）。
+  # 提到 64KB 后约可承载 7000 个中文字符，与前端输入框上限对齐后仍有富余。
+  max-http-request-header-size: 64KB
   servlet:
     context-path: /api
     # cookie 30 天过期

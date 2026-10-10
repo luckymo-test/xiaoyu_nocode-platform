@@ -998,3 +998,46 @@ screenshot:
 还原后自检：`git diff xiaoyuZeroCode-front/src/request.ts` 应为空。
 
 **经验**：**路由守卫不是唯一的登录拦截点**，axios 拦截器的硬跳转优先级更高、也更"沉默"（它只写 `location.href`，控制台看不出异常）。另外临时验证改动一定要用 `git diff` 复核还原干净，否则很容易跟着一起提交。
+
+---
+
+## 十五、HTTP 传输边界
+
+### 72. 长提示词"卡死"：不是模型卡住，是**请求行超了 Tomcat 的 8KB**（请求根本没进 Spring）
+
+**现象**：前端发完需求后**一直没有文件生成反馈**，看起来像生成卡死。查库：该 app 的
+`generateStatus` 停在 `not_generated`、`updateTime == createTime`；`chat_history` **0 行**——
+这些都指向"控制器压根没执行"。
+
+**排查关键**：该 appId **在后端日志里一条都没有**（不是报错，是完全没有）。翻到日志最尾部才有唯一线索：
+
+```
+org.apache.coyote.http11.Http11Processor : Error parsing HTTP request header
+java.lang.IllegalArgumentException: Request header is too large
+```
+
+**根因**：前端用 `EventSource`（SSE）——**SSE 只能走 GET**，于是提示词被放进查询串
+`/api/ai/chat/multi/stream?appId=…&message=<提示词>`。中文经 URL 编码是 **9 字节/字**
+（3 字节 UTF-8 × `%XX`），Tomcat 默认 `maxHttpRequestHeaderSize` 是 **8KB**（同时约束请求行与请求头）——
+**约 900 个中文字符就会在 HTTP 解析阶段被直接丢弃**。本次实测那条提示词 1373 字 = URL 编码后 **11324 字节**。
+前端输入框上限却是 2000 字，等于**允许输入的量超出链路承载能力两倍多**。
+
+**为什么隐蔽**：① 请求没进 Spring，业务日志/指标/`ai_call_log` 全无痕迹，只有 `Http11Processor` 一句 WARN；
+② 前端 `EventSource` 收不到任何事件（连 `error` 数据都没有），UI 表现就是"转圈不动"；
+③ 数据库状态停在初始值，像是"任务排队中"。
+
+**解决**：
+
+```yaml
+server:
+  max-http-request-header-size: 64KB   # 约可承载 7000 个中文字符
+```
+
+并把前端 `AppGeneratePage.vue` 的 `:maxlength="2000"` 提到 `4000` 与链路对齐。
+
+**验证**：用用户原样的 1373 字提示词重放同一 appId → HTTP 200、`generateStatus=done`、
+日志出现完整链路（`[spec]` → `[素材]` → 各轮 → `[verify]`），`Request header is too large` 出现 0 次。
+
+**经验**：**"卡死"要先分清是"业务卡住"还是"请求没进来"**——判据是"业务日志/DB 状态有没有变化"。
+只要有一条链路是"应用层完全无感知"的，就不能只盯着模型和线程池。根治办法是把生成入口从 GET 换成 POST + body
+（SSE 需要改成 fetch 流式解析），届时长度只受 body 上限约束；当前用提高请求头上限作为务实解。
