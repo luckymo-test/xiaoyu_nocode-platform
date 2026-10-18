@@ -3,6 +3,7 @@ package com.mofanyi.ai.task;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -77,5 +78,17 @@ class GenerationTaskRegistryTest {
     void runningTasks_snapshot() {
         registry.tryAcquire(APP_ID, "html");
         assertTrue(registry.runningTasks().stream().anyMatch(t -> APP_ID == t.appId()));
+    }
+
+    @Test
+    @DisplayName("应用关闭时批量取消全部任务")
+    void cancelAll_cancelsEveryRunningTask() {
+        GenerationTask first = registry.tryAcquire(1L, "html");
+        GenerationTask second = registry.tryAcquire(2L, "vue");
+
+        assertEquals(2, registry.cancelAll());
+        assertTrue(first.isCancelled());
+        assertTrue(second.isCancelled());
+        assertEquals(0, registry.cancelAll());
     }
 }

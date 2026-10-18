@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { appMessage as message } from '@/utils/feedback'
 import {
@@ -19,6 +19,12 @@ import {
 import AppCard from '@/components/AppCard.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import TableSkeleton from '@/components/TableSkeleton.vue'
+import {
+  NEW_APP_REASONING_STORAGE_KEY,
+  parseReasoningIndex,
+  REASONING_LEVELS,
+  REASONING_MARKS,
+} from '@/config/reasoning'
 
 const router = useRouter()
 
@@ -44,6 +50,18 @@ const generateModes: GenerateMode[] = [
 
 const selectedModeIndex = ref(2)
 const selectedMode = computed(() => generateModes[selectedModeIndex.value])
+const reasoningIndex = ref(
+  parseReasoningIndex(localStorage.getItem(NEW_APP_REASONING_STORAGE_KEY)),
+)
+const reasoningLevel = computed(() => REASONING_LEVELS[reasoningIndex.value]?.value ?? 'standard')
+const reasoningLabel = computed(() => REASONING_LEVELS[reasoningIndex.value]?.label ?? '标准')
+const reasoningMarks = REASONING_MARKS
+watch(reasoningIndex, (value) => {
+  localStorage.setItem(
+    NEW_APP_REASONING_STORAGE_KEY,
+    REASONING_LEVELS[value]?.value ?? 'standard',
+  )
+})
 
 /** 创建时的可见范围（默认公开） */
 const createVisibility = ref<'public' | 'private'>('public')
@@ -79,7 +97,9 @@ const handleCreate = async () => {
     })
     if (res.data.code === 0 && res.data.data) {
       message.success('创建成功，正在生成应用...')
-      router.push(`/app/gen/${res.data.data}?stream=${selectedMode.value.stream}`)
+      router.push(
+        `/app/gen/${res.data.data}?stream=${selectedMode.value.stream}&reasoning=${reasoningLevel.value}`,
+      )
     } else {
       message.error(res.data.message || '创建失败')
     }
@@ -297,6 +317,18 @@ const codeGenTypeColor = (type?: string) =>
       <div class="studio-actions">
         <div class="studio-options">
           <a-segmented v-model:value="createVisibility" :options="visibilityOptions" />
+          <div class="studio-reasoning" title="档位越高，思考更充分，但耗时和 token 消耗也会增加">
+            <span class="studio-reasoning-label">推理强度</span>
+            <a-slider
+              v-model:value="reasoningIndex"
+              class="studio-reasoning-slider"
+              :min="0"
+              :max="3"
+              :step="1"
+              :marks="reasoningMarks"
+            />
+            <a-tag color="blue">{{ reasoningLabel }}</a-tag>
+          </div>
           <a-select
             v-model:value="selectedModeIndex"
             :options="modeOptions"
@@ -644,6 +676,30 @@ const codeGenTypeColor = (type?: string) =>
   flex-wrap: wrap;
 }
 
+.studio-reasoning {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 250px;
+}
+
+.studio-reasoning-label {
+  color: var(--text-2);
+  font-size: var(--font-sm);
+  white-space: nowrap;
+}
+
+.studio-reasoning-slider {
+  flex: 1;
+  min-width: 150px;
+  margin: 0;
+}
+
+.studio-reasoning-slider :deep(.ant-slider-mark-text) {
+  font-size: 10px;
+  white-space: nowrap;
+}
+
 .shortcut-hint {
   color: var(--text-3);
   font-size: var(--font-xs);
@@ -727,6 +783,10 @@ const codeGenTypeColor = (type?: string) =>
   .studio-actions {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .studio-reasoning {
+    width: 100%;
   }
 
   .app-grid {

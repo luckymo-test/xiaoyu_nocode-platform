@@ -78,14 +78,19 @@ public class AiCallListener {
     }
 
     private void insertAsync(AiCallLog row) {
-        detailWriter.submit(() -> {
-            try {
-                aiCallLogMapper.insert(row);
-            } catch (RuntimeException e) {
-                // 明细落库失败不影响主链路
-                log.warn("AI 调用明细落库失败, appId={}, callType={}", row.getAppId(), row.getCallType(), e);
-            }
-        });
+        try {
+            detailWriter.submit(() -> {
+                try {
+                    aiCallLogMapper.insert(row);
+                } catch (RuntimeException e) {
+                    // 明细落库失败不影响主链路
+                    log.warn("AI 调用明细落库失败, appId={}, callType={}", row.getAppId(), row.getCallType(), e);
+                }
+            });
+        } catch (RuntimeException e) {
+            // 应用关闭时执行器可能已关闭，调用监控不应反过来影响生成线程退出
+            log.debug("AI 调用明细执行器已关闭，跳过异步落库, appId={}", row.getAppId(), e);
+        }
     }
 
     private String truncate(String s) {

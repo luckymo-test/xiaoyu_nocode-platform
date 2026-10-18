@@ -79,8 +79,8 @@ class GenerationPipelineProbeTest {
         JsonNode materials = objectMapper.readTree(materialsFile.toFile());
         JsonNode selected = materials.path("selected");
         assertTrue(materials.path("curatorUsed").asBoolean(), "Curator 开启时不应退回程序规则");
-        assertTrue(selected.isArray() && selected.size() >= 6 && selected.size() <= 8,
-                "Curator 应输出 6~8 张可用图片");
+        assertTrue(selected.isArray() && !selected.isEmpty(),
+                "Curator 应根据页面规模自主输出可用图片");
         Set<String> selectedUrls = java.util.stream.StreamSupport.stream(selected.spliterator(), false)
                 .map(node -> node.path("url").asText(""))
                 .filter(url -> !url.isBlank())

@@ -92,4 +92,22 @@ public class GenerationTaskRegistry {
     public Collection<GenerationTask> runningTasks() {
         return List.copyOf(tasks.values());
     }
+
+    /**
+     * 应用关闭时取消全部任务；实际线程中断由拥有执行器的调用方负责。
+     *
+     * @return 被取消的任务数
+     */
+    public int cancelAll() {
+        int cancelled = 0;
+        for (GenerationTask task : tasks.values()) {
+            if (task.cancel()) {
+                cancelled++;
+            }
+        }
+        if (cancelled > 0) {
+            log.info("[task] 应用停止，已请求取消 {} 个生成任务", cancelled);
+        }
+        return cancelled;
+    }
 }

@@ -530,12 +530,15 @@ if (profile.thinkingEnabled()) {
 - [x] 正式域名、`deepseek-flash`、64K 输出上限已切换并完成真实调用。
 - [x] `AgentToolLoop`、`SiteRepairAgent`、`SiteModifyAgent` 已落地；`VueProjectAgent` 从 895 行降到 269 行。
 - [x] 四档推理滑杆已接入后端、SSE 请求与前端，并完成 off/low/high/max 真实探针。
-- [x] `ImageCuratorAgent` 两轮视觉筛选、严格 JSON、失败降级、`materials.json` 已实现；开关默认关闭。
-- [x] 后端常规测试 63 个（52 通过、11 个探针跳过），前端生产构建通过，真实无图生成通过。
-- [x] COS 恢复后完成图片落地全链路：Pexels/Pixabay 合并后 96 个候选、Curator 最终选中 6 张、页面 18 处图片引用全部来自 selected。
+- [x] `ImageCuratorAgent` 两轮视觉筛选、严格 JSON、失败降级、`materials.json` 已实现；默认启用，可通过环境变量关闭。
+- [x] 后端常规测试 70 个（56 通过、14 个探针跳过），前端生产构建通过，真实无图生成通过。
+- [x] COS 恢复后完成图片落地全链路：Pexels/Pixabay 按独立视觉主题检索并轮转取样；最终图片数量由模型按页面复杂度决定，Curator 关闭时的程序兜底才使用 16 张限制。
 - [x] 3 档渲染复验通过；使用 Edge 155 匹配驱动，并修正隐藏空 `src` 图片的误报。
 - [x] 上下文语义压缩已落地：超过 8K tokens 后压缩较早历史，最近 4 轮保留原文，摘要缓存支持增量更新。
 - [x] Prompt v2 已完成公共规则收敛、素材先行冲突修正、Vue 修复后缀修正和动态数据信任边界加固。
 - [x] DeepSeek `searchWeb` / `fetchWeb` 两个工具已接入，默认关闭，包含限速、重试、缓存、正文截断和不可信数据边界。
+- [x] 图片布局规则已加固：竖图默认保留原始比例，禁止无意义固定比例裁切；用户指出的 `appId=469427600224477184` 已完成 3 档渲染复验。
+- [x] 多主题选片已修复：模型为每个明确主题生成独立英文 query，候选按主题轮转进入视觉池；六主题探针确认 Cosplay 等主题均进入最终素材。
+- [x] 长任务 SSE 已加固：30 分钟超时、15 秒心跳、断线禁止自动重复生成，前端轮询应用状态恢复最终产物。
 
 详细数据见 `tmp/agent-decoupling-verification.md`。

@@ -18,6 +18,7 @@ import com.mofanyi.model.vo.AiCodeGenResultVO;
 import com.mofanyi.service.AppAuthService;
 import com.mofanyi.service.ChatHistoryService;
 import com.mofanyi.service.UserService;
+import jakarta.annotation.PreDestroy;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.MediaType;
@@ -29,16 +30,32 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
+
 @Slf4j
 @RestController
 @RequestMapping("/ai")
 public class AiChatController {
+
+    private static final long SSE_TIMEOUT_MILLIS = 30 * 60_000L;
+    private static final long SSE_HEARTBEAT_SECONDS = 15L;
 
     private final AiCodeGeneratorFacade aiCodeGeneratorFacade;
     private final UserService userService;
     private final AppAuthService appAuthService;
     private final ChatHistoryService chatHistoryService;
     private final ReasoningProfileRegistry reasoningProfiles;
+    private final ScheduledExecutorService sseHeartbeatExecutor =
+            Executors.newSingleThreadScheduledExecutor(task -> {
+                Thread thread = new Thread(task, "sse-heartbeat");
+                thread.setDaemon(true);
+                return thread;
+            });
 
     public AiChatController(AiCodeGeneratorFacade aiCodeGeneratorFacade,
                             UserService userService,
@@ -92,21 +109,20 @@ public class AiChatController {
                                  @RequestParam(defaultValue = "standard") String reasoningLevel,
                                  HttpServletRequest request) {
         ChatHistory userMsg = saveUserMessage(appId, message, request);
-        SseEmitter emitter = new SseEmitter(600_000L);
-        aiCodeGeneratorFacade.streamGenerate(CodeGenTypeEnum.HTML, message, appId, new StreamCallback(
-                token -> send(emitter, "agent_progress", token),
-                reasoning -> send(emitter, "reasoning", reasoning),
-                vo -> {
-                    send(emitter, "done", vo);
-                    emitter.complete();
-                    saveAssistantMessage(appId, userMsg, vo);
-                },
-                error -> {
-                    send(emitter, "error", error.getMessage());
-                    emitter.complete();
-                     saveErrorMessage(appId, userMsg, error);
-                 }), parseReasoningLevel(reasoningLevel));
-        return emitter;
+        return startSse(appId, userMsg, emitter ->
+                aiCodeGeneratorFacade.streamGenerate(CodeGenTypeEnum.HTML, message, appId, new StreamCallback(
+                        token -> send(emitter, "agent_progress", token),
+                        reasoning -> send(emitter, "reasoning", reasoning),
+                        vo -> {
+                            send(emitter, "done", vo);
+                            emitter.complete();
+                            saveAssistantMessage(appId, userMsg, vo);
+                        },
+                        error -> {
+                            send(emitter, "error", errorMessage(error));
+                            emitter.complete();
+                            saveErrorMessage(appId, userMsg, error);
+                        }), parseReasoningLevel(reasoningLevel)));
     }
 
     @GetMapping(value = "/chat/multi/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -115,21 +131,20 @@ public class AiChatController {
                                       @RequestParam(defaultValue = "standard") String reasoningLevel,
                                       HttpServletRequest request) {
         ChatHistory userMsg = saveUserMessage(appId, message, request);
-        SseEmitter emitter = new SseEmitter(600_000L);
-        aiCodeGeneratorFacade.streamGenerate(CodeGenTypeEnum.MULTI_FILE, message, appId, new StreamCallback(
-                token -> send(emitter, "agent_progress", token),
-                reasoning -> send(emitter, "reasoning", reasoning),
-                vo -> {
-                    send(emitter, "done", vo);
-                    emitter.complete();
-                    saveAssistantMessage(appId, userMsg, vo);
-                },
-                error -> {
-                    send(emitter, "error", error.getMessage());
-                    emitter.complete();
-                     saveErrorMessage(appId, userMsg, error);
-                 }), parseReasoningLevel(reasoningLevel));
-        return emitter;
+        return startSse(appId, userMsg, emitter ->
+                aiCodeGeneratorFacade.streamGenerate(CodeGenTypeEnum.MULTI_FILE, message, appId, new StreamCallback(
+                        token -> send(emitter, "agent_progress", token),
+                        reasoning -> send(emitter, "reasoning", reasoning),
+                        vo -> {
+                            send(emitter, "done", vo);
+                            emitter.complete();
+                            saveAssistantMessage(appId, userMsg, vo);
+                        },
+                        error -> {
+                            send(emitter, "error", errorMessage(error));
+                            emitter.complete();
+                            saveErrorMessage(appId, userMsg, error);
+                        }), parseReasoningLevel(reasoningLevel)));
     }
 
     @GetMapping("/chat/vue")
@@ -159,21 +174,20 @@ public class AiChatController {
                                     @RequestParam(defaultValue = "standard") String reasoningLevel,
                                     HttpServletRequest request) {
         ChatHistory userMsg = saveUserMessage(appId, message, request);
-        SseEmitter emitter = new SseEmitter(600_000L);
-        aiCodeGeneratorFacade.streamGenerate(CodeGenTypeEnum.VUE, message, appId, new StreamCallback(
-                token -> send(emitter, "agent_progress", token),
-                reasoning -> send(emitter, "reasoning", reasoning),
-                vo -> {
-                    send(emitter, "done", vo);
-                    emitter.complete();
-                    saveAssistantMessage(appId, userMsg, vo);
-                },
-                error -> {
-                    send(emitter, "error", error.getMessage());
-                    emitter.complete();
-                     saveErrorMessage(appId, userMsg, error);
-                 }), parseReasoningLevel(reasoningLevel));
-        return emitter;
+        return startSse(appId, userMsg, emitter ->
+                aiCodeGeneratorFacade.streamGenerate(CodeGenTypeEnum.VUE, message, appId, new StreamCallback(
+                        token -> send(emitter, "agent_progress", token),
+                        reasoning -> send(emitter, "reasoning", reasoning),
+                        vo -> {
+                            send(emitter, "done", vo);
+                            emitter.complete();
+                            saveAssistantMessage(appId, userMsg, vo);
+                        },
+                        error -> {
+                            send(emitter, "error", errorMessage(error));
+                            emitter.complete();
+                            saveErrorMessage(appId, userMsg, error);
+                        }), parseReasoningLevel(reasoningLevel)));
     }
 
     /**
@@ -196,18 +210,23 @@ public class AiChatController {
         // 防止超大上下文/意图刷爆 token，兜底截断
         String ctx = elementContext == null ? "" : StrUtil.maxLength(elementContext, 2000);
         String inst = StrUtil.maxLength(instruction, 500);
-        SseEmitter emitter = new SseEmitter(600_000L);
-        aiCodeGeneratorFacade.streamModifyProject(type, appId, ctx, inst, new StreamCallback(
-                token -> send(emitter, "agent_progress", token),
-                reasoning -> send(emitter, "reasoning", reasoning),
-                vo -> {
-                    send(emitter, "done", vo);
-                    emitter.complete();
-                },
-                error -> {
-                    send(emitter, "error", error.getMessage());
-                     emitter.complete();
-                 }), parseReasoningLevel(reasoningLevel));
+        SseEmitter emitter = newSseEmitter();
+        try {
+            aiCodeGeneratorFacade.streamModifyProject(type, appId, ctx, inst, new StreamCallback(
+                    token -> send(emitter, "agent_progress", token),
+                    reasoning -> send(emitter, "reasoning", reasoning),
+                    vo -> {
+                        send(emitter, "done", vo);
+                        emitter.complete();
+                    },
+                    error -> {
+                        send(emitter, "error", errorMessage(error));
+                        emitter.complete();
+                    }), parseReasoningLevel(reasoningLevel));
+        } catch (RuntimeException e) {
+            send(emitter, "error", errorMessage(e));
+            emitter.complete();
+        }
         return emitter;
     }
 
@@ -326,11 +345,79 @@ public class AiChatController {
         return reasoningProfiles.parseLevel(value);
     }
 
+    /**
+     * 同步启动失败（例如应用已被其他任务占用）也必须通过 SSE error 事件返回。
+     * 否则端点声明了 text/event-stream，全局 JSON 异常处理器会再次触发 406。
+     */
+    private SseEmitter startSse(Long appId, ChatHistory userMsg, Consumer<SseEmitter> starter) {
+        SseEmitter emitter = newSseEmitter();
+        try {
+            starter.accept(emitter);
+        } catch (RuntimeException e) {
+            send(emitter, "error", errorMessage(e));
+            emitter.complete();
+            saveErrorMessage(appId, userMsg, e);
+        }
+        return emitter;
+    }
+
+    /**
+     * 长任务可能超过 10 分钟；同时定期发送 SSE 注释心跳，避免代理按空闲连接断开。
+     */
+    private SseEmitter newSseEmitter() {
+        SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MILLIS);
+        AtomicReference<ScheduledFuture<?>> heartbeatRef = new AtomicReference<>();
+        Runnable cancelHeartbeat = () -> {
+            ScheduledFuture<?> heartbeat = heartbeatRef.get();
+            if (heartbeat != null) {
+                heartbeat.cancel(false);
+            }
+        };
+        emitter.onCompletion(cancelHeartbeat);
+        emitter.onError(error -> cancelHeartbeat.run());
+        emitter.onTimeout(() -> {
+            cancelHeartbeat.run();
+            try {
+                synchronized (emitter) {
+                    emitter.send(SseEmitter.event().name("stream_lost")
+                            .data("生成连接已超时，后台任务仍在继续，请等待页面恢复结果"));
+                }
+            } catch (Exception ignored) {
+                // 连接已经不可写时直接结束
+            } finally {
+                emitter.complete();
+            }
+        });
+        heartbeatRef.set(sseHeartbeatExecutor.scheduleAtFixedRate(() -> {
+            try {
+                synchronized (emitter) {
+                    emitter.send(SseEmitter.event().comment("keepalive"));
+                }
+            } catch (Exception e) {
+                cancelHeartbeat.run();
+                emitter.completeWithError(e);
+            }
+        }, SSE_HEARTBEAT_SECONDS, SSE_HEARTBEAT_SECONDS, TimeUnit.SECONDS));
+        return emitter;
+    }
+
     private void send(SseEmitter emitter, String name, Object data) {
         try {
-            emitter.send(SseEmitter.event().name(name).data(data));
+            synchronized (emitter) {
+                emitter.send(SseEmitter.event().name(name).data(data));
+            }
         } catch (Exception e) {
             emitter.completeWithError(e);
         }
+    }
+
+    private static String errorMessage(Throwable error) {
+        return error == null || StrUtil.isBlank(error.getMessage())
+                ? "生成失败" : error.getMessage();
+    }
+
+    @PreDestroy
+    public void shutdownSseHeartbeat() {
+        sseHeartbeatExecutor.shutdownNow();
     }
 }

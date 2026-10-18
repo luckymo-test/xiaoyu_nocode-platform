@@ -13,6 +13,8 @@ export interface SseCallbacks {
   onOpen?: () => void
   /** 连接关闭（正常完成或出错后均会触发） */
   onClose?: () => void
+  /** 连接异常断开；后端任务可能仍在继续，调用方应轮询恢复结果 */
+  onConnectionLost?: () => void
   /** Vue 工程逐文件生成进度（data 为 "path:size"） */
   onAgentProgress?: (data: string) => void
   /** 部署/构建进度（data 为文本标记，如 START_BUILD / BUILD_FAILED|...） */
@@ -54,6 +56,16 @@ export function createSseConnection(
     }
   }
 
+  // 生成接口是 GET 且有副作用，浏览器自动重连会重复触发一次生成。
+  // 因此网络异常时主动关闭连接，由调用方通过应用状态恢复最终结果。
+  const connectionLost = () => {
+    if (!closed) {
+      closed = true
+      es.close()
+      callbacks.onConnectionLost?.()
+    }
+  }
+
   es.onopen = () => {
     callbacks.onOpen?.()
   }
@@ -74,6 +86,10 @@ export function createSseConnection(
     callbacks.onDeployProgress?.(event.data)
   })
 
+  es.addEventListener('stream_lost', () => {
+    connectionLost()
+  })
+
   es.addEventListener('done', (event) => {
     try {
       const result = JSON.parse(event.data) as API.AiCodeGenResultVO
@@ -91,9 +107,15 @@ export function createSseConnection(
     if (data) {
       callbacks.onError?.(data)
       close()
+    } else {
+      connectionLost()
     }
-    // 连接异常（如 401 / 断线）时浏览器会自动重连，这里交给调用方决定是否 close
   })
 
-  return { close, readyState: es.readyState }
+  return {
+    close,
+    get readyState() {
+      return es.readyState
+    },
+  }
 }

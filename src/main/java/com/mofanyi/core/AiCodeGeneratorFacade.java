@@ -19,10 +19,12 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 
+import jakarta.annotation.PreDestroy;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.Map;
 import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * AI 代码生成门面，对外屏蔽 AI 生成与文件落盘的实现细节。
@@ -54,6 +56,7 @@ public class AiCodeGeneratorFacade {
      * 渲染修复状态：appId → ok / fixing / fixed / still_has_problems / skipped / error
      */
     private final Map<Long, String> renderFixStatus = new ConcurrentHashMap<>();
+    private final AtomicBoolean shuttingDown = new AtomicBoolean(false);
 
     /**
      * 是否开启交付前渲染验证（plan-agent-pipeline P0-4）
@@ -85,6 +88,18 @@ public class AiCodeGeneratorFacade {
         this.renderVerifier = renderVerifier;
         this.renderFixExecutor = renderFixExecutor;
         this.vueThreadPoolExecutor = vueThreadPoolExecutor;
+    }
+
+    /**
+     * DevTools 重启或应用关闭时，先取消生成并中断线程池任务，避免工作线程在数据源关闭后继续写状态。
+     */
+    @PreDestroy
+    public void shutdownGenerationTasks() {
+        shuttingDown.set(true);
+        taskRegistry.cancelAll();
+        vueThreadPoolExecutor.shutdownNow();
+        renderFixExecutor.shutdownNow();
+        log.info("[agent] 正在关闭生成线程池");
     }
 
     /**
@@ -170,13 +185,26 @@ public class AiCodeGeneratorFacade {
                                 callback.onReasoning(reasoning);
                             }
                         }, reasoningLevel);
+                if (shuttingDown.get()) {
+                    log.info("[agent] 应用正在关闭，跳过生成完成状态写入，appId={}", appId);
+                    return;
+                }
                 appService.updateGenerateStatus(appId, AppGenerateStatusEnum.DONE.getValue());
                 afterGenerate(type, appId);
                 AiCodeGenResultVO vo = readResult(type, appId);
                 applyUsage(vo, result);
                 callback.onDone(vo);
             } catch (RuntimeException e) {
-                appService.updateGenerateStatus(appId, failureStatus(e));
+                if (shuttingDown.get()) {
+                    log.info("[agent] 应用关闭导致生成中止，跳过失败状态写入，appId={}", appId);
+                    return;
+                }
+                try {
+                    appService.updateGenerateStatus(appId, failureStatus(e));
+                } catch (RuntimeException statusError) {
+                    e.addSuppressed(statusError);
+                    log.warn("[agent] 写入失败状态时再次异常，appId={}", appId, statusError);
+                }
                 log.error("[agent] 生成失败，type={}, appId={}", type, appId, e);
                 callback.onError(e);
             } finally {

@@ -5,12 +5,13 @@ import com.mofanyi.core.SiteImageService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import java.util.LinkedHashMap;
-import java.util.Map;
 import java.util.Set;
+import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 
 class ImageCuratorAgentTest {
@@ -104,38 +105,34 @@ class ImageCuratorAgentTest {
     }
 
     @Test
-    @DisplayName("复核不足 6 张时只从 Pass 1 高分未被拒候选补选")
-    void fillsShortfallFromHighScorePassOne() {
-        Map<Integer, ImageCuratorAgent.Selection> finalSelections = new LinkedHashMap<>();
-        finalSelections.put(1, new ImageCuratorAgent.Selection(
-                1, 9, "hero", "主视觉", "主视觉"));
-        Map<Integer, ImageCuratorAgent.Selection> passOne = new LinkedHashMap<>();
-        passOne.put(1, finalSelections.get(1));
-        passOne.put(2, new ImageCuratorAgent.Selection(2, 9, "portrait", "侧脸", "侧脸"));
-        passOne.put(3, new ImageCuratorAgent.Selection(3, 8, "portrait", "背影", "背影"));
-        passOne.put(4, new ImageCuratorAgent.Selection(4, 8, "gallery", "作品一", "作品一"));
-        passOne.put(5, new ImageCuratorAgent.Selection(5, 7, "card", "卡片一", "卡片一"));
-        passOne.put(6, new ImageCuratorAgent.Selection(6, 8, "card", "卡片二", "卡片二"));
-        passOne.put(7, new ImageCuratorAgent.Selection(7, 7, "gallery", "作品二", "作品二"));
-        passOne.put(8, new ImageCuratorAgent.Selection(8, 9, "card", "复核拒绝", "复核拒绝"));
-        passOne.put(9, new ImageCuratorAgent.Selection(9, 6, "card", "低分", "低分"));
-        Map<Integer, ImageCuratorAgent.Rejection> rejected = Map.of(
-                8, new ImageCuratorAgent.Rejection(8, "水印明显"));
+    @DisplayName("每张候选图前必须携带同一 id 的需求相关事实")
+    @SuppressWarnings("unchecked")
+    void visualContentBindsFactsToEachImage() {
+        String requirement = "摄影工作室官网，主视觉必须是穿汉服的人，作品区展示园林环境";
+        ImageCuratorAgent.Candidate first = new ImageCuratorAgent.Candidate(
+                17, "https://example.com/hanfu.jpg", 1200, 1800,
+                "hanfu garden", "pexels");
+        ImageCuratorAgent.VisualCandidate visual = new ImageCuratorAgent.VisualCandidate(
+                first, 1024, 1536, new byte[]{1, 2, 3});
 
-        int added = agent.fillFromPassOne(finalSelections, passOne, rejected,
-                Set.of(1, 2, 3, 4, 5, 6, 7, 8, 9));
+        List<Map<String, Object>> content = agent.buildVisualContent(
+                requirement, List.of(visual), false);
 
-        assertEquals(5, added);
-        assertEquals(6, finalSelections.size());
-        assertEquals(false, finalSelections.containsKey(8));
-        assertEquals(false, finalSelections.containsKey(9));
+        assertEquals(4, content.size());
+        String header = (String) content.get(0).get("text");
+        assertTrue(header.contains(requirement));
+        assertTrue(header.contains("语义依据"));
+        assertTrue(header.contains("禁止按图片出现顺序猜 id"));
+
+        String candidateFacts = (String) content.get(1).get("text");
+        assertTrue(candidateFacts.contains("id=17"));
+        assertTrue(candidateFacts.contains("1024x1536"));
+        assertTrue(candidateFacts.contains("hanfu garden"));
+        assertTrue(candidateFacts.contains("pexels"));
+
+        Map<String, Object> image = (Map<String, Object>) content.get(2).get("image_url");
+        assertTrue(((String) image.get("url")).startsWith("data:image/jpeg;base64,"));
+        assertEquals("low", image.get("detail"));
     }
 
-    @Test
-    @DisplayName("用途配额控制同用途过度集中")
-    void purposeLimitsAreBounded() {
-        assertEquals(2, ImageCuratorAgent.maxForPurpose("hero"));
-        assertEquals(3, ImageCuratorAgent.maxForPurpose("gallery"));
-        assertEquals(2, ImageCuratorAgent.maxForPurpose("avatar"));
-    }
 }

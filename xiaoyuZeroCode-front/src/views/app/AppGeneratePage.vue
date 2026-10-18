@@ -39,6 +39,14 @@ import type { SseCallbacks, SseConnection } from '@/utils/sse'
 import { useUserStore } from '@/stores/user'
 import MarkdownView from '@/components/MarkdownView.vue'
 import { generateStatusText } from '@/utils/appStatus'
+import {
+  DEFAULT_REASONING_INDEX,
+  parseReasoningIndex,
+  REASONING_LEVELS,
+  REASONING_MARKS,
+  reasoningStorageKey as getReasoningStorageKey,
+  type ReasoningLevel,
+} from '@/config/reasoning'
 
 interface CodeFile {
   path: string
@@ -69,20 +77,20 @@ const messages = ref<ChatMessage[]>([])
 const input = ref('')
 const generating = ref(false)
 
-type ReasoningLevel = 'fast' | 'eco' | 'standard' | 'max'
-const reasoningLevels: Array<{ value: ReasoningLevel; label: string }> = [
-  { value: 'fast', label: '极速' },
-  { value: 'eco', label: '省算力' },
-  { value: 'standard', label: '标准' },
-  { value: 'max', label: '极限' },
-]
-const reasoningIndex = ref(2)
-const reasoningLevel = computed<ReasoningLevel>(() => reasoningLevels[reasoningIndex.value]?.value ?? 'standard')
-const reasoningLabel = computed(() => reasoningLevels[reasoningIndex.value]?.label ?? '标准')
-const reasoningStorageKey = computed(() => `xy-reasoning-level:${appId.value}`)
-const reasoningMarks = Object.fromEntries(reasoningLevels.map((item, index) => [index, item.label]))
+const routeReasoning = typeof route.query.reasoning === 'string'
+  ? route.query.reasoning
+  : undefined
+const reasoningIndex = ref(parseReasoningIndex(routeReasoning))
+const reasoningLevel = computed<ReasoningLevel>(
+  () => REASONING_LEVELS[reasoningIndex.value]?.value ?? 'standard',
+)
+const reasoningLabel = computed(
+  () => REASONING_LEVELS[reasoningIndex.value]?.label ?? '标准',
+)
+const reasoningStorageKey = computed(() => getReasoningStorageKey(appId.value))
+const reasoningMarks = REASONING_MARKS
 watch(reasoningIndex, (value) => {
-  localStorage.setItem(reasoningStorageKey.value, reasoningLevels[value]?.value ?? 'standard')
+  localStorage.setItem(reasoningStorageKey.value, REASONING_LEVELS[value]?.value ?? 'standard')
 })
 
 // 生成中的动态进度文案（如"正在生成 index.html…"、"正在搜索图片…"），用于让用户明确生成在推进
@@ -152,6 +160,8 @@ const historyLoading = ref(false)
 
 const msgListRef = ref<HTMLElement | null>(null)
 let connection: SseConnection | null = null
+let generationRecoveryTimer: number | null = null
+let generationRecoveryToken = 0
 
 const isMultiFile = computed(() => app.value?.codeGenType === 'multi_file')
 const isVue = computed(() => app.value?.codeGenType === 'vue')
@@ -766,6 +776,104 @@ const deployStatus = ref('')
 // 是否流式生成：创建时通过 query 传入（?stream=true/false），默认流式
 const useStream = computed(() => route.query.stream !== 'false')
 
+const stopGenerationRecovery = () => {
+  generationRecoveryToken++
+  if (generationRecoveryTimer !== null) {
+    window.clearTimeout(generationRecoveryTimer)
+    generationRecoveryTimer = null
+  }
+}
+
+/**
+ * SSE 断开不代表后台生成失败。通过应用状态轮询等待任务结束后重新拉取产物，
+ * 避免长任务因代理/浏览器连接上限断开后，页面永久停在“生成中”。
+ */
+const startGenerationRecovery = (pendingMessage: ChatMessage, reasoning = '') => {
+  stopGenerationRecovery()
+  const token = generationRecoveryToken
+  let attempts = 0
+  const maxAttempts = 600 // 3s × 600 = 30min
+
+  generating.value = true
+  previewLoading.value = true
+  genProgress.value = '连接中断，生成任务仍在后台继续，完成后会自动恢复…'
+  message.info('SSE 连接已断开，后台任务仍在继续，页面会自动等待结果')
+
+  const finishWithError = (text: string) => {
+    pendingMessage.status = 'error'
+    pendingMessage.content = text
+    pendingMessage.reasoning = reasoning || undefined
+    previewLoading.value = false
+    generating.value = false
+    generationDone.value = true
+    genProgress.value = ''
+  }
+
+  const schedule = () => {
+    if (token !== generationRecoveryToken || attempts >= maxAttempts) return
+    generationRecoveryTimer = window.setTimeout(checkStatus, 3000)
+  }
+
+  const checkStatus = async () => {
+    if (token !== generationRecoveryToken) return
+    if (attempts >= maxAttempts) {
+      stopGenerationRecovery()
+      finishWithError('等待后台生成结果超时，请刷新页面后重试')
+      return
+    }
+    attempts++
+    try {
+      const latestRes = await getAppVoById({ id: appId.value as unknown as number })
+      const latestApp = latestRes.data?.data
+      if (latestApp) app.value = latestApp
+      const status = latestApp?.generateStatus
+
+      if (status === 'generating' || status === 'not_generated') {
+        schedule()
+        return
+      }
+      if (status === 'done') {
+        const codeRes = await getAppCode({ id: appId.value as unknown as number })
+        const result = codeRes.data?.data
+        if (!result) {
+          schedule()
+          return
+        }
+        stopGenerationRecovery()
+        pendingMessage.status = 'done'
+        pendingMessage.content = result.description || '生成已完成，连接中断后已自动恢复结果'
+        pendingMessage.reasoning = reasoning || undefined
+        const finalFiles = filesFromResult(result)
+        pendingMessage.files = finalFiles
+        previewFiles.value = finalFiles
+        if (finalFiles.length > 0) {
+          selectedFilePath.value = finalFiles[0].path
+        }
+        previewLoading.value = false
+        generating.value = false
+        genProgress.value = ''
+        generationDone.value = true
+        if (isVue.value) {
+          vueProgress.value = `已生成 ${finalFiles.length} 个文件`
+          await loadVuePreview()
+        } else {
+          previewDoc.value = buildPreviewDoc(result)
+          previewMode.value = 'web'
+        }
+        message.success('后台生成已完成，结果已恢复')
+        return
+      }
+
+      stopGenerationRecovery()
+      finishWithError(status === 'stopped' ? '生成已停止' : '后台生成失败，请重试')
+    } catch {
+      schedule()
+    }
+  }
+
+  schedule()
+}
+
 const loadApp = async () => {
   loading.value = true
   try {
@@ -778,6 +886,18 @@ const loadApp = async () => {
       const hasGeneratedCode = app.value?.generateStatus === 'done' || records.length >= 2
       if (hasGeneratedCode) {
         await tryLoadWebsite()
+      }
+      if (isOwner && app.value?.generateStatus === 'generating') {
+        const pending = reactive<ChatMessage>({
+          role: 'ai',
+          content: '',
+          status: 'streaming',
+          files: [],
+          reasoning: '',
+        })
+        messages.value.push(pending)
+        startGenerationRecovery(pending)
+        return
       }
       // 自动发送初始消息：仅自己的应用且没有对话历史时，将 initPrompt 作为第一条消息触发对话
       if (isOwner && records.length === 0 && app.value?.initPrompt) {
@@ -998,6 +1118,9 @@ const sendMessage = async (text?: string, auto = false) => {
           generating.value = false
           generationDone.value = true
         },
+        onConnectionLost: () => {
+          startGenerationRecovery(aiMsg, reasoningBuf)
+        },
         onClose: () => {
           generating.value = false
           genProgress.value = ''
@@ -1104,6 +1227,9 @@ const sendMessage = async (text?: string, auto = false) => {
         generating.value = false
         genProgress.value = ''
         generationDone.value = true
+      },
+      onConnectionLost: () => {
+        startGenerationRecovery(aiMsg, reasoningBuf)
       },
       onClose: () => {
         generating.value = false
@@ -1388,6 +1514,7 @@ const deployStatusText = (text: string): string => {
 
 // 停止生成：断开 SSE + 通知后端中断
 const handleStop = async () => {
+  stopGenerationRecovery()
   connection?.close()
   connection = null
   generating.value = false
@@ -1425,15 +1552,17 @@ watch(
 )
 
 onMounted(() => {
-  const savedReasoning = localStorage.getItem(`xy-reasoning-level:${appId.value}`)
-  const savedIndex = reasoningLevels.findIndex((item) => item.value === savedReasoning)
-  if (savedIndex >= 0) {
-    reasoningIndex.value = savedIndex
+  if (!routeReasoning) {
+    const savedReasoning = localStorage.getItem(getReasoningStorageKey(appId.value))
+    reasoningIndex.value = savedReasoning
+      ? parseReasoningIndex(savedReasoning)
+      : DEFAULT_REASONING_INDEX
   }
   loadApp()
 })
 
 onUnmounted(() => {
+  stopGenerationRecovery()
   connection?.close()
   exitVisualEdit()
 })

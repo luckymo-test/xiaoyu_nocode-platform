@@ -144,7 +144,7 @@ codegen:
     qps: ${CODEGEN_WEB_RESEARCH_QPS:5}
   materials:
     curator:
-      enabled: ${CODEGEN_MATERIALS_CURATOR_ENABLED:false}
+      enabled: ${CODEGEN_MATERIALS_CURATOR_ENABLED:true}
 
 # 封面截图配置（默认值，实际按环境在 profile 文件中覆盖）
 screenshot:
