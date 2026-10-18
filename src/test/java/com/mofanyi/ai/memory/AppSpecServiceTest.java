@@ -73,6 +73,7 @@ class AppSpecServiceTest {
         assertTrue(section.contains("## 变更记录"), "应包含变更记录分节");
         assertTrue(section.contains("[生成]"), "应记录变更类型");
         assertTrue(section.contains("- index.html"), "应列出代码文件索引");
+        assertTrue(section.contains("【数据边界】"), "动态应用状态应带不可信数据边界");
         assertFalse(section.contains("spec.md"), ".agent 目录不应出现在索引里");
         assertFalse(section.contains(".agent"), ".agent 目录不应出现在索引里");
     }

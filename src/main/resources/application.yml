@@ -32,14 +32,13 @@ spring:
   ai:
     openai:
       api-key: ${DEEPSEEK_API_KEY}
-      # 用 beta 接口以支持 8K 输出上限（非 beta 只认 4K，复杂页面会截断）
-      base-url: https://api.deepseek.com/beta
+      # 正式接口已支持 1M 上下文 / 384K 输出；Beta 特性本项目未使用
+      base-url: https://api.deepseek.com
       chat:
         options:
-          model: deepseek-v4-flash
-          # 调大输出上限：deepseek-v4-flash 是推理模型，推理 token 也占输出预算，
-          # 8192/16384 下过度思考或写大文件时仍会截断；32768 已实测 beta 接口接受
-          max-tokens: 32768
+          model: deepseek-flash
+          # 推理 token 也占输出预算；上限不等于实际用量，费用仍按实际 token 计
+          max-tokens: 65536
 server:
   port: 8124
   # 请求头上限：前端用 EventSource（SSE 只能 GET）把提示词放在查询串里，中文经 URL 编码后是 9 字节/字，
@@ -91,6 +90,61 @@ codegen:
     # 同 app 连续生成时实测反而更贵（模型改用 readFile 把文件读回来），需用全新 app 做控制变量实验后再定。
     context-slim:
       enabled: ${CODEGEN_CONTEXT_SLIM:false}
+  # 四档推理滑杆：UI 只暴露 fast/eco/standard/max，reasoning_effort 只接受 low/high/max
+  reasoning:
+    default-level: standard
+    profiles:
+      fast:
+        thinking-enabled: false
+        effort:
+        max-steps: 8
+        max-loop-tokens: 200000
+        repair-rounds: 1
+        max-output-tokens: 32768
+        model: deepseek-flash
+      eco:
+        thinking-enabled: true
+        effort: low
+        max-steps: 12
+        max-loop-tokens: 400000
+        repair-rounds: 1
+        max-output-tokens: 32768
+        model: deepseek-flash
+      standard:
+        thinking-enabled: true
+        effort: high
+        max-steps: 20
+        max-loop-tokens: 800000
+        repair-rounds: 2
+        max-output-tokens: 65536
+        model: deepseek-flash
+      max:
+        thinking-enabled: true
+        effort: max
+        max-steps: 30
+        max-loop-tokens: 1200000
+        repair-rounds: 3
+        max-output-tokens: 65536
+        model: deepseek-flash
+  memory:
+    # 原始记忆窗口预算；超过压缩阈值的较早对话会被模型摘要，最近 4 轮保持原文
+    context-token-budget: 16000
+    compression:
+      enabled: ${CODEGEN_CONTEXT_COMPRESSION_ENABLED:true}
+      min-tokens: ${CODEGEN_CONTEXT_COMPRESSION_MIN_TOKENS:8000}
+      keep-recent-rounds: ${CODEGEN_CONTEXT_COMPRESSION_KEEP_ROUNDS:4}
+      max-output-tokens: ${CODEGEN_CONTEXT_COMPRESSION_MAX_OUTPUT_TOKENS:1500}
+      model: deepseek-flash
+  web-research:
+    # 默认关闭；开启后 searchWeb/fetchWeb 才会出现在 Agent 工具列表中
+    enabled: ${CODEGEN_WEB_RESEARCH_ENABLED:false}
+    max-results: ${CODEGEN_WEB_RESEARCH_MAX_RESULTS:5}
+    max-content-chars: ${CODEGEN_WEB_RESEARCH_MAX_CONTENT_CHARS:6000}
+    cache-ttl-seconds: ${CODEGEN_WEB_RESEARCH_CACHE_TTL_SECONDS:3600}
+    qps: ${CODEGEN_WEB_RESEARCH_QPS:5}
+  materials:
+    curator:
+      enabled: ${CODEGEN_MATERIALS_CURATOR_ENABLED:false}
 
 # 封面截图配置（默认值，实际按环境在 profile 文件中覆盖）
 screenshot:

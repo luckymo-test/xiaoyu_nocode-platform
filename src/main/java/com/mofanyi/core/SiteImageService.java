@@ -126,6 +126,21 @@ public class SiteImageService {
     }
 
     /**
+     * 为视觉筛选下载原始字节，仍执行出站白名单与单图大小闸门。
+     */
+    public byte[] downloadImageBytes(String imageUrl) {
+        toolRiskRegistry.checkOutboundUrl(imageUrl);
+        byte[] bytes = pexelsClient.downloadImage(imageUrl);
+        if (bytes == null || bytes.length == 0) {
+            throw new IllegalStateException("图片下载为空");
+        }
+        if (bytes.length > 32 * 1024 * 1024) {
+            throw new IllegalStateException("图片超过 32MiB 上限：" + bytes.length);
+        }
+        return bytes;
+    }
+
+    /**
      * 把字节内容上传 COS（供 Mermaid 渲染图等本地生成图使用），返回 COS URL
      */
     public String uploadBytes(Long appId, byte[] bytes, String suffix) throws Exception {

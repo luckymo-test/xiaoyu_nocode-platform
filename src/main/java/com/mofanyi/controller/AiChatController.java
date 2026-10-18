@@ -1,6 +1,8 @@
 package com.mofanyi.controller;
 
 import cn.hutool.core.util.StrUtil;
+import com.mofanyi.ai.reasoning.ReasoningLevel;
+import com.mofanyi.ai.reasoning.ReasoningProfileRegistry;
 import com.mofanyi.common.BaseResponse;
 import com.mofanyi.common.ResultUtils;
 import com.mofanyi.core.AiCodeGeneratorFacade;
@@ -36,24 +38,29 @@ public class AiChatController {
     private final UserService userService;
     private final AppAuthService appAuthService;
     private final ChatHistoryService chatHistoryService;
+    private final ReasoningProfileRegistry reasoningProfiles;
 
     public AiChatController(AiCodeGeneratorFacade aiCodeGeneratorFacade,
                             UserService userService,
                             AppAuthService appAuthService,
-                            ChatHistoryService chatHistoryService) {
+                            ChatHistoryService chatHistoryService,
+                            ReasoningProfileRegistry reasoningProfiles) {
         this.aiCodeGeneratorFacade = aiCodeGeneratorFacade;
         this.userService = userService;
         this.appAuthService = appAuthService;
         this.chatHistoryService = chatHistoryService;
+        this.reasoningProfiles = reasoningProfiles;
     }
 
     @GetMapping("/chat")
     public AiCodeGenResultVO chat(@RequestParam Long appId,
                                   @RequestParam(defaultValue = "你好，请简单介绍一下你自己") String message,
+                                  @RequestParam(defaultValue = "standard") String reasoningLevel,
                                   HttpServletRequest request) {
         ChatHistory userMsg = saveUserMessage(appId, message, request);
         try {
-            AiCodeGenResultVO vo = aiCodeGeneratorFacade.generate(CodeGenTypeEnum.HTML, message, appId);
+            AiCodeGenResultVO vo = aiCodeGeneratorFacade.generate(
+                    CodeGenTypeEnum.HTML, message, appId, parseReasoningLevel(reasoningLevel));
             saveAssistantMessage(appId, userMsg, vo);
             return vo;
         } catch (RuntimeException e) {
@@ -65,10 +72,12 @@ public class AiChatController {
     @GetMapping("/chat/multi")
     public AiCodeGenResultVO chatMulti(@RequestParam Long appId,
                                        @RequestParam(defaultValue = "你好，请简单介绍一下你自己") String message,
+                                       @RequestParam(defaultValue = "standard") String reasoningLevel,
                                        HttpServletRequest request) {
         ChatHistory userMsg = saveUserMessage(appId, message, request);
         try {
-            AiCodeGenResultVO vo = aiCodeGeneratorFacade.generate(CodeGenTypeEnum.MULTI_FILE, message, appId);
+            AiCodeGenResultVO vo = aiCodeGeneratorFacade.generate(
+                    CodeGenTypeEnum.MULTI_FILE, message, appId, parseReasoningLevel(reasoningLevel));
             saveAssistantMessage(appId, userMsg, vo);
             return vo;
         } catch (RuntimeException e) {
@@ -80,6 +89,7 @@ public class AiChatController {
     @GetMapping(value = "/chat/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter chatStream(@RequestParam Long appId,
                                  @RequestParam(defaultValue = "你好，请简单介绍一下你自己") String message,
+                                 @RequestParam(defaultValue = "standard") String reasoningLevel,
                                  HttpServletRequest request) {
         ChatHistory userMsg = saveUserMessage(appId, message, request);
         SseEmitter emitter = new SseEmitter(600_000L);
@@ -94,14 +104,15 @@ public class AiChatController {
                 error -> {
                     send(emitter, "error", error.getMessage());
                     emitter.complete();
-                    saveErrorMessage(appId, userMsg, error);
-                }));
+                     saveErrorMessage(appId, userMsg, error);
+                 }), parseReasoningLevel(reasoningLevel));
         return emitter;
     }
 
     @GetMapping(value = "/chat/multi/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter chatMultiStream(@RequestParam Long appId,
                                       @RequestParam(defaultValue = "你好，请简单介绍一下你自己") String message,
+                                      @RequestParam(defaultValue = "standard") String reasoningLevel,
                                       HttpServletRequest request) {
         ChatHistory userMsg = saveUserMessage(appId, message, request);
         SseEmitter emitter = new SseEmitter(600_000L);
@@ -116,18 +127,20 @@ public class AiChatController {
                 error -> {
                     send(emitter, "error", error.getMessage());
                     emitter.complete();
-                    saveErrorMessage(appId, userMsg, error);
-                }));
+                     saveErrorMessage(appId, userMsg, error);
+                 }), parseReasoningLevel(reasoningLevel));
         return emitter;
     }
 
     @GetMapping("/chat/vue")
     public AiCodeGenResultVO chatVue(@RequestParam Long appId,
                                      @RequestParam(defaultValue = "你好，请简单介绍一下你自己") String message,
+                                     @RequestParam(defaultValue = "standard") String reasoningLevel,
                                      HttpServletRequest request) {
         ChatHistory userMsg = saveUserMessage(appId, message, request);
         try {
-            AiCodeGenResultVO vo = aiCodeGeneratorFacade.generate(CodeGenTypeEnum.VUE, message, appId);
+            AiCodeGenResultVO vo = aiCodeGeneratorFacade.generate(
+                    CodeGenTypeEnum.VUE, message, appId, parseReasoningLevel(reasoningLevel));
             saveAssistantMessage(appId, userMsg, vo);
             return vo;
         } catch (RuntimeException e) {
@@ -143,6 +156,7 @@ public class AiChatController {
     @GetMapping(value = "/chat/vue/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter chatVueStream(@RequestParam Long appId,
                                     @RequestParam(defaultValue = "你好，请简单介绍一下你自己") String message,
+                                    @RequestParam(defaultValue = "standard") String reasoningLevel,
                                     HttpServletRequest request) {
         ChatHistory userMsg = saveUserMessage(appId, message, request);
         SseEmitter emitter = new SseEmitter(600_000L);
@@ -157,8 +171,8 @@ public class AiChatController {
                 error -> {
                     send(emitter, "error", error.getMessage());
                     emitter.complete();
-                    saveErrorMessage(appId, userMsg, error);
-                }));
+                     saveErrorMessage(appId, userMsg, error);
+                 }), parseReasoningLevel(reasoningLevel));
         return emitter;
     }
 
@@ -170,6 +184,7 @@ public class AiChatController {
     public SseEmitter modifyStream(@RequestParam Long appId,
                                    @RequestParam(defaultValue = "") String elementContext,
                                    @RequestParam String instruction,
+                                   @RequestParam(defaultValue = "standard") String reasoningLevel,
                                    HttpServletRequest request) {
         ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
         ThrowUtils.throwIf(StrUtil.isBlank(instruction), ErrorCode.PARAMS_ERROR, "修改意图不能为空");
@@ -191,8 +206,8 @@ public class AiChatController {
                 },
                 error -> {
                     send(emitter, "error", error.getMessage());
-                    emitter.complete();
-                }));
+                     emitter.complete();
+                 }), parseReasoningLevel(reasoningLevel));
         return emitter;
     }
 
@@ -305,6 +320,10 @@ public class AiChatController {
             sb.append("\n\n#### js/app.js\n```javascript\n").append(vo.getJsCode()).append("\n```");
         }
         return sb.toString();
+    }
+
+    private ReasoningLevel parseReasoningLevel(String value) {
+        return reasoningProfiles.parseLevel(value);
     }
 
     private void send(SseEmitter emitter, String name, Object data) {

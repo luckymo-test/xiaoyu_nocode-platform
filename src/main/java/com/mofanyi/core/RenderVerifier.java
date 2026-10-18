@@ -30,7 +30,7 @@ import java.util.List;
  * <p>生成完成后用无头浏览器按 <b>3 档视口</b>（桌面 1440 / 平板 768 / 手机 375）真实渲染
  * 生成的 {@code index.html}，采集结构化问题：
  * <ul>
- *   <li>图裂：{@code img.complete && naturalWidth === 0}、空 src、占位图</li>
+ *   <li>图裂：可见且声明了 src 的图片满足 {@code img.complete && naturalWidth === 0}</li>
  *   <li>横向溢出：{@code scrollingElement.scrollWidth > clientWidth}</li>
  *   <li>空白页：body 可见文本过少</li>
  *   <li>控制台严重错误（驱动支持时采集）</li>
@@ -77,7 +77,10 @@ public class RenderVerifier {
                     + "  for (var i = 0; i < imgs.length; i++) {"
                     + "    var im = imgs[i];"
                     + "    var src = im.getAttribute('src') || '';"
-                    + "    if (!src.trim() || (im.complete && im.naturalWidth === 0)) {"
+                    + "    if (!src.trim()) { continue; }"
+                    + "    var cs = window.getComputedStyle(im);"
+                    + "    if (cs.display === 'none' || cs.visibility === 'hidden') { continue; }"
+                    + "    if (im.complete && im.naturalWidth === 0) {"
                     + "      broken.push((im.currentSrc || src || '(空 src)').slice(0, 200));"
                     + "    }"
                     + "  }"

@@ -2,7 +2,8 @@ package com.mofanyi.core;
 
 import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.util.StrUtil;
-import com.mofanyi.ai.VueProjectAgent;
+import com.mofanyi.ai.SiteRepairAgent;
+import com.mofanyi.ai.reasoning.ReasoningProfileRegistry;
 import com.mofanyi.exception.BusinessException;
 import com.mofanyi.exception.ErrorCode;
 import com.mofanyi.exception.ThrowUtils;
@@ -45,7 +46,8 @@ public class VueBuildService {
     private static final boolean IS_WINDOWS = System.getProperty("os.name", "").toLowerCase().contains("win");
 
     private final CodeFileWriteService codeFileWriteService;
-    private final VueProjectAgent vueProjectAgent;
+    private final SiteRepairAgent siteRepairAgent;
+    private final ReasoningProfileRegistry reasoningProfiles;
 
     /**
      * node 可执行文件绝对路径；为空时用 PATH 里的 node。
@@ -61,9 +63,12 @@ public class VueBuildService {
     @Value("${codegen.node.npmCli:}")
     private String npmCliPath;
 
-    public VueBuildService(CodeFileWriteService codeFileWriteService, VueProjectAgent vueProjectAgent) {
+    public VueBuildService(CodeFileWriteService codeFileWriteService,
+                           SiteRepairAgent siteRepairAgent,
+                           ReasoningProfileRegistry reasoningProfiles) {
         this.codeFileWriteService = codeFileWriteService;
-        this.vueProjectAgent = vueProjectAgent;
+        this.siteRepairAgent = siteRepairAgent;
+        this.reasoningProfiles = reasoningProfiles;
     }
 
     /**
@@ -99,9 +104,10 @@ public class VueBuildService {
             notify(progress, "BUILD_FAILED|" + truncate(error, 300));
             // 修复 agent：根据错误日志覆盖出问题文件
             try {
-                vueProjectAgent.fixBuildError(appId, error,
+                siteRepairAgent.fixBuildError(appId, error,
                         AiCallContext.of(appId, null, "fix"),
-                        (path, size, content) -> notify(progress, "FIXED|" + path));
+                        (path, size, content) -> notify(progress, "FIXED|" + path),
+                        reasoningProfiles.defaultReasoningLevel());
             } catch (RuntimeException e) {
                 log.warn("Vue 自动修复失败, appId={}, attempt={}", appId, attempt + 1, e);
                 notify(progress, "FIX_FAILED|" + truncate(e.getMessage(), 200));

@@ -13,6 +13,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.messages.AssistantMessage;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -151,6 +152,26 @@ class AgentMemoryServiceTest {
         assertTrue(context.get(0).getText().contains("最初的需求：做一个登录页"),
                 "最初的需求必须被补回并置于最前");
         assertTrue(context.get(0).getText().contains("已省略"), "应标注中段已省略");
+    }
+
+    @Test
+    @DisplayName("应用规格已包含初始需求和生成摘要时，从旧记忆中去除重复状态")
+    void dropsStateDuplicatedBySpec() {
+        List<Message> messages = List.of(
+                new UserMessage("做一个登录页"),
+                new AssistantMessage("已完成html生成。产出文件：index.html。说明：登录页"),
+                new UserMessage("把按钮改成蓝色"));
+        String spec = """
+                # 应用规格
+                初始需求：做一个登录页
+                ## 变更记录
+                - 2026-10-18 [生成] 已完成html生成。产出文件：index.html。说明：登录页
+                """;
+
+        List<Message> filtered = AgentMemoryService.dropStateDuplicatedBySpec(messages, spec);
+
+        assertEquals(1, filtered.size());
+        assertEquals("把按钮改成蓝色", filtered.get(0).getText());
     }
 
     @Test

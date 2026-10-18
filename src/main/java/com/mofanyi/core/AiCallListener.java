@@ -39,7 +39,12 @@ public class AiCallListener {
      */
     public void onSuccess(AiCallContext ctx, String finishReason,
                           long inputTokens, long outputTokens, long durationMs) {
-        metrics.record(ctx.callType(), "success", inputTokens, outputTokens, durationMs);
+        onSuccess(ctx, finishReason, inputTokens, outputTokens, durationMs, "standard");
+    }
+
+    public void onSuccess(AiCallContext ctx, String finishReason,
+                          long inputTokens, long outputTokens, long durationMs, String reasoningLevel) {
+        metrics.record(ctx.callType(), "success", inputTokens, outputTokens, durationMs, reasoningLevel);
         AiCallLog row = AiCallLog.builder()
                 .appId(ctx.appId()).userId(ctx.userId()).callType(ctx.callType())
                 .model(metrics.model()).maxOutputTokens(metrics.maxOutputTokens())
@@ -55,9 +60,13 @@ public class AiCallListener {
      * 调用失败
      */
     public void onFailure(AiCallContext ctx, Throwable error, long durationMs) {
+        onFailure(ctx, error, durationMs, "standard");
+    }
+
+    public void onFailure(AiCallContext ctx, Throwable error, long durationMs, String reasoningLevel) {
         String errorType = AiMetricsRecorder.classify(error);
-        metrics.record(ctx.callType(), "error", 0, 0, durationMs);
-        metrics.recordError(ctx.callType(), errorType);
+        metrics.record(ctx.callType(), "error", 0, 0, durationMs, reasoningLevel);
+        metrics.recordError(ctx.callType(), errorType, reasoningLevel);
         AiCallLog row = AiCallLog.builder()
                 .appId(ctx.appId()).userId(ctx.userId()).callType(ctx.callType())
                 .model(metrics.model()).maxOutputTokens(metrics.maxOutputTokens())

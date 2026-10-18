@@ -228,31 +228,37 @@ declare namespace API {
   type chatMultiParams = {
     appId: number;
     message?: string;
+    reasoningLevel?: string;
   };
 
   type chatMultiStreamParams = {
     appId: number;
     message?: string;
+    reasoningLevel?: string;
   };
 
   type chatParams = {
     appId: number;
     message?: string;
+    reasoningLevel?: string;
   };
 
   type chatStreamParams = {
     appId: number;
     message?: string;
+    reasoningLevel?: string;
   };
 
   type chatVueParams = {
     appId: number;
     message?: string;
+    reasoningLevel?: string;
   };
 
   type chatVueStreamParams = {
     appId: number;
     message?: string;
+    reasoningLevel?: string;
   };
 
   type DeleteBatchRequest = {

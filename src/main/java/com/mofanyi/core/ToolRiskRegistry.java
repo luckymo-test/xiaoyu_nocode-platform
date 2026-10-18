@@ -21,6 +21,8 @@ import java.util.List;
  *   <tr><td>finish</td><td>低</td><td>无副作用</td></tr>
  *   <tr><td>writeFile</td><td>中</td><td>相对路径 + 单文件大小上限</td></tr>
  *   <tr><td>searchImage</td><td>高</td><td>出站域名白名单 + 超时 + 大小上限</td></tr>
+ *   <tr><td>searchWeb</td><td>高</td><td>当前事实检索 + 限速/重试/缓存 + 不可信数据边界</td></tr>
+ *   <tr><td>fetchWeb</td><td>高</td><td>仅公开 HTTP/HTTPS + URL 校验 + 正文截断</td></tr>
  *   <tr><td>diagram</td><td>高</td><td>长度上限 + strict 渲染 + 超时</td></tr>
  * </table>
  *
@@ -65,6 +67,8 @@ public class ToolRiskRegistry {
             new ToolRisk("finish", Risk.LOW, "无副作用"),
             new ToolRisk("writeFile", Risk.MEDIUM, "相对路径 + 单文件 ≤ " + MAX_WRITE_CHARS + " 字符"),
             new ToolRisk("searchImage", Risk.HIGH, "出站域名白名单 + 超时 + 大小上限"),
+            new ToolRisk("searchWeb", Risk.HIGH, "账号级 QPS + 重试 + 缓存 + 不可信外部数据"),
+            new ToolRisk("fetchWeb", Risk.HIGH, "公开 HTTP/HTTPS URL + 正文截断 + 不可信外部数据"),
             new ToolRisk("diagram", Risk.HIGH, "mermaid 长度上限 + strict 渲染 + 超时"));
 
     /**

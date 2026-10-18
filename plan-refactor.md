@@ -365,6 +365,16 @@ surefire 已在 `spring-boot-starter-test` 中，无需新增依赖。
 
 **`AppServiceImpl`（576 行）** 按职责拆为：`AppDeployService`（含 `doDeploy`）、`AppFeaturedService`（精选审核）、`AppQueryService`（分页/QueryWrapper）、`AppConverter`（VO 转换）、`AppRecycleService`（回收站/物理删除）。
 
+#### 2026-10-18 解耦落地状态
+
+- `VueProjectAgent` 已从 895 行降到 269 行，只保留生成入口、素材/记忆/结果组装与旧签名兼容委托。
+- 工具循环、流式聚合、预算、取消、L1 压缩、推理档位与调用打点已统一迁入 `ai/AgentToolLoop.java`。
+- 构建修复与渲染修复已迁入 `ai/SiteRepairAgent.java`；异步 appId 锁仍留在 `AiCodeGeneratorFacade`。
+- 可视化修改与撤销已迁入 `ai/SiteModifyAgent.java`；Facade 已切换到三个专用 Agent。
+- 推理参数由 `ai/reasoning/ReasoningProfileRegistry.java` 统一从 `application.yml` 读取，UI 暴露 `fast / eco / standard / max` 四档。
+- `ImageCuratorAgent` 与两轮视觉提示词已落地，选片开关 `codegen.materials.curator.enabled` 默认关闭；失败回退原程序清单。
+- 当前验证：后端 `mvn -o test` 通过（63 个用例，11 个探针按设计跳过），前端 `npm run build` 通过；双图源 96 个候选、Curator 选中 6 张、真实生成、四档推理、COS 上传、页面 URL 子集、3 档渲染、上下文语义压缩、Prompt v2 与 Search/Fetch 工具均通过，详见 `tmp/agent-decoupling-verification.md`。
+
 #### S5 验收标准（自管循环）—— 本步是"行为变更"，不能沿用前四步的判据
 
 **S5-3 逐条验收（开关 true 路径）**

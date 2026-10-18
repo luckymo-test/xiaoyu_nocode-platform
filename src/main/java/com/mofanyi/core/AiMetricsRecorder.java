@@ -52,41 +52,48 @@ public class AiMetricsRecorder {
     /**
      * 记录一次 AI 调用（成功/失败都调）
      */
-    public void record(String callType, String status, long inputTokens, long outputTokens, long durationMs) {
+    public void record(String callType, String status, long inputTokens, long outputTokens,
+                       long durationMs, String reasoningLevel) {
+        String level = reasoningLevel == null || reasoningLevel.isBlank() ? "standard" : reasoningLevel;
         Counter.builder("ai_call_total")
                 .tag("model", model).tag("call_type", callType).tag("status", status)
+                .tag("reasoning_level", level)
                 .register(registry).increment();
 
         Timer.builder("ai_call_duration_seconds")
                 .tag("model", model).tag("call_type", callType)
+                .tag("reasoning_level", level)
                 .publishPercentileHistogram()
                 .serviceLevelObjectives(DURATION_BUCKETS)
                 .register(registry)
                 .record(Duration.ofMillis(Math.max(durationMs, 0)));
 
         if (inputTokens > 0) {
-            tokens(callType, "input", inputTokens);
+            tokens(callType, "input", inputTokens, level);
         }
         if (outputTokens > 0) {
-            tokens(callType, "output", outputTokens);
+            tokens(callType, "output", outputTokens, level);
         }
         if (inputTokens > 0 || outputTokens > 0) {
-            tokens(callType, "total", inputTokens + outputTokens);
+            tokens(callType, "total", inputTokens + outputTokens, level);
         }
     }
 
     /**
      * 记录一次失败（按归一化的 error_type 分类）
      */
-    public void recordError(String callType, String errorType) {
+    public void recordError(String callType, String errorType, String reasoningLevel) {
+        String level = reasoningLevel == null || reasoningLevel.isBlank() ? "standard" : reasoningLevel;
         Counter.builder("ai_call_errors_total")
                 .tag("model", model).tag("call_type", callType).tag("error_type", errorType)
+                .tag("reasoning_level", level)
                 .register(registry).increment();
     }
 
-    private void tokens(String callType, String kind, long value) {
+    private void tokens(String callType, String kind, long value, String reasoningLevel) {
         Counter.builder("ai_tokens_total")
                 .tag("model", model).tag("call_type", callType).tag("kind", kind)
+                .tag("reasoning_level", reasoningLevel)
                 .register(registry).increment(value);
     }
 

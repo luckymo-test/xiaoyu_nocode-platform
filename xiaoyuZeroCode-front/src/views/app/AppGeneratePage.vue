@@ -69,6 +69,22 @@ const messages = ref<ChatMessage[]>([])
 const input = ref('')
 const generating = ref(false)
 
+type ReasoningLevel = 'fast' | 'eco' | 'standard' | 'max'
+const reasoningLevels: Array<{ value: ReasoningLevel; label: string }> = [
+  { value: 'fast', label: '极速' },
+  { value: 'eco', label: '省算力' },
+  { value: 'standard', label: '标准' },
+  { value: 'max', label: '极限' },
+]
+const reasoningIndex = ref(2)
+const reasoningLevel = computed<ReasoningLevel>(() => reasoningLevels[reasoningIndex.value]?.value ?? 'standard')
+const reasoningLabel = computed(() => reasoningLevels[reasoningIndex.value]?.label ?? '标准')
+const reasoningStorageKey = computed(() => `xy-reasoning-level:${appId.value}`)
+const reasoningMarks = Object.fromEntries(reasoningLevels.map((item, index) => [index, item.label]))
+watch(reasoningIndex, (value) => {
+  localStorage.setItem(reasoningStorageKey.value, reasoningLevels[value]?.value ?? 'standard')
+})
+
 // 生成中的动态进度文案（如"正在生成 index.html…"、"正在搜索图片…"），用于让用户明确生成在推进
 const genProgress = ref('')
 
@@ -425,7 +441,7 @@ const applyModify = async () => {
       modifying.value = false
     },
   }
-  connection = streamModifyProject(appId.value, buildEditContext(), inst, callbacks)
+  connection = streamModifyProject(appId.value, buildEditContext(), inst, callbacks, reasoningLevel.value)
 }
 
 const cancelEditTarget = () => {
@@ -987,7 +1003,7 @@ const sendMessage = async (text?: string, auto = false) => {
           genProgress.value = ''
         },
       }
-      connection = streamGenerateVueProject(appId.value, content, callbacks)
+      connection = streamGenerateVueProject(appId.value, content, callbacks, reasoningLevel.value)
       return
     }
     // html/multi_file 模式：agent 逐文件生成，SSE 推送 agent_progress（每文件完整代码）。
@@ -1095,16 +1111,24 @@ const sendMessage = async (text?: string, auto = false) => {
       },
     }
     if (isMultiFile.value) {
-      connection = streamGenerateMultiFileProject(appId.value, content, callbacks)
+      connection = streamGenerateMultiFileProject(appId.value, content, callbacks, reasoningLevel.value)
     } else {
-      connection = streamGenerateHtmlProject(appId.value, content, callbacks)
+      connection = streamGenerateHtmlProject(appId.value, content, callbacks, reasoningLevel.value)
     }
   } else {
     // 非流式：一次性返回完整结果（后端直接返回 AiCodeGenResultVO，无 BaseResponse 包装）
     try {
       const res = isMultiFile.value
-        ? await chatMulti({ appId: appId.value as unknown as number, message: content })
-        : await chat({ appId: appId.value as unknown as number, message: content })
+        ? await chatMulti({
+            appId: appId.value as unknown as number,
+            message: content,
+            reasoningLevel: reasoningLevel.value,
+          })
+        : await chat({
+            appId: appId.value as unknown as number,
+            message: content,
+            reasoningLevel: reasoningLevel.value,
+          })
       const result = res.data
       if (result) {
         aiMsg.content = result.description ?? ''
@@ -1401,6 +1425,11 @@ watch(
 )
 
 onMounted(() => {
+  const savedReasoning = localStorage.getItem(`xy-reasoning-level:${appId.value}`)
+  const savedIndex = reasoningLevels.findIndex((item) => item.value === savedReasoning)
+  if (savedIndex >= 0) {
+    reasoningIndex.value = savedIndex
+  }
   loadApp()
 })
 
@@ -1561,6 +1590,19 @@ onUnmounted(() => {
         <div v-if="generating && genProgress" class="gen-progress-bar">
           <a-spin size="small" />
           <span class="gen-progress-text">{{ genProgress }}</span>
+        </div>
+        <div class="reasoning-bar" title="档位越高，思考更充分，但耗时和 token 消耗也会增加">
+          <span class="reasoning-label">推理强度</span>
+          <a-slider
+            v-model:value="reasoningIndex"
+            class="reasoning-slider"
+            :min="0"
+            :max="3"
+            :step="1"
+            :marks="reasoningMarks"
+            :disabled="generating"
+          />
+          <a-tag color="blue">{{ reasoningLabel }}</a-tag>
         </div>
         <div class="input-bar">
           <a-textarea
@@ -2256,6 +2298,33 @@ onUnmounted(() => {
   50% {
     opacity: 0;
   }
+}
+
+.reasoning-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4) 0;
+  border-top: 1px solid var(--border);
+  background: var(--bg-surface);
+  flex-shrink: 0;
+}
+
+.reasoning-label {
+  color: var(--text-2);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.reasoning-slider {
+  flex: 1;
+  min-width: 160px;
+  margin: 0;
+}
+
+.reasoning-slider :deep(.ant-slider-mark-text) {
+  font-size: 11px;
+  white-space: nowrap;
 }
 
 .input-bar {

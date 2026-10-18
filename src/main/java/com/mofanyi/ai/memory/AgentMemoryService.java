@@ -3,8 +3,11 @@ package com.mofanyi.ai.memory;
 import cn.hutool.core.util.StrUtil;
 import com.mofanyi.entity.ChatHistory;
 import com.mofanyi.model.enums.ChatMessageTypeEnum;
+import com.mofanyi.model.enums.CodeGenTypeEnum;
 import com.mofanyi.service.ChatHistoryService;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
@@ -38,7 +41,7 @@ public class AgentMemoryService {
      * 注入模型的上下文 token 预算（估算值，非精确计数）。
      * 超过则从最旧的消息开始丢弃，宁可丢旧、不可爆上下文。
      */
-    private static final int CONTEXT_TOKEN_BUDGET = 6000;
+    private static final int DEFAULT_CONTEXT_TOKEN_BUDGET = 6000;
 
     /**
      * 单条记忆最大字符数：个别超长消息（如异常堆栈）先截断，避免单条挤爆窗口。
@@ -57,10 +60,25 @@ public class AgentMemoryService {
 
     private final ChatMemory chatMemory;
     private final ChatHistoryService chatHistoryService;
+    private final ContextCompressionService contextCompressionService;
 
-    public AgentMemoryService(ChatMemory chatMemory, ChatHistoryService chatHistoryService) {
+    @Value("${codegen.memory.context-token-budget:16000}")
+    private int contextTokenBudget = 16000;
+
+    @Autowired
+    public AgentMemoryService(ChatMemory chatMemory,
+                              ChatHistoryService chatHistoryService,
+                              ContextCompressionService contextCompressionService) {
         this.chatMemory = chatMemory;
         this.chatHistoryService = chatHistoryService;
+        this.contextCompressionService = contextCompressionService;
+    }
+
+    /**
+     * 兼容无上下文压缩器的旧调用/单元测试。
+     */
+    public AgentMemoryService(ChatMemory chatMemory, ChatHistoryService chatHistoryService) {
+        this(chatMemory, chatHistoryService, null);
     }
 
     /**
@@ -72,6 +90,24 @@ public class AgentMemoryService {
      * @return 按时间正序、已按 token 预算裁剪的消息列表（可能为空）
      */
     public List<Message> loadContext(long appId, String currentUserText) {
+        List<Message> messages = loadRawContext(appId, currentUserText);
+        return trimToTokenBudget(messages, DEFAULT_CONTEXT_TOKEN_BUDGET);
+    }
+
+    /**
+     * 生成链路使用：先消除规格摘要与历史记忆的重复，再对较早对话做可选语义压缩。
+     */
+    public List<Message> loadContext(CodeGenTypeEnum type, long appId, String currentUserText,
+                                     String specSection) {
+        List<Message> messages = loadRawContext(appId, currentUserText);
+        messages = dropStateDuplicatedBySpec(messages, specSection);
+        if (contextCompressionService != null) {
+            messages = contextCompressionService.compressIfNeeded(type, appId, messages);
+        }
+        return trimToTokenBudget(messages, contextTokenBudget);
+    }
+
+    private List<Message> loadRawContext(long appId, String currentUserText) {
         List<Message> messages = safeGet(appId);
         if (messages.isEmpty()) {
             messages = rehydrate(appId, currentUserText);
@@ -84,7 +120,7 @@ public class AgentMemoryService {
                 }
             }
         }
-        return trimToTokenBudget(messages);
+        return new ArrayList<>(messages);
     }
 
     /**
@@ -187,7 +223,7 @@ public class AgentMemoryService {
      *       （{@link AppSpecService}）承载，近期对话只负责"上文指代"，因此无需额外调用模型做摘要，成本为零。</li>
      * </ol>
      */
-    private List<Message> trimToTokenBudget(List<Message> messages) {
+    private List<Message> trimToTokenBudget(List<Message> messages, int tokenBudget) {
         if (messages == null || messages.isEmpty()) {
             return List.of();
         }
@@ -197,7 +233,7 @@ public class AgentMemoryService {
         while (it.hasPrevious()) {
             Message m = it.previous();
             int tokens = estimateTokens(m.getText());
-            if (!kept.isEmpty() && total + tokens > CONTEXT_TOKEN_BUDGET) {
+            if (!kept.isEmpty() && total + tokens > tokenBudget) {
                 break;
             }
             total += tokens;
@@ -210,6 +246,47 @@ public class AgentMemoryService {
             kept.addFirst(new UserMessage(buildFirstRequirementNotice(firstUser.getText(), omitted)));
         }
         return new ArrayList<>(kept);
+    }
+
+    /**
+     * 应用现状是状态的唯一来源：旧版记忆中的生成摘要、文件索引和初始需求不再重复注入。
+     */
+    static List<Message> dropStateDuplicatedBySpec(List<Message> messages, String specSection) {
+        if (messages == null || messages.isEmpty() || StrUtil.isBlank(specSection)) {
+            return messages == null ? List.of() : messages;
+        }
+        String normalizedSpec = oneLine(specSection);
+        String initialRequirement = extractInitialRequirement(specSection);
+        List<Message> filtered = new ArrayList<>(messages.size());
+        boolean initialRemoved = false;
+        for (Message message : messages) {
+            String text = message.getText();
+            if (!initialRemoved && message instanceof UserMessage
+                    && StrUtil.isNotBlank(initialRequirement)
+                    && oneLine(text).equals(oneLine(initialRequirement))) {
+                initialRemoved = true;
+                continue;
+            }
+            if (message instanceof AssistantMessage && StrUtil.isNotBlank(text)) {
+                String normalized = oneLine(text);
+                if ((normalized.startsWith("已完成") && normalized.contains("生成"))
+                        || normalizedSpec.contains(normalized)) {
+                    continue;
+                }
+            }
+            filtered.add(message);
+        }
+        return filtered;
+    }
+
+    private static String extractInitialRequirement(String specSection) {
+        for (String line : specSection.split("\\R")) {
+            String trimmed = line.trim();
+            if (trimmed.startsWith("初始需求：")) {
+                return trimmed.substring("初始需求：".length()).trim();
+            }
+        }
+        return "";
     }
 
     /**
@@ -291,5 +368,9 @@ public class AgentMemoryService {
             return text;
         }
         return text.substring(0, MAX_MESSAGE_CHARS) + "…(已截断)";
+    }
+
+    private static String oneLine(String text) {
+        return text == null ? "" : text.replaceAll("\\s+", " ").trim();
     }
 }

@@ -10,12 +10,14 @@ export function streamGenerateHtmlProject(
   appId: number | string,
   message: string | undefined,
   callbacks: SseCallbacks,
+  reasoningLevel = 'standard',
 ): SseConnection {
   return createSseConnection(
     '/ai/chat/stream',
     {
       appId,
       message: message ?? '你好，请简单介绍一下你自己',
+      reasoningLevel,
     },
     callbacks,
   )
@@ -31,12 +33,14 @@ export function streamGenerateMultiFileProject(
   appId: number | string,
   message: string | undefined,
   callbacks: SseCallbacks,
+  reasoningLevel = 'standard',
 ): SseConnection {
   return createSseConnection(
     '/ai/chat/multi/stream',
     {
       appId,
       message: message ?? '你好，请简单介绍一下你自己',
+      reasoningLevel,
     },
     callbacks,
   )
@@ -51,12 +55,14 @@ export function streamGenerateVueProject(
   appId: number | string,
   message: string | undefined,
   callbacks: SseCallbacks,
+  reasoningLevel = 'standard',
 ): SseConnection {
   return createSseConnection(
     '/ai/chat/vue/stream',
     {
       appId,
       message: message ?? '你好，请简单介绍一下你自己',
+      reasoningLevel,
     },
     callbacks,
   )
@@ -72,6 +78,7 @@ export function streamModifyProject(
   elementContext: string,
   instruction: string,
   callbacks: SseCallbacks,
+  reasoningLevel = 'standard',
 ): SseConnection {
   return createSseConnection(
     '/ai/modify/stream',
@@ -79,6 +86,7 @@ export function streamModifyProject(
       appId,
       elementContext,
       instruction,
+      reasoningLevel,
     },
     callbacks,
   )

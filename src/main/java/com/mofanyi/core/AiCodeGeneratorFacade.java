@@ -1,7 +1,11 @@
 package com.mofanyi.core;
 
 import cn.hutool.core.util.StrUtil;
+import com.mofanyi.ai.SiteRepairAgent;
+import com.mofanyi.ai.SiteModifyAgent;
 import com.mofanyi.ai.VueProjectAgent;
+import com.mofanyi.ai.reasoning.ReasoningLevel;
+import com.mofanyi.ai.reasoning.ReasoningProfileRegistry;
 import com.mofanyi.ai.task.GenerationCancelledException;
 import com.mofanyi.ai.task.GenerationTask;
 import com.mofanyi.ai.task.GenerationTaskRegistry;
@@ -32,6 +36,9 @@ public class AiCodeGeneratorFacade {
     private final CodeFileWriteService codeFileWriteService;
     private final AppService appService;
     private final VueProjectAgent vueProjectAgent;
+    private final SiteRepairAgent siteRepairAgent;
+    private final SiteModifyAgent siteModifyAgent;
+    private final ReasoningProfileRegistry reasoningProfiles;
     /**
      * 生成任务注册表：负责 appId 级互斥与"停止生成"的取消句柄
      */
@@ -61,6 +68,9 @@ public class AiCodeGeneratorFacade {
     public AiCodeGeneratorFacade(CodeFileWriteService codeFileWriteService,
                                  AppService appService,
                                  VueProjectAgent vueProjectAgent,
+                                 SiteRepairAgent siteRepairAgent,
+                                 SiteModifyAgent siteModifyAgent,
+                                 ReasoningProfileRegistry reasoningProfiles,
                                  GenerationTaskRegistry taskRegistry,
                                  RenderVerifier renderVerifier,
                                  @Qualifier("renderFixExecutor") ExecutorService renderFixExecutor,
@@ -68,6 +78,9 @@ public class AiCodeGeneratorFacade {
         this.codeFileWriteService = codeFileWriteService;
         this.appService = appService;
         this.vueProjectAgent = vueProjectAgent;
+        this.siteRepairAgent = siteRepairAgent;
+        this.siteModifyAgent = siteModifyAgent;
+        this.reasoningProfiles = reasoningProfiles;
         this.taskRegistry = taskRegistry;
         this.renderVerifier = renderVerifier;
         this.renderFixExecutor = renderFixExecutor;
@@ -82,15 +95,21 @@ public class AiCodeGeneratorFacade {
      * @return 生成结果 VO（含项目路径与代码）
      */
     public AiCodeGenResultVO generate(CodeGenTypeEnum type, String userMessage, Long appId) {
+        return generate(type, userMessage, appId, reasoningProfiles.defaultReasoningLevel());
+    }
+
+    public AiCodeGenResultVO generate(CodeGenTypeEnum type, String userMessage, Long appId,
+                                      ReasoningLevel reasoningLevel) {
         ThrowUtils.throwIf(type == null, ErrorCode.PARAMS_ERROR);
         checkGenerateParams(userMessage, appId);
+        ThrowUtils.throwIf(reasoningLevel == null, ErrorCode.PARAMS_ERROR, "推理档位不能为空");
         // 互斥：同一 appId 只允许一个生成在跑（plan-refactor P0-2）。原先 vue 非流式入口漏了这一层，现统一补齐。
         GenerationTask task = acquireOrThrow(appId, callTypeOf(type));
         try {
             task.bind(Thread.currentThread());
             appService.updateGenerateStatus(appId, AppGenerateStatusEnum.GENERATING.getValue());
             VueProjectAgent.GenerateResult result = vueProjectAgent.generate(
-                    type, appId, userMessage, callContext(appId, callTypeOf(type)), null);
+                    type, appId, userMessage, callContext(appId, callTypeOf(type)), null, reasoningLevel);
             appService.updateGenerateStatus(appId, AppGenerateStatusEnum.DONE.getValue());
             afterGenerate(type, appId);
             AiCodeGenResultVO vo = readResult(type, appId);
@@ -123,9 +142,15 @@ public class AiCodeGeneratorFacade {
      * 逐文件进度（agent_progress）、思考增量（reasoning）与最终结果 VO（done）通过回调返回。
      */
     public void streamGenerate(CodeGenTypeEnum type, String userMessage, Long appId, StreamCallback callback) {
+        streamGenerate(type, userMessage, appId, callback, reasoningProfiles.defaultReasoningLevel());
+    }
+
+    public void streamGenerate(CodeGenTypeEnum type, String userMessage, Long appId, StreamCallback callback,
+                               ReasoningLevel reasoningLevel) {
         ThrowUtils.throwIf(type == null, ErrorCode.PARAMS_ERROR);
         checkGenerateParams(userMessage, appId);
         ThrowUtils.throwIf(callback == null, ErrorCode.PARAMS_ERROR);
+        ThrowUtils.throwIf(reasoningLevel == null, ErrorCode.PARAMS_ERROR, "推理档位不能为空");
         GenerationTask task = acquireOrThrow(appId, callTypeOf(type));
         appService.updateGenerateStatus(appId, AppGenerateStatusEnum.GENERATING.getValue());
         vueThreadPoolExecutor.execute(() -> {
@@ -144,7 +169,7 @@ public class AiCodeGeneratorFacade {
                             public void onReasoning(String reasoning) {
                                 callback.onReasoning(reasoning);
                             }
-                        });
+                        }, reasoningLevel);
                 appService.updateGenerateStatus(appId, AppGenerateStatusEnum.DONE.getValue());
                 afterGenerate(type, appId);
                 AiCodeGenResultVO vo = readResult(type, appId);
@@ -234,17 +259,25 @@ public class AiCodeGeneratorFacade {
      */
     public void streamModifyProject(CodeGenTypeEnum type, Long appId, String elementContext,
                                     String instruction, StreamCallback callback) {
+        streamModifyProject(type, appId, elementContext, instruction, callback,
+                reasoningProfiles.defaultReasoningLevel());
+    }
+
+    public void streamModifyProject(CodeGenTypeEnum type, Long appId, String elementContext,
+                                    String instruction, StreamCallback callback,
+                                    ReasoningLevel reasoningLevel) {
         ThrowUtils.throwIf(type == null || type == CodeGenTypeEnum.VUE,
                 ErrorCode.PARAMS_ERROR, "Vue3 工程暂不支持可视化修改");
         ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
         ThrowUtils.throwIf(StrUtil.isBlank(instruction), ErrorCode.PARAMS_ERROR, "修改意图不能为空");
         ThrowUtils.throwIf(callback == null, ErrorCode.PARAMS_ERROR);
+        ThrowUtils.throwIf(reasoningLevel == null, ErrorCode.PARAMS_ERROR, "推理档位不能为空");
         GenerationTask task = acquireOrThrow(appId, "modify");
         vueThreadPoolExecutor.execute(() -> {
             task.bind(Thread.currentThread());
             try {
                 TokenUsageAccumulator usage = new TokenUsageAccumulator();
-                vueProjectAgent.modifyGeneratedSite(type, appId, elementContext, instruction, usage,
+                siteModifyAgent.modifyGeneratedSite(type, appId, elementContext, instruction, usage,
                         callContext(appId, "modify"),
                         new VueProjectAgent.VueProgressListener() {
                             @Override
@@ -257,7 +290,7 @@ public class AiCodeGeneratorFacade {
                             public void onReasoning(String reasoning) {
                                 callback.onReasoning(reasoning);
                             }
-                        });
+                        }, reasoningLevel);
                 AiCodeGenResultVO vo = readResult(type, appId);
                 vo.setPromptTokens(usage.promptTokens());
                 vo.setCompletionTokens(usage.completionTokens());
@@ -285,7 +318,7 @@ public class AiCodeGeneratorFacade {
                 ErrorCode.PARAMS_ERROR, "该模式不支持撤销");
         ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
         ThrowUtils.throwIf(files == null || files.isEmpty(), ErrorCode.PARAMS_ERROR, "还原内容为空");
-        vueProjectAgent.restoreFiles(type, appId, files);
+        siteModifyAgent.restoreFiles(type, appId, files);
         return readResult(type, appId);
     }
 
@@ -356,7 +389,8 @@ public class AiCodeGeneratorFacade {
         }
         try {
             task.bind(Thread.currentThread());
-            vueProjectAgent.fixRenderIssues(type, appId, issueText, callContext(appId, "render_fix"), null);
+            siteRepairAgent.fixRenderIssues(type, appId, issueText, callContext(appId, "render_fix"), null,
+                    reasoningProfiles.defaultReasoningLevel());
             RenderVerifier.RenderReport after = renderVerifier.verify(type, appId);
             renderVerifier.persistReport(type, appId, after, "after");
             renderFixStatus.put(appId, after.hasProblems() ? "still_has_problems" : "fixed");
