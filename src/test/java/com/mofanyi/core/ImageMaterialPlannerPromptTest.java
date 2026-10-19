@@ -39,6 +39,32 @@ class ImageMaterialPlannerPromptTest {
     }
 
     @Test
+    @DisplayName("响应式素材必须把 srcset 和 sizes 规则传给页面模型")
+    void materialSectionCarriesResponsiveVariants() {
+        ImageMaterialPlanner planner = planner();
+        ImageMaterialPlanner.Material material = new ImageMaterialPlanner.Material(
+                "https://example.com/high.jpg", 2400, 1600, "landscape", "city",
+                "hero", "城市夜景", "城市夜景主视觉", "https://source.example/original.jpg",
+                List.of(
+                        new ImageMaterialPlanner.Material.ImageVariant(
+                                640, "https://example.com/small.jpg"),
+                        new ImageMaterialPlanner.Material.ImageVariant(
+                                1280, "https://example.com/medium.jpg"),
+                        new ImageMaterialPlanner.Material.ImageVariant(
+                                2400, "https://example.com/high.jpg")));
+
+        String section = planner.toPromptSection(List.of(material));
+
+        assertTrue(section.contains(
+                "srcset=https://example.com/small.jpg 640w, "
+                        + "https://example.com/medium.jpg 1280w, https://example.com/high.jpg 2400w"));
+        assertTrue(section.contains("sizes"));
+        assertTrue(section.contains("hero/background 通常为 100vw"));
+        assertTrue(section.contains("originalSourceUrl"));
+        assertTrue(section.contains("不得直接引用外站原图 URL"));
+    }
+
+    @Test
     @DisplayName("明确主题列表不能被通用开头 6 段截断")
     void extractsExplicitTopicsFromTopicList() {
         ImageMaterialPlanner planner = planner();

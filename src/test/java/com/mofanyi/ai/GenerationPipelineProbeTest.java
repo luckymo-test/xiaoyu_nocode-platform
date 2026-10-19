@@ -21,7 +21,6 @@ import java.util.List;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -81,10 +80,22 @@ class GenerationPipelineProbeTest {
         assertTrue(materials.path("curatorUsed").asBoolean(), "Curator 开启时不应退回程序规则");
         assertTrue(selected.isArray() && !selected.isEmpty(),
                 "Curator 应根据页面规模自主输出可用图片");
-        Set<String> selectedUrls = java.util.stream.StreamSupport.stream(selected.spliterator(), false)
-                .map(node -> node.path("url").asText(""))
-                .filter(url -> !url.isBlank())
-                .collect(Collectors.toSet());
+        Set<String> selectedUrls = new java.util.LinkedHashSet<>();
+        for (JsonNode item : selected) {
+            String highUrl = item.path("url").asText("");
+            if (!highUrl.isBlank()) {
+                selectedUrls.add(highUrl);
+            }
+            JsonNode variants = item.path("variants");
+            assertTrue(variants.isArray() && !variants.isEmpty(),
+                    "每张正式素材都应包含响应式变体");
+            variants.forEach(variant -> {
+                String url = variant.path("url").asText("");
+                if (!url.isBlank()) {
+                    selectedUrls.add(url);
+                }
+            });
+        }
 
         AiCodeGenResultVO result = codeFileWriteService.readProjectCode(
                 CodeGenTypeEnum.HTML, PROBE_APP_ID);

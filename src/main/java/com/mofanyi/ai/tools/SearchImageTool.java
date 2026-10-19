@@ -47,8 +47,8 @@ public class SearchImageTool {
             return siteImageService.searchAndUploadImages(appId, req.query(), req.orientation());
         })
                 .description(hasMaterials
-                        ? "返回本次生成已预取的素材清单（图片均已上传 CDN）。直接用清单里的 URL，不要改用其他图片地址。query/orientation 仅作占位。"
-                        : "需要为页面配图时调用本工具。query 为图片的语义描述（如\"科技感蓝紫色渐变背景\"），orientation 可选（landscape 横向 / portrait 纵向 / square 方形）。调用后返回若干张已上传 COS 的图片 URL，直接在代码的 <img src> 或 CSS background-image 中引用即可。")
+                        ? "返回本次生成已预取的响应式素材清单（图片均已上传 CDN）。直接用清单里的 URL，并把 srcset 原样写入 <img>；query/orientation 仅作占位。"
+                        : "需要为页面配图时调用本工具。query 为图片的语义描述（如\"科技感蓝紫色渐变背景\"），orientation 可选（landscape 横向 / portrait 纵向 / square 方形）。调用后返回已上传 COS 的最高质量 URL、原始尺寸和 srcset，HTML 图片同时写 src/srcset/sizes。")
                 .inputType(SearchImageRequest.class)
                 .build();
     }
@@ -62,7 +62,8 @@ public class SearchImageTool {
         for (ImageMaterialPlanner.Material material : materials) {
             sb.append(index++).append(". ").append(material.describe()).append('\n');
         }
-        sb.append("请从清单中挑选，不要重复使用同一张图，也不要使用清单以外的图片地址。");
+        sb.append("请从清单中挑选，不要重复使用同一张图，也不要使用清单以外的图片地址。"
+                + "含 srcset 的图片必须完整复制 srcset，并按实际布局填写 sizes。");
         return sb.toString();
     }
 }
