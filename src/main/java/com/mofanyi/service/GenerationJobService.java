@@ -16,6 +16,8 @@ import com.mofanyi.mapper.GenerationJobMapper;
 import com.mofanyi.mapper.GenerationOutboxMapper;
 import com.mofanyi.mapper.GenerationDeadLetterMapper;
 import com.mofanyi.job.GenerationJobQueue;
+import com.mofanyi.runtime.StackProfileRegistry;
+import com.mofanyi.runtime.StackProfile;
 import com.mofanyi.model.dto.job.GenerationJobCreateRequest;
 import com.mofanyi.model.enums.AppVisibilityEnum;
 import com.mofanyi.model.enums.AppGenerateStatusEnum;
@@ -57,6 +59,7 @@ public class GenerationJobService {
     private final ObjectMapper objectMapper;
     private final GenerationJobQueue jobQueue;
     private final GenerationDeadLetterMapper deadLetterMapper;
+    private final StackProfileRegistry stackProfiles;
 
     @Value("${codegen.jobs.max-attempts:3}")
     private int maxAttempts;
@@ -78,6 +81,7 @@ public class GenerationJobService {
                                 ReasoningProfileRegistry reasoningProfiles,
                                 GenerationJobQueue jobQueue,
                                 GenerationDeadLetterMapper deadLetterMapper,
+                                StackProfileRegistry stackProfiles,
                                 ObjectMapper objectMapper) {
         this.jobMapper = jobMapper;
         this.outboxMapper = outboxMapper;
@@ -90,6 +94,7 @@ public class GenerationJobService {
         this.reasoningProfiles = reasoningProfiles;
         this.jobQueue = jobQueue;
         this.deadLetterMapper = deadLetterMapper;
+        this.stackProfiles = stackProfiles;
         this.objectMapper = objectMapper;
     }
 
@@ -165,6 +170,7 @@ public class GenerationJobService {
                 .status(GenerationJobStatusEnum.QUEUED.getValue())
                 .currentStage(STAGE_QUEUED)
                 .codeGenType(request.getCodeGenType())
+                .stackProfileId(request.getStackProfileId())
                 .visibility(request.getVisibility())
                 .baseRevisionId(app.getCurrentRevision())
                 .priority(0)
@@ -349,6 +355,9 @@ public class GenerationJobService {
         ThrowUtils.throwIf(CodeGenTypeEnum.getEnumByValue(type) == null,
                 ErrorCode.PARAMS_ERROR, "不支持的生成类型");
         request.setCodeGenType(type);
+        StackProfile profile = stackProfiles.resolve(request.getStackProfileId(),
+                CodeGenTypeEnum.getEnumByValue(type));
+        request.setStackProfileId(profile.id());
         request.setReasoningLevel(reasoningProfiles.parseLevel(request.getReasoningLevel()).code());
         String visibility = StrUtil.blankToDefault(request.getVisibility(),
                 StrUtil.blankToDefault(app.getVisibility(), AppVisibilityEnum.PRIVATE.getValue()));
@@ -390,6 +399,7 @@ public class GenerationJobService {
         vo.setStatus(job.getStatus());
         vo.setCurrentStage(job.getCurrentStage());
         vo.setCodeGenType(job.getCodeGenType());
+        vo.setStackProfileId(job.getStackProfileId());
         vo.setVisibility(job.getVisibility());
         vo.setAttempt(job.getAttempt());
         vo.setMaxAttempts(job.getMaxAttempts());

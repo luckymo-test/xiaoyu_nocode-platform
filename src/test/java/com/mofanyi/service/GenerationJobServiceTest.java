@@ -11,6 +11,7 @@ import com.mofanyi.mapper.GenerationJobMapper;
 import com.mofanyi.mapper.GenerationOutboxMapper;
 import com.mofanyi.mapper.GenerationDeadLetterMapper;
 import com.mofanyi.job.GenerationJobQueue;
+import com.mofanyi.runtime.StackProfileRegistry;
 import com.mofanyi.model.dto.job.GenerationJobCreateRequest;
 import com.mofanyi.model.vo.GenerationJobVO;
 import org.junit.jupiter.api.BeforeEach;
@@ -63,6 +64,7 @@ class GenerationJobServiceTest {
                 new ReasoningProfileRegistry(),
                 mock(GenerationJobQueue.class),
                 mock(GenerationDeadLetterMapper.class),
+                new StackProfileRegistry(),
                 new ObjectMapper());
 
         user = new User();
@@ -92,6 +94,7 @@ class GenerationJobServiceTest {
                 .status("QUEUED")
                 .currentStage("QUEUED")
                 .codeGenType("html")
+                .stackProfileId("html-static")
                 .visibility("private")
                 .attempt(0)
                 .maxAttempts(1)
@@ -150,6 +153,7 @@ class GenerationJobServiceTest {
         request.setMessage("生成一个摄影网站");
         request.setReasoningLevel("standard");
         request.setCodeGenType("html");
+        request.setStackProfileId("html-static");
         request.setRequestType("generate");
         request.setVisibility("private");
         return request;

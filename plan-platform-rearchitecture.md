@@ -1,7 +1,8 @@
 # 计划书：零代码生成平台可扩展架构重构
 
 > 日期：2026-10-22
-> 状态：Phase 0 数据契约部分 + Phase 1～3 已实施；Phase 4 及其后尚未开始
+> 状态：Phase 0 数据契约部分 + Phase 1～3 已实施；Phase 4 StackProfile 基础契约已落地，
+> React/Next 执行适配尚未完成
 > 目标：在不推翻现有 Agent、记忆、图片和验证能力的前提下，把平台从“单实例同步生成器”演进为
 > **任务可恢复、产物可追踪、运行时可选、模板可组合、Worker 可横向扩展**的生成平台。
 
@@ -1279,6 +1280,9 @@ codegen.artifacts.versioned=false
 
 ### Phase 4：StackProfile 接入（5～8 天）
 
+> 实施状态（2026-10-22）：Registry、受控命令描述、Job Profile 快照与查询 API 已完成；
+> HTML/Multi/Vue 作为兼容 Profile 可用，React/Next 仅可发现且明确不可执行。
+
 #### 目标
 
 解决固定 `CodeGenTypeEnum`。
@@ -1854,7 +1858,7 @@ Playwright、视觉评估和强沙箱应贯穿 Phase 2 之后，作为持续增�
 - 跨实例取消已通过 CANCEL_REQUESTED + fencing 阻止旧 Worker 写状态/事件；旧模型调用仍需
   等阶段边界退出，尚未做跨线程强制中止。
 - SSE 已可重放，但前端尚未提供独立 Job 列表；页面恢复仍按 App 状态与当前版本进行。
-- 本轮完成编译、前端构建、83 个默认测试、MySQL 5.7 V3～V5 实际迁移和持久化探针；
+- 本轮完成编译、前端构建、86 个默认测试、MySQL 5.7 V3～V6 实际迁移和持久化探针；
   20 条固定 prompt 的质量基线仍未建立。
 
 ### Phase 3 追加实施记录
@@ -1868,3 +1872,12 @@ Playwright、视觉评估和强沙箱应贯穿 Phase 2 之后，作为持续增�
   `POST /v1/generation-jobs/{jobId}/retry` 人工重放。
 - Prometheus 增加 queued/running/waitingRetry/deadLetter gauge，以及 dispatch/retry/failure counter；
   仍不把 appId/userId 放进指标标签。
+
+### Phase 4 追加实施记录（基础契约）
+
+- 新增 `StackProfile` / `StackProfileRegistry`，Profile 固定声明兼容生成类型、能力、
+  install/build 命令、输出目录与可用状态。
+- Job 创建时解析并固化 `stackProfileId`；`auto` 按 HTML/Multi/Vue 兼容类型选择。
+- `GET /v1/stack-profiles` 暴露能力目录；命令只来自服务端注册表，模型不能提交 shell。
+- 新增 React Vite TS、Next Static Export 能力声明，但在 Prompt、脚手架、构建与验证闭环
+  完成前标记为 unavailable，请求会明确拒绝，不会静默降级成不兼容工程。

@@ -54,6 +54,7 @@ function streamGenerationJob(
           message: message ?? '你好，请简单介绍一下你自己',
           reasoningLevel,
           codeGenType,
+          stackProfileId: 'auto',
           requestType: 'generate',
         }),
       })

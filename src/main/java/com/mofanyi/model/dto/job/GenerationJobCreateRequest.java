@@ -13,6 +13,7 @@ public class GenerationJobCreateRequest implements Serializable {
     private String message;
     private String reasoningLevel;
     private String codeGenType;
+    private String stackProfileId;
     private String requestType;
     private String visibility;
 

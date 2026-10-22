@@ -66,6 +66,7 @@ class GenerationJobPersistenceProbeTest {
                 .status("QUEUED")
                 .currentStage("QUEUED")
                 .codeGenType("html")
+                .stackProfileId("html-static")
                 .visibility("private")
                 .priority(0)
                 .attempt(0)

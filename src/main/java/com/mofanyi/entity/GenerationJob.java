@@ -59,6 +59,9 @@ public class GenerationJob implements Serializable {
     @Column("codeGenType")
     private String codeGenType;
 
+    @Column("stackProfileId")
+    private String stackProfileId;
+
     @Column("baseRevisionId")
     private Long baseRevisionId;
 
