@@ -1,8 +1,8 @@
 # 计划书：零代码生成平台可扩展架构重构
 
 > 日期：2026-10-22
-> 状态：Phase 0 数据契约部分 + Phase 1～3 已实施；Phase 4 StackProfile 基础契约已落地，
-> React/Next 执行适配尚未完成
+> 状态：Phase 0 数据契约部分 + Phase 1～3 已实施；Phase 4、5 基础契约已落地，
+> React/Next 执行适配与模板 Golden 质量门禁尚未完成
 > 目标：在不推翻现有 Agent、记忆、图片和验证能力的前提下，把平台从“单实例同步生成器”演进为
 > **任务可恢复、产物可追踪、运行时可选、模板可组合、Worker 可横向扩展**的生成平台。
 
@@ -1306,6 +1306,9 @@ codegen.artifacts.versioned=false
 
 ### Phase 5：Template Bundle（5～8 天）
 
+> 实施状态（2026-10-22）：版本化模板包、自动选择、Prompt/Design Tokens 注入、
+> Job 锁定与 Revision Manifest 记录已完成；Golden screenshot/rubric 质量门禁尚未完成。
+
 #### 目标
 
 建立可组合、可版本化的审美与结构能力。
@@ -1858,7 +1861,7 @@ Playwright、视觉评估和强沙箱应贯穿 Phase 2 之后，作为持续增�
 - 跨实例取消已通过 CANCEL_REQUESTED + fencing 阻止旧 Worker 写状态/事件；旧模型调用仍需
   等阶段边界退出，尚未做跨线程强制中止。
 - SSE 已可重放，但前端尚未提供独立 Job 列表；页面恢复仍按 App 状态与当前版本进行。
-- 本轮完成编译、前端构建、86 个默认测试、MySQL 5.7 V3～V6 实际迁移和持久化探针；
+- 本轮完成编译、前端构建、90 个默认测试、MySQL 5.7 V3～V7 实际迁移和持久化探针；
   20 条固定 prompt 的质量基线仍未建立。
 
 ### Phase 3 追加实施记录
@@ -1881,3 +1884,14 @@ Playwright、视觉评估和强沙箱应贯穿 Phase 2 之后，作为持续增�
 - `GET /v1/stack-profiles` 暴露能力目录；命令只来自服务端注册表，模型不能提交 shell。
 - 新增 React Vite TS、Next Static Export 能力声明，但在 Prompt、脚手架、构建与验证闭环
   完成前标记为 unavailable，请求会明确拒绝，不会静默降级成不兼容工程。
+
+### Phase 5 追加实施记录（基础契约）
+
+- 新增版本化 Template Bundle：视觉方向 Prompt、section ids、design tokens、兼容 Profile
+  与服务端计算的 `effectiveHash`。
+- `auto` 模板选择按用户需求做确定性分类；当前内置中性基础模板和摄影杂志模板。
+- Job 固化模板 id/version/hash，执行前校验版本未变化；Revision Manifest 同步记录模板版本。
+- Job 运行期通过模板上下文把模板事实注入生成 Prompt，模板内容来自服务端注册表，
+  不属于用户可覆盖指令。
+- 新增 `GET /v1/templates`；模板目前是组合契约基础，尚未实现 Golden screenshot diff、
+  人工 rubric 评分和模板升级回归门禁。

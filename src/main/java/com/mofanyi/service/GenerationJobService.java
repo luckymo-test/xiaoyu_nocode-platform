@@ -18,6 +18,8 @@ import com.mofanyi.mapper.GenerationDeadLetterMapper;
 import com.mofanyi.job.GenerationJobQueue;
 import com.mofanyi.runtime.StackProfileRegistry;
 import com.mofanyi.runtime.StackProfile;
+import com.mofanyi.template.TemplateRegistry;
+import com.mofanyi.template.TemplateBundle;
 import com.mofanyi.model.dto.job.GenerationJobCreateRequest;
 import com.mofanyi.model.enums.AppVisibilityEnum;
 import com.mofanyi.model.enums.AppGenerateStatusEnum;
@@ -60,6 +62,7 @@ public class GenerationJobService {
     private final GenerationJobQueue jobQueue;
     private final GenerationDeadLetterMapper deadLetterMapper;
     private final StackProfileRegistry stackProfiles;
+    private final TemplateRegistry templateRegistry;
 
     @Value("${codegen.jobs.max-attempts:3}")
     private int maxAttempts;
@@ -82,6 +85,7 @@ public class GenerationJobService {
                                 GenerationJobQueue jobQueue,
                                 GenerationDeadLetterMapper deadLetterMapper,
                                 StackProfileRegistry stackProfiles,
+                                TemplateRegistry templateRegistry,
                                 ObjectMapper objectMapper) {
         this.jobMapper = jobMapper;
         this.outboxMapper = outboxMapper;
@@ -95,6 +99,7 @@ public class GenerationJobService {
         this.jobQueue = jobQueue;
         this.deadLetterMapper = deadLetterMapper;
         this.stackProfiles = stackProfiles;
+        this.templateRegistry = templateRegistry;
         this.objectMapper = objectMapper;
     }
 
@@ -171,6 +176,9 @@ public class GenerationJobService {
                 .currentStage(STAGE_QUEUED)
                 .codeGenType(request.getCodeGenType())
                 .stackProfileId(request.getStackProfileId())
+                .templateBundleId(request.getTemplateBundleId())
+                .templateVersion(request.getTemplateVersion())
+                .templateHash(request.getTemplateHash())
                 .visibility(request.getVisibility())
                 .baseRevisionId(app.getCurrentRevision())
                 .priority(0)
@@ -358,6 +366,11 @@ public class GenerationJobService {
         StackProfile profile = stackProfiles.resolve(request.getStackProfileId(),
                 CodeGenTypeEnum.getEnumByValue(type));
         request.setStackProfileId(profile.id());
+        TemplateBundle template = templateRegistry.resolve(request.getTemplateHint(),
+                request.getMessage(), profile.id());
+        request.setTemplateBundleId(template.id());
+        request.setTemplateVersion(template.version());
+        request.setTemplateHash(template.effectiveHash());
         request.setReasoningLevel(reasoningProfiles.parseLevel(request.getReasoningLevel()).code());
         String visibility = StrUtil.blankToDefault(request.getVisibility(),
                 StrUtil.blankToDefault(app.getVisibility(), AppVisibilityEnum.PRIVATE.getValue()));
@@ -400,6 +413,9 @@ public class GenerationJobService {
         vo.setCurrentStage(job.getCurrentStage());
         vo.setCodeGenType(job.getCodeGenType());
         vo.setStackProfileId(job.getStackProfileId());
+        vo.setTemplateBundleId(job.getTemplateBundleId());
+        vo.setTemplateVersion(job.getTemplateVersion());
+        vo.setTemplateHash(job.getTemplateHash());
         vo.setVisibility(job.getVisibility());
         vo.setAttempt(job.getAttempt());
         vo.setMaxAttempts(job.getMaxAttempts());

@@ -47,6 +47,15 @@ public class AppRevision implements Serializable {
     @Column("codeGenType")
     private String codeGenType;
 
+    @Column("templateBundleId")
+    private String templateBundleId;
+
+    @Column("templateVersion")
+    private String templateVersion;
+
+    @Column("templateHash")
+    private String templateHash;
+
     @Column("sourceUri")
     private String sourceUri;
 

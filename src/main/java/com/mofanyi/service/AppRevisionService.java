@@ -98,6 +98,9 @@ public class AppRevisionService {
                 .baseRevisionId(job.getBaseRevisionId())
                 .status(STATUS_CREATED)
                 .codeGenType(job.getCodeGenType())
+                .templateBundleId(job.getTemplateBundleId())
+                .templateVersion(job.getTemplateVersion())
+                .templateHash(job.getTemplateHash())
                 .sourceUri("pending://" + job.getId())
                 .validationStatus(validationStatus)
                 .createdBy(job.getRequestedBy())
@@ -269,6 +272,12 @@ public class AppRevisionService {
         manifest.put("baseRevision", revision.getBaseRevisionId() == null
                 ? null : String.valueOf(revision.getBaseRevisionId()));
         manifest.put("stackProfile", revision.getCodeGenType());
+        if (revision.getTemplateBundleId() != null) {
+            manifest.put("template", Map.of(
+                    "id", revision.getTemplateBundleId(),
+                    "version", revision.getTemplateVersion(),
+                    "hash", revision.getTemplateHash()));
+        }
         String validation = revision.getValidationStatus();
         manifest.put("status", "ok".equals(validation) || "NOT_APPLICABLE".equals(validation)
                 || "fixed".equals(validation) ? "VALIDATED" : "PUBLISHED_WITH_WARNINGS");
@@ -390,6 +399,9 @@ public class AppRevisionService {
         vo.setBaseRevisionId(revision.getBaseRevisionId());
         vo.setStatus(revision.getStatus());
         vo.setCodeGenType(revision.getCodeGenType());
+        vo.setTemplateBundleId(revision.getTemplateBundleId());
+        vo.setTemplateVersion(revision.getTemplateVersion());
+        vo.setTemplateHash(revision.getTemplateHash());
         vo.setSourceUri(revision.getSourceUri());
         vo.setValidationStatus(revision.getValidationStatus());
         vo.setCreatedBy(revision.getCreatedBy());

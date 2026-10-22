@@ -17,6 +17,9 @@ public class GenerationJobVO implements Serializable {
     private String currentStage;
     private String codeGenType;
     private String stackProfileId;
+    private String templateBundleId;
+    private String templateVersion;
+    private String templateHash;
     private String visibility;
     private Integer attempt;
     private Integer maxAttempts;

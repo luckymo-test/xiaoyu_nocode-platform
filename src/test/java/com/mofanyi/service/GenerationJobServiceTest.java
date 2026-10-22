@@ -12,6 +12,8 @@ import com.mofanyi.mapper.GenerationOutboxMapper;
 import com.mofanyi.mapper.GenerationDeadLetterMapper;
 import com.mofanyi.job.GenerationJobQueue;
 import com.mofanyi.runtime.StackProfileRegistry;
+import com.mofanyi.template.TemplateRegistry;
+import com.mofanyi.template.TemplateBundle;
 import com.mofanyi.model.dto.job.GenerationJobCreateRequest;
 import com.mofanyi.model.vo.GenerationJobVO;
 import org.junit.jupiter.api.BeforeEach;
@@ -43,6 +45,7 @@ class GenerationJobServiceTest {
     private GenerationJobService service;
     private User user;
     private App app;
+    private TemplateRegistry templateRegistry;
 
     @BeforeEach
     void setUp() {
@@ -52,6 +55,7 @@ class GenerationJobServiceTest {
         AppAuthService appAuthService = mock(AppAuthService.class);
         WorkspaceService workspaceService = mock(WorkspaceService.class);
         chatHistoryService = mock(ChatHistoryService.class);
+        templateRegistry = new TemplateRegistry();
         service = new GenerationJobService(
                 jobMapper,
                 outboxMapper,
@@ -65,6 +69,7 @@ class GenerationJobServiceTest {
                 mock(GenerationJobQueue.class),
                 mock(GenerationDeadLetterMapper.class),
                 new StackProfileRegistry(),
+                templateRegistry,
                 new ObjectMapper());
 
         user = new User();
@@ -154,6 +159,11 @@ class GenerationJobServiceTest {
         request.setReasoningLevel("standard");
         request.setCodeGenType("html");
         request.setStackProfileId("html-static");
+        TemplateBundle template = templateRegistry.get("default-neutral");
+        request.setTemplateHint("default-neutral");
+        request.setTemplateBundleId(template.id());
+        request.setTemplateVersion(template.version());
+        request.setTemplateHash(template.effectiveHash());
         request.setRequestType("generate");
         request.setVisibility("private");
         return request;

@@ -14,6 +14,10 @@ public class GenerationJobCreateRequest implements Serializable {
     private String reasoningLevel;
     private String codeGenType;
     private String stackProfileId;
+    private String templateHint;
+    private String templateBundleId;
+    private String templateVersion;
+    private String templateHash;
     private String requestType;
     private String visibility;
 

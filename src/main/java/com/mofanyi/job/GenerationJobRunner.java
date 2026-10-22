@@ -7,6 +7,8 @@ import com.mofanyi.ai.task.GenerationCancelledException;
 import com.mofanyi.core.AiCodeGeneratorFacade;
 import com.mofanyi.core.GeneratedResultContentFormatter;
 import com.mofanyi.entity.GenerationJob;
+import com.mofanyi.exception.ErrorCode;
+import com.mofanyi.exception.ThrowUtils;
 import com.mofanyi.model.dto.job.GenerationJobCreateRequest;
 import com.mofanyi.model.enums.ChatMessageTypeEnum;
 import com.mofanyi.model.enums.CodeGenTypeEnum;
@@ -17,6 +19,9 @@ import com.mofanyi.service.GenerationJobEventService;
 import com.mofanyi.service.GenerationJobService;
 import com.mofanyi.service.AppRevisionService;
 import com.mofanyi.workspace.WorkspaceManager;
+import com.mofanyi.template.TemplateContext;
+import com.mofanyi.template.TemplateRegistry;
+import com.mofanyi.template.TemplateBundle;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -54,6 +59,8 @@ public class GenerationJobRunner {
     private final GenerationFailureClassifier failureClassifier;
     private final com.mofanyi.service.GenerationDeadLetterService deadLetterService;
     private final GenerationJobMetrics metrics;
+    private final TemplateRegistry templateRegistry;
+    private final TemplateContext templateContext;
     private final ScheduledExecutorService heartbeatExecutor;
 
     @Value("${codegen.jobs.worker-id:${HOSTNAME:local-worker}}")
@@ -71,6 +78,8 @@ public class GenerationJobRunner {
                                GenerationFailureClassifier failureClassifier,
                                com.mofanyi.service.GenerationDeadLetterService deadLetterService,
                                GenerationJobMetrics metrics,
+                               TemplateRegistry templateRegistry,
+                               TemplateContext templateContext,
                                @Qualifier("jobHeartbeatExecutor")
                                ScheduledExecutorService heartbeatExecutor) {
         this.jobService = jobService;
@@ -85,6 +94,8 @@ public class GenerationJobRunner {
         this.failureClassifier = failureClassifier;
         this.deadLetterService = deadLetterService;
         this.metrics = metrics;
+        this.templateRegistry = templateRegistry;
+        this.templateContext = templateContext;
         this.heartbeatExecutor = heartbeatExecutor;
     }
 
@@ -94,6 +105,7 @@ public class GenerationJobRunner {
             return;
         }
         WorkspaceManager.WorkspaceHandle workspace = null;
+        TemplateBundle template = null;
         CountDownLatch finished = new CountDownLatch(1);
         AtomicBoolean callbackFinished = new AtomicBoolean(false);
         AtomicReference<Throwable> callbackFailure = new AtomicReference<>();
@@ -104,6 +116,7 @@ public class GenerationJobRunner {
 
         try {
             workspace = workspaceManager.begin(job);
+            template = activateTemplate(job);
             GenerationJobCreateRequest request = jobService.readCreateRequest(job);
             CodeGenTypeEnum type = CodeGenTypeEnum.getEnumByValue(job.getCodeGenType());
             ReasoningLevel reasoningLevel = reasoningProfiles.parseLevel(request.getReasoningLevel());
@@ -143,10 +156,24 @@ public class GenerationJobRunner {
         } finally {
             heartbeat.cancel(false);
             workspaceManager.close(workspace);
+            templateContext.deactivate(job.getAppId(), template);
             if (!callbackFinished.get()) {
                 log.warn("[job] runner 退出但 Agent 未回调完成，jobId={}", jobId);
             }
         }
+    }
+
+    private TemplateBundle activateTemplate(GenerationJob job) {
+        if (StrUtil.isBlank(job.getTemplateBundleId())) {
+            return null;
+        }
+        TemplateBundle bundle = templateRegistry.get(job.getTemplateBundleId());
+        ThrowUtils.throwIf(bundle == null, ErrorCode.PARAMS_ERROR, "模板不存在");
+        ThrowUtils.throwIf(!bundle.version().equals(job.getTemplateVersion())
+                        || !bundle.effectiveHash().equals(job.getTemplateHash()),
+                ErrorCode.OPERATION_ERROR, "模板版本已变化，拒绝执行旧 Job");
+        templateContext.activate(job.getAppId(), bundle);
+        return bundle;
     }
 
     private void complete(GenerationJob job, AiCodeGenResultVO result,
