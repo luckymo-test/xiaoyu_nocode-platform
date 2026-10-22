@@ -1,0 +1,333 @@
+package com.mofanyi.service;
+
+import cn.hutool.core.util.StrUtil;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mofanyi.core.AiCodeGeneratorFacade;
+import com.mofanyi.ai.reasoning.ReasoningProfileRegistry;
+import com.mofanyi.entity.App;
+import com.mofanyi.entity.ChatHistory;
+import com.mofanyi.entity.GenerationJob;
+import com.mofanyi.entity.GenerationOutbox;
+import com.mofanyi.entity.User;
+import com.mofanyi.exception.ErrorCode;
+import com.mofanyi.exception.ThrowUtils;
+import com.mofanyi.mapper.GenerationJobMapper;
+import com.mofanyi.mapper.GenerationOutboxMapper;
+import com.mofanyi.model.dto.job.GenerationJobCreateRequest;
+import com.mofanyi.model.enums.AppVisibilityEnum;
+import com.mofanyi.model.enums.AppGenerateStatusEnum;
+import com.mofanyi.model.enums.ChatMessageTypeEnum;
+import com.mofanyi.model.enums.CodeGenTypeEnum;
+import com.mofanyi.model.enums.GenerationJobStatusEnum;
+import com.mofanyi.model.vo.GenerationJobVO;
+import com.mybatisflex.core.query.QueryWrapper;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DuplicateKeyException;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.time.LocalDateTime;
+import java.util.HexFormat;
+
+/**
+ * 持久化生成任务控制面。数据库是任务真相源，SSE 只读取事件。
+ */
+@Slf4j
+@Service
+public class GenerationJobService {
+
+    public static final String REQUEST_GENERATE = "generate";
+    public static final String STAGE_QUEUED = "QUEUED";
+
+    private final GenerationJobMapper jobMapper;
+    private final GenerationOutboxMapper outboxMapper;
+    private final GenerationJobEventService eventService;
+    private final AppAuthService appAuthService;
+    private final WorkspaceService workspaceService;
+    private final ChatHistoryService chatHistoryService;
+    private final AppService appService;
+    private final AiCodeGeneratorFacade aiCodeGeneratorFacade;
+    private final ReasoningProfileRegistry reasoningProfiles;
+    private final ObjectMapper objectMapper;
+
+    public GenerationJobService(GenerationJobMapper jobMapper,
+                                GenerationOutboxMapper outboxMapper,
+                                GenerationJobEventService eventService,
+                                AppAuthService appAuthService,
+                                WorkspaceService workspaceService,
+                                ChatHistoryService chatHistoryService,
+                                AppService appService,
+                                AiCodeGeneratorFacade aiCodeGeneratorFacade,
+                                ReasoningProfileRegistry reasoningProfiles,
+                                ObjectMapper objectMapper) {
+        this.jobMapper = jobMapper;
+        this.outboxMapper = outboxMapper;
+        this.eventService = eventService;
+        this.appAuthService = appAuthService;
+        this.workspaceService = workspaceService;
+        this.chatHistoryService = chatHistoryService;
+        this.appService = appService;
+        this.aiCodeGeneratorFacade = aiCodeGeneratorFacade;
+        this.reasoningProfiles = reasoningProfiles;
+        this.objectMapper = objectMapper;
+    }
+
+    /**
+     * 创建 Job。相同 appId + Idempotency-Key + 请求摘要返回原 Job。
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public GenerationJobVO create(Long appId, GenerationJobCreateRequest request,
+                                  String idempotencyKey, User loginUser) {
+        ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
+        ThrowUtils.throwIf(request == null, ErrorCode.PARAMS_ERROR);
+        ThrowUtils.throwIf(loginUser == null || loginUser.getId() == null, ErrorCode.NOT_LOGIN_ERROR);
+        ThrowUtils.throwIf(StrUtil.isBlank(request.getMessage()), ErrorCode.PARAMS_ERROR, "用户需求不能为空");
+        ThrowUtils.throwIf(request.getMessage().length() > 50_000,
+                ErrorCode.PARAMS_ERROR, "用户需求过长");
+        ThrowUtils.throwIf(StrUtil.isBlank(idempotencyKey), ErrorCode.PARAMS_ERROR, "Idempotency-Key 不能为空");
+        ThrowUtils.throwIf(idempotencyKey.length() > 128, ErrorCode.PARAMS_ERROR, "Idempotency-Key 过长");
+
+        App app = appAuthService.requireOwner(appId, loginUser);
+        Long workspaceId = app.getWorkspaceId();
+        if (workspaceId == null) {
+            workspaceId = workspaceService.ensureDefaultWorkspace(loginUser).getId();
+        }
+        workspaceService.requireMember(workspaceId, loginUser.getId());
+
+        normalizeRequest(request, app);
+        String requestHash = hashRequest(request);
+        GenerationJob existing = jobMapper.selectOneByQuery(QueryWrapper.create()
+                .eq("appId", appId)
+                .eq("idempotencyKey", idempotencyKey)
+                .limit(1));
+        if (existing != null) {
+            ThrowUtils.throwIf(!requestHash.equals(existing.getRequestHash()),
+                    ErrorCode.PARAMS_ERROR, "同一幂等键不能用于不同请求");
+            return toVO(existing);
+        }
+
+        long activeCount = jobMapper.selectCountByQuery(QueryWrapper.create()
+                .eq("appId", appId)
+                .in("status", GenerationJobStatusEnum.QUEUED.getValue(),
+                        GenerationJobStatusEnum.RUNNING.getValue(),
+                        GenerationJobStatusEnum.WAITING_RETRY.getValue(),
+                        GenerationJobStatusEnum.CANCEL_REQUESTED.getValue()));
+        ThrowUtils.throwIf(activeCount > 0, ErrorCode.OPERATION_ERROR,
+                "该应用已有生成任务，请等待当前任务结束或先取消");
+
+        ChatHistory userMessage = chatHistoryService.saveMessage(appId, loginUser.getId(),
+                request.getMessage(), ChatMessageTypeEnum.USER.getValue(), null);
+        LocalDateTime now = LocalDateTime.now();
+        GenerationJob job = GenerationJob.builder()
+                .workspaceId(workspaceId)
+                .appId(appId)
+                .requestedBy(loginUser.getId())
+                .requestType(REQUEST_GENERATE)
+                .idempotencyKey(idempotencyKey)
+                .requestHash(requestHash)
+                .requestPayload(writeJson(request))
+                .userMessageId(userMessage.getId())
+                .status(GenerationJobStatusEnum.QUEUED.getValue())
+                .currentStage(STAGE_QUEUED)
+                .codeGenType(request.getCodeGenType())
+                .visibility(request.getVisibility())
+                .priority(0)
+                .attempt(0)
+                .maxAttempts(1)
+                .fencingToken(0L)
+                .nextEventSeq(0L)
+                .createTime(now)
+                .updateTime(now)
+                .build();
+        try {
+        ThrowUtils.throwIf(jobMapper.insertSelective(job) == 0 || job.getId() == null,
+                    ErrorCode.OPERATION_ERROR, "创建生成任务失败");
+        } catch (DuplicateKeyException e) {
+            GenerationJob raced = jobMapper.selectOneByQuery(QueryWrapper.create()
+                    .eq("appId", appId)
+                    .eq("idempotencyKey", idempotencyKey)
+                    .limit(1));
+            if (raced != null && requestHash.equals(raced.getRequestHash())) {
+                return toVO(raced);
+            }
+            throw e;
+        }
+
+        GenerationOutbox outbox = GenerationOutbox.builder()
+                .jobId(job.getId())
+                .eventType("DISPATCH")
+                .payload(String.valueOf(job.getId()))
+                .status("PENDING")
+                .retryCount(0)
+                .nextAttemptAt(now)
+                .createTime(now)
+                .updateTime(now)
+                .build();
+        ThrowUtils.throwIf(outboxMapper.insertSelective(outbox) == 0, ErrorCode.OPERATION_ERROR,
+                "创建任务投递记录失败");
+        appService.updateGenerateStatus(appId, AppGenerateStatusEnum.GENERATING.getValue());
+        return toVO(job);
+    }
+
+    public GenerationJob getAuthorized(Long jobId, User loginUser) {
+        ThrowUtils.throwIf(jobId == null || jobId <= 0, ErrorCode.PARAMS_ERROR);
+        ThrowUtils.throwIf(loginUser == null || loginUser.getId() == null, ErrorCode.NOT_LOGIN_ERROR);
+        GenerationJob job = requireJob(jobId);
+        appAuthService.requireOwner(job.getAppId(), loginUser);
+        workspaceService.requireMember(job.getWorkspaceId(), loginUser.getId());
+        return job;
+    }
+
+    public GenerationJobVO getVO(Long jobId, User loginUser) {
+        return toVO(getAuthorized(jobId, loginUser));
+    }
+
+    public GenerationJob requireJob(Long jobId) {
+        ThrowUtils.throwIf(jobId == null || jobId <= 0, ErrorCode.PARAMS_ERROR);
+        GenerationJob job = jobMapper.selectOneById(jobId);
+        ThrowUtils.throwIf(job == null, ErrorCode.NOT_FOUND_ERROR, "生成任务不存在");
+        return job;
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public GenerationJobVO cancel(Long jobId, User loginUser) {
+        GenerationJob job = getAuthorized(jobId, loginUser);
+        if (GenerationJobStatusEnum.isTerminal(job.getStatus())) {
+            return toVO(job);
+        }
+        int queued = jobMapper.cancelQueued(jobId);
+        if (queued == 1) {
+            eventService.append(jobId, "cancelled", "CANCELLED",
+                    java.util.Map.of("message", "用户取消生成"));
+            appService.updateGenerateStatus(job.getAppId(), AppGenerateStatusEnum.STOPPED.getValue());
+        } else {
+            jobMapper.requestCancel(jobId);
+            aiCodeGeneratorFacade.stopGenerate(job.getAppId());
+        }
+        return toVO(requireJob(jobId));
+    }
+
+    public GenerationJob claim(Long jobId, String owner, int leaseSeconds) {
+        ThrowUtils.throwIf(jobId == null || jobId <= 0, ErrorCode.PARAMS_ERROR);
+        ThrowUtils.throwIf(StrUtil.isBlank(owner), ErrorCode.PARAMS_ERROR);
+        int updated = jobMapper.claim(jobId, owner, LocalDateTime.now().plusSeconds(leaseSeconds));
+        if (updated == 0) {
+            GenerationJob current = jobMapper.selectOneById(jobId);
+            if (current != null
+                    && GenerationJobStatusEnum.CANCEL_REQUESTED.getValue().equals(current.getStatus())) {
+                jobMapper.finishCancelRequested(jobId);
+            }
+            return null;
+        }
+        return requireJob(jobId);
+    }
+
+    public boolean renewLease(GenerationJob job, String owner, int leaseSeconds) {
+        if (job == null) {
+            return false;
+        }
+        return jobMapper.renewLease(job.getId(), owner, job.getFencingToken(),
+                LocalDateTime.now().plusSeconds(leaseSeconds)) == 1;
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public boolean finish(GenerationJob job, String status, String stage,
+                          String errorType, String errorMessage) {
+        ThrowUtils.throwIf(job == null, ErrorCode.PARAMS_ERROR);
+        boolean updated = jobMapper.finish(job.getId(), job.getFencingToken(), status, stage,
+                truncate(errorType, 64), truncate(errorMessage, 4000)) == 1;
+        if (updated) {
+            String appStatus = switch (status) {
+                case "SUCCEEDED" -> AppGenerateStatusEnum.DONE.getValue();
+                case "CANCELLED" -> AppGenerateStatusEnum.STOPPED.getValue();
+                default -> AppGenerateStatusEnum.FAILED.getValue();
+            };
+            appService.updateGenerateStatus(job.getAppId(), appStatus);
+        }
+        return updated;
+    }
+
+    public JsonNode parseRequest(GenerationJob job) {
+        ThrowUtils.throwIf(job == null || StrUtil.isBlank(job.getRequestPayload()),
+                ErrorCode.PARAMS_ERROR);
+        try {
+            return objectMapper.readTree(job.getRequestPayload());
+        } catch (Exception e) {
+            throw new IllegalStateException("生成任务请求快照损坏", e);
+        }
+    }
+
+    public GenerationJobCreateRequest readCreateRequest(GenerationJob job) {
+        ThrowUtils.throwIf(job == null || StrUtil.isBlank(job.getRequestPayload()),
+                ErrorCode.PARAMS_ERROR);
+        try {
+            return objectMapper.readValue(job.getRequestPayload(), GenerationJobCreateRequest.class);
+        } catch (Exception e) {
+            throw new IllegalStateException("生成任务请求快照损坏", e);
+        }
+    }
+
+    private void normalizeRequest(GenerationJobCreateRequest request, App app) {
+        request.setRequestType(StrUtil.blankToDefault(request.getRequestType(), REQUEST_GENERATE));
+        ThrowUtils.throwIf(!REQUEST_GENERATE.equals(request.getRequestType()),
+                ErrorCode.PARAMS_ERROR, "当前仅支持 generate 任务");
+        String type = StrUtil.blankToDefault(request.getCodeGenType(), app.getCodeGenType());
+        type = StrUtil.blankToDefault(type, CodeGenTypeEnum.HTML.getValue());
+        ThrowUtils.throwIf(CodeGenTypeEnum.getEnumByValue(type) == null,
+                ErrorCode.PARAMS_ERROR, "不支持的生成类型");
+        request.setCodeGenType(type);
+        request.setReasoningLevel(reasoningProfiles.parseLevel(request.getReasoningLevel()).code());
+        String visibility = StrUtil.blankToDefault(request.getVisibility(),
+                StrUtil.blankToDefault(app.getVisibility(), AppVisibilityEnum.PRIVATE.getValue()));
+        ThrowUtils.throwIf(AppVisibilityEnum.getEnumByValue(visibility) == null,
+                ErrorCode.PARAMS_ERROR, "可见范围不合法");
+        request.setVisibility(visibility);
+    }
+
+    private String hashRequest(GenerationJobCreateRequest request) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(writeJson(request).getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(hash);
+        } catch (Exception e) {
+            throw new IllegalStateException("计算请求摘要失败", e);
+        }
+    }
+
+    private String writeJson(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value);
+        } catch (Exception e) {
+            throw new IllegalStateException("序列化任务请求失败", e);
+        }
+    }
+
+    private String truncate(String text, int maxLength) {
+        return text == null ? null : StrUtil.maxLength(text, maxLength);
+    }
+
+    public GenerationJobVO toVO(GenerationJob job) {
+        ThrowUtils.throwIf(job == null, ErrorCode.PARAMS_ERROR);
+        GenerationJobVO vo = new GenerationJobVO();
+        vo.setJobId(job.getId());
+        vo.setWorkspaceId(job.getWorkspaceId());
+        vo.setAppId(job.getAppId());
+        vo.setRequestedBy(job.getRequestedBy());
+        vo.setRequestType(job.getRequestType());
+        vo.setStatus(job.getStatus());
+        vo.setCurrentStage(job.getCurrentStage());
+        vo.setCodeGenType(job.getCodeGenType());
+        vo.setVisibility(job.getVisibility());
+        vo.setAttempt(job.getAttempt());
+        vo.setMaxAttempts(job.getMaxAttempts());
+        vo.setErrorType(job.getErrorType());
+        vo.setErrorMessage(job.getErrorMessage());
+        vo.setCreateTime(job.getCreateTime());
+        vo.setUpdateTime(job.getUpdateTime());
+        vo.setEventsUrl("/v1/generation-jobs/" + job.getId() + "/events");
+        return vo;
+    }
+}

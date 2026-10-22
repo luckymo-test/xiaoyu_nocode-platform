@@ -33,4 +33,19 @@ public interface AppMapper extends BaseMapper<App> {
     int updateCover(@Param("id") Long id,
                     @Param("cover") String cover,
                     @Param("compressPictures") String compressPictures);
+
+    /**
+     * 仅回收没有活跃持久化 Job 的 generating 遗留状态，避免多实例误伤。
+     */
+    @Update("""
+            update app a
+            set a.generateStatus = 'failed'
+            where a.generateStatus = 'generating'
+              and not exists (
+                  select 1 from generation_job j
+                  where j.appId = a.id
+                    and j.status in ('QUEUED', 'RUNNING', 'WAITING_RETRY', 'CANCEL_REQUESTED')
+              )
+            """)
+    int failStaleGeneratingWithoutActiveJob();
 }

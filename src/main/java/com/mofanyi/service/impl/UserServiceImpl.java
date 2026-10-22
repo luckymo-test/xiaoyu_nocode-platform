@@ -15,8 +15,10 @@ import com.mybatisflex.spring.service.impl.ServiceImpl;
 import com.mofanyi.entity.User;
 import com.mofanyi.mapper.UserMapper;
 import com.mofanyi.service.UserService;
+import com.mofanyi.service.WorkspaceService;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.DigestUtils;
 
 import java.util.ArrayList;
@@ -30,7 +32,15 @@ import java.util.stream.Collectors;
  */
 @Service
 public class UserServiceImpl extends ServiceImpl<UserMapper, User>  implements UserService{
+
+    private final WorkspaceService workspaceService;
+
+    public UserServiceImpl(WorkspaceService workspaceService) {
+        this.workspaceService = workspaceService;
+    }
+
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public long userRegister(String userAccount, String userPassword, String checkPassword) {
         // 1. 校验
         if (StrUtil.hasBlank(userAccount, userPassword, checkPassword)) {
@@ -64,6 +74,7 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User>  implements U
         if (!saveResult) {
             throw new BusinessException(ErrorCode.SYSTEM_ERROR, "注册失败，数据库错误");
         }
+        workspaceService.ensureDefaultWorkspace(user);
         return user.getId();
     }
 

@@ -72,6 +72,15 @@ management:
 
 # 代码生成文件临时目录与部署配置
 codegen:
+  # Phase 1：持久化 Job 执行内核。默认数据库 Outbox，后续可替换 Redis Streams。
+  jobs:
+    worker-id: ${CODEGEN_JOB_WORKER_ID:${HOSTNAME:local-worker}}
+    queue: ${CODEGEN_JOB_QUEUE:db}
+    dispatch-delay-ms: ${CODEGEN_JOB_DISPATCH_DELAY_MS:1000}
+    recovery-delay-ms: ${CODEGEN_JOB_RECOVERY_DELAY_MS:30000}
+    redis:
+      stream: ${CODEGEN_JOB_REDIS_STREAM:codegen:generation-jobs}
+      group: ${CODEGEN_JOB_REDIS_GROUP:generation-workers}
   file:
     tmp-root: ${CODEGEN_TMP_ROOT:D:\IDEAproject\xiaoyu_zerocode\tmp}
     deploy-root: ${CODEGEN_DEPLOY_ROOT:D:\IDEAproject\xiaoyu_zerocode\deploy}

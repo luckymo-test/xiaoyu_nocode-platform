@@ -27,8 +27,10 @@ import com.mofanyi.model.vo.AiCodeGenResultVO;
 import com.mofanyi.model.vo.AppVO;
 import com.mofanyi.service.AppService;
 import com.mofanyi.service.ChatHistoryService;
+import com.mofanyi.service.WorkspaceService;
 import com.mybatisflex.core.logicdelete.LogicDeleteManager;
 import com.mybatisflex.core.paginate.Page;
+import com.mybatisflex.core.constant.SqlOperator;
 import com.mybatisflex.core.query.QueryColumn;
 import com.mybatisflex.core.query.QueryCondition;
 import com.mybatisflex.core.query.QueryWrapper;
@@ -77,6 +79,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
 
     private final AppImageMapper appImageMapper;
     private final AppAuthService appAuthService;
+    private final WorkspaceService workspaceService;
 
     public AppServiceImpl(CodeFileWriteService codeFileWriteService,
                           ChatHistoryService chatHistoryService,
@@ -84,7 +87,8 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
                           VueBuildService vueBuildService,
                           CoverImageService coverImageService,
                           AppImageMapper appImageMapper,
-                          AppAuthService appAuthService) {
+                          AppAuthService appAuthService,
+                          WorkspaceService workspaceService) {
         this.codeFileWriteService = codeFileWriteService;
         this.chatHistoryService = chatHistoryService;
         this.redisChatMemoryRepository = redisChatMemoryRepository;
@@ -92,6 +96,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         this.coverImageService = coverImageService;
         this.appImageMapper = appImageMapper;
         this.appAuthService = appAuthService;
+        this.workspaceService = workspaceService;
     }
 
     @Override
@@ -292,11 +297,8 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
 
     @Override
     public int failStaleGenerating() {
-        App update = new App();
-        update.setGenerateStatus(AppGenerateStatusEnum.FAILED.getValue());
-        // 逻辑删除过滤默认生效，只回收未删除的记录；单实例下启动时任务表必为空，故全部 generating 都是僵尸
-        return this.mapper.updateByQuery(update,
-                QueryWrapper.create().eq("generateStatus", AppGenerateStatusEnum.GENERATING.getValue()));
+        // 有持久化 Job 的任务可能在其它实例继续运行，不能再按“启动时本地任务表为空”批量误杀。
+        return this.mapper.failStaleGeneratingWithoutActiveJob();
     }
 
     @Override
@@ -385,9 +387,10 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         App app = new App();
         BeanUtil.copyProperties(appAddRequest, app);
         app.setUserId(loginUser.getId());
+        app.setWorkspaceId(workspaceService.ensureDefaultWorkspace(loginUser).getId());
         // 默认值：公开、未生成、未申请精选
         if (StrUtil.isBlank(app.getVisibility())) {
-            app.setVisibility(AppVisibilityEnum.PUBLIC.getValue());
+            app.setVisibility(AppVisibilityEnum.PRIVATE.getValue());
         }
         app.setGenerateStatus(AppGenerateStatusEnum.NOT_GENERATED.getValue());
         app.setFeaturedStatus(AppFeaturedStatusEnum.NONE.getValue());
@@ -620,11 +623,11 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         // 多维度搜索：名称/描述/标签任一命中
         if (StrUtil.isNotBlank(searchText)) {
             QueryCondition nameCond = QueryCondition.create(new QueryColumn("appName"),
-                    "like", "%" + searchText + "%");
+                    SqlOperator.LIKE, "%" + searchText + "%");
             QueryCondition descCond = QueryCondition.create(new QueryColumn("description"),
-                    "like", "%" + searchText + "%");
+                    SqlOperator.LIKE, "%" + searchText + "%");
             QueryCondition tagsCond = QueryCondition.create(new QueryColumn("tags"),
-                    "like", "%" + searchText + "%");
+                    SqlOperator.LIKE, "%" + searchText + "%");
             queryWrapper.and(nameCond.or(descCond).or(tagsCond));
         }
         return queryWrapper;

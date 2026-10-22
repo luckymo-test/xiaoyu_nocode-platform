@@ -1,7 +1,7 @@
 # 计划书：零代码生成平台可扩展架构重构
 
 > 日期：2026-10-22
-> 状态：方案设计，未开始实施
+> 状态：Phase 0 数据契约部分 + Phase 1 已实施；Phase 2 及其后尚未开始
 > 目标：在不推翻现有 Agent、记忆、图片和验证能力的前提下，把平台从“单实例同步生成器”演进为
 > **任务可恢复、产物可追踪、运行时可选、模板可组合、Worker 可横向扩展**的生成平台。
 
@@ -1167,6 +1167,10 @@ jobId  attempt  stage  revision
 
 ### Phase 0：基线与契约（1～2 天）
 
+> 实施状态（2026-10-22）：默认个人 Workspace、WorkspaceMember、App.workspaceId、
+> 资源 visibility 和 Job 领域契约已落地。20 条固定 prompt 的评估集与基线报告尚未完成，
+> 因此 Phase 0 只能视为“数据契约部分完成”。
+
 #### 目标
 
 不改变运行行为，确定新边界。
@@ -1195,6 +1199,8 @@ codegen.artifacts.versioned=false
 - 基线报告落盘。
 
 ### Phase 1：持久化 Job + SSE 事件视图（4～6 天）
+
+> 实施状态（2026-10-22）：已完成首版端到端闭环，见文末“二十六、本轮实施记录”。
 
 #### 目标
 
@@ -1800,3 +1806,35 @@ Cross-workspace Marketplace
 Playwright、视觉评估和强沙箱应贯穿 Phase 2 之后，作为持续增强能力，不等待社区阶段。
 
 这条路线能持续交付，而不是先重写成一套“看起来先进但暂时不能上线”的新平台。
+
+---
+
+## 二十六、本轮实施记录（2026-10-22）
+
+### 已落地
+
+- Flyway V3：`workspace`、`workspace_member`、`generation_job`、
+  `generation_job_event`、`generation_outbox`；已有用户/应用完成默认工作区回填。
+- `generation_job.activeLockKey` 使用 MySQL 生成列 + 唯一索引，在数据库层阻止同一 App
+  同时存在多个活跃 Job；不再依赖单实例 `ConcurrentHashMap` 作为最终互斥真相。
+- 新 API：`POST /v1/apps/{appId}/generation-jobs`、`GET /v1/generation-jobs/{jobId}`、
+  `GET /v1/generation-jobs/{jobId}/events`、`POST /v1/generation-jobs/{jobId}/cancel`。
+- `Idempotency-Key + requestHash`：相同请求返回同一 Job，不同请求复用同一键会被拒绝。
+- JobEvent 按 Job 内 `seq` 单调追加；SSE 支持 `after` 与 `Last-Event-ID` 重放。
+- 旧 `/ai/chat/stream`、`/ai/chat/multi/stream`、`/ai/chat/vue/stream` 已改为兼容适配器：
+  先创建/复用 Job，再把 JobEvent 映射为原 `agent_progress/reasoning/done/error` 事件。
+- 前端生成入口已切到 `POST Job + GET events`，不再用有副作用的 GET 直接驱动 Agent。
+- 现有 `AiCodeGeneratorFacade` 被包装为首个 Job Runner；AgentToolLoop、记忆、图片、
+  验证和修复链路未重写。
+- 默认使用事务 Outbox 表队列；设置 `codegen.jobs.queue=redis` 可切换到
+  MySQL Outbox Relay + Redis Streams Consumer Group。
+- Job 租约、心跳、fencingToken、过期租约重入队与 Outbox `DISPATCHING` 恢复已具备首版。
+
+### 明确边界
+
+- 源码仍写入当前 live 工程目录；隔离 Workspace、Revision、Artifact Graph 与原子发布属于 Phase 2。
+- 当前取消是单实例协作取消；跨实例取消能够阻止 Job 终态被错误写成成功，但旧实例上的
+  模型调用仍需等阶段边界退出，完整的分布式取消随 Lease/Quota 阶段加强。
+- SSE 已可重放，但前端尚未提供独立的 Job 历史面板与按 Job 手动恢复选择。
+- 本轮完成编译、前端构建、79 个默认测试和 MySQL 5.7 实际迁移/持久化探针；
+  20 条固定 prompt 的质量基线仍未建立。

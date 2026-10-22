@@ -1,4 +1,133 @@
 import { createSseConnection, type SseCallbacks, type SseConnection } from '@/utils/sse'
+import { BASE_URL } from '@/request'
+
+interface GenerationJobVO {
+  jobId: string
+  status: string
+  eventsUrl: string
+}
+
+interface BaseResponse<T> {
+  code: number
+  data: T
+  message: string
+}
+
+function newIdempotencyKey(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return `job-${Date.now()}-${Math.random().toString(36).slice(2)}`
+}
+
+/**
+ * 创建持久化 Job 后订阅只读事件。
+ * EventSource 自动重连会携带 Last-Event-ID，服务端从下一个 seq 重放。
+ */
+function streamGenerationJob(
+  appId: number | string,
+  message: string | undefined,
+  codeGenType: 'html' | 'multi_file' | 'vue',
+  callbacks: SseCallbacks,
+  reasoningLevel: string,
+): SseConnection {
+  let closed = false
+  let eventSource: EventSource | null = null
+
+  const close = () => {
+    if (closed) return
+    closed = true
+    eventSource?.close()
+    callbacks.onClose?.()
+  }
+
+  void (async () => {
+    try {
+      const response = await fetch(`${BASE_URL}/v1/apps/${appId}/generation-jobs`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          'Idempotency-Key': newIdempotencyKey(),
+        },
+        body: JSON.stringify({
+          message: message ?? '你好，请简单介绍一下你自己',
+          reasoningLevel,
+          codeGenType,
+          requestType: 'generate',
+        }),
+      })
+      const body = (await response.json()) as BaseResponse<GenerationJobVO>
+      if (!response.ok || body.code !== 0 || !body.data) {
+        callbacks.onError?.(body.message || `创建生成任务失败（HTTP ${response.status}）`)
+        close()
+        return
+      }
+      if (closed) return
+
+      const job = body.data
+      eventSource = new EventSource(`${BASE_URL}${job.eventsUrl}`, { withCredentials: true })
+      eventSource.onopen = () => callbacks.onOpen?.()
+
+      eventSource.addEventListener('progress', (event) => {
+        const value = parsePayload(event)
+        callbacks.onAgentProgress?.(
+          typeof value === 'string' ? value : JSON.stringify(value),
+        )
+      })
+      eventSource.addEventListener('reasoning', (event) => {
+        const value = parsePayload(event)
+        callbacks.onReasoning?.(typeof value === 'string' ? value : String(value ?? ''))
+      })
+      eventSource.addEventListener('completed', (event) => {
+        const result = parsePayload(event) as API.AiCodeGenResultVO
+        callbacks.onDone?.(result)
+        close()
+      })
+      eventSource.addEventListener('failed', (event) => {
+        const payload = parsePayload(event) as { message?: string } | string
+        callbacks.onError?.(
+          typeof payload === 'string' ? payload : payload?.message || '生成失败',
+        )
+        close()
+      })
+      eventSource.addEventListener('cancelled', (event) => {
+        const payload = parsePayload(event) as { message?: string } | string
+        callbacks.onError?.(
+          typeof payload === 'string' ? payload : payload?.message || '用户取消生成',
+        )
+        close()
+      })
+      eventSource.onerror = () => {
+        // 只读事件接口没有副作用，浏览器原生重连比重新创建 Job 更安全。
+        if (eventSource?.readyState === EventSource.CLOSED && !closed) {
+          callbacks.onConnectionLost?.()
+          close()
+        }
+      }
+    } catch (error) {
+      const messageText = error instanceof Error ? error.message : '创建生成任务失败'
+      callbacks.onError?.(messageText)
+      close()
+    }
+  })()
+
+  return {
+    close,
+    get readyState() {
+      return eventSource?.readyState ?? EventSource.CONNECTING
+    },
+  }
+}
+
+function parsePayload(event: Event): unknown {
+  const data = (event as MessageEvent).data
+  try {
+    return JSON.parse(data)
+  } catch {
+    return data
+  }
+}
 
 /**
  * 流式生成单文件 HTML 项目
@@ -12,15 +141,7 @@ export function streamGenerateHtmlProject(
   callbacks: SseCallbacks,
   reasoningLevel = 'standard',
 ): SseConnection {
-  return createSseConnection(
-    '/ai/chat/stream',
-    {
-      appId,
-      message: message ?? '你好，请简单介绍一下你自己',
-      reasoningLevel,
-    },
-    callbacks,
-  )
+  return streamGenerationJob(appId, message, 'html', callbacks, reasoningLevel)
 }
 
 /**
@@ -35,15 +156,7 @@ export function streamGenerateMultiFileProject(
   callbacks: SseCallbacks,
   reasoningLevel = 'standard',
 ): SseConnection {
-  return createSseConnection(
-    '/ai/chat/multi/stream',
-    {
-      appId,
-      message: message ?? '你好，请简单介绍一下你自己',
-      reasoningLevel,
-    },
-    callbacks,
-  )
+  return streamGenerationJob(appId, message, 'multi_file', callbacks, reasoningLevel)
 }
 
 /**
@@ -57,15 +170,7 @@ export function streamGenerateVueProject(
   callbacks: SseCallbacks,
   reasoningLevel = 'standard',
 ): SseConnection {
-  return createSseConnection(
-    '/ai/chat/vue/stream',
-    {
-      appId,
-      message: message ?? '你好，请简单介绍一下你自己',
-      reasoningLevel,
-    },
-    callbacks,
-  )
+  return streamGenerationJob(appId, message, 'vue', callbacks, reasoningLevel)
 }
 
 /**

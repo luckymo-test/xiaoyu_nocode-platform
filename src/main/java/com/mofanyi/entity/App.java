@@ -116,6 +116,12 @@ public class App implements Serializable {
     private Long userId;
 
     /**
+     * 所属工作区 id
+     */
+    @Column("workspaceId")
+    private Long workspaceId;
+
+    /**
      * 编辑时间
      */
     @Column("editTime")

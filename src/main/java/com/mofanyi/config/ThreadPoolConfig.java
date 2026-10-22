@@ -12,6 +12,7 @@ import java.util.concurrent.RejectedExecutionHandler;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -63,6 +64,31 @@ public class ThreadPoolConfig {
     @Bean(destroyMethod = "close")
     public ExecutorService renderFixExecutor() {
         return Executors.newVirtualThreadPerTaskExecutor();
+    }
+
+    /**
+     * Job 执行与 SSE 读取均为阻塞型长任务，使用虚拟线程，避免耗尽 Tomcat/平台线程。
+     */
+    @Bean(destroyMethod = "close")
+    public ExecutorService jobExecutionExecutor() {
+        return Executors.newVirtualThreadPerTaskExecutor();
+    }
+
+    @Bean(destroyMethod = "close")
+    public ExecutorService jobStreamExecutor() {
+        return Executors.newVirtualThreadPerTaskExecutor();
+    }
+
+    /**
+     * 单个平台调度线程用于任务租约心跳；实际执行仍在虚拟线程 Runner 中。
+     */
+    @Bean(destroyMethod = "shutdownNow")
+    public ScheduledExecutorService jobHeartbeatExecutor() {
+        return Executors.newSingleThreadScheduledExecutor(task -> {
+            Thread thread = new Thread(task, "job-lease-heartbeat");
+            thread.setDaemon(true);
+            return thread;
+        });
     }
 
     private ThreadPoolExecutor buildExecutor(int core, int max, int keepAliveSeconds, int queueCapacity,

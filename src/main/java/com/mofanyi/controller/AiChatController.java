@@ -1,6 +1,7 @@
 package com.mofanyi.controller;
 
 import cn.hutool.core.util.StrUtil;
+import cn.hutool.crypto.digest.DigestUtil;
 import com.mofanyi.ai.reasoning.ReasoningLevel;
 import com.mofanyi.ai.reasoning.ReasoningProfileRegistry;
 import com.mofanyi.common.BaseResponse;
@@ -14,10 +15,14 @@ import com.mofanyi.exception.ErrorCode;
 import com.mofanyi.exception.ThrowUtils;
 import com.mofanyi.model.enums.ChatMessageTypeEnum;
 import com.mofanyi.model.enums.CodeGenTypeEnum;
+import com.mofanyi.model.dto.job.GenerationJobCreateRequest;
 import com.mofanyi.model.vo.AiCodeGenResultVO;
+import com.mofanyi.model.vo.GenerationJobVO;
 import com.mofanyi.service.AppAuthService;
 import com.mofanyi.service.ChatHistoryService;
 import com.mofanyi.service.UserService;
+import com.mofanyi.service.GenerationJobService;
+import com.mofanyi.service.GenerationJobSseService;
 import jakarta.annotation.PreDestroy;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.extern.slf4j.Slf4j;
@@ -27,6 +32,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
@@ -50,6 +56,8 @@ public class AiChatController {
     private final AppAuthService appAuthService;
     private final ChatHistoryService chatHistoryService;
     private final ReasoningProfileRegistry reasoningProfiles;
+    private final GenerationJobService generationJobService;
+    private final GenerationJobSseService generationJobSseService;
     private final ScheduledExecutorService sseHeartbeatExecutor =
             Executors.newSingleThreadScheduledExecutor(task -> {
                 Thread thread = new Thread(task, "sse-heartbeat");
@@ -61,12 +69,16 @@ public class AiChatController {
                             UserService userService,
                             AppAuthService appAuthService,
                             ChatHistoryService chatHistoryService,
-                            ReasoningProfileRegistry reasoningProfiles) {
+                            ReasoningProfileRegistry reasoningProfiles,
+                            GenerationJobService generationJobService,
+                            GenerationJobSseService generationJobSseService) {
         this.aiCodeGeneratorFacade = aiCodeGeneratorFacade;
         this.userService = userService;
         this.appAuthService = appAuthService;
         this.chatHistoryService = chatHistoryService;
         this.reasoningProfiles = reasoningProfiles;
+        this.generationJobService = generationJobService;
+        this.generationJobSseService = generationJobSseService;
     }
 
     @GetMapping("/chat")
@@ -107,44 +119,24 @@ public class AiChatController {
     public SseEmitter chatStream(@RequestParam Long appId,
                                  @RequestParam(defaultValue = "你好，请简单介绍一下你自己") String message,
                                  @RequestParam(defaultValue = "standard") String reasoningLevel,
+                                 @RequestParam(required = false) String idempotencyKey,
+                                 @RequestParam(defaultValue = "0") long after,
+                                 @RequestHeader(value = "Last-Event-ID", required = false) String lastEventId,
                                  HttpServletRequest request) {
-        ChatHistory userMsg = saveUserMessage(appId, message, request);
-        return startSse(appId, userMsg, emitter ->
-                aiCodeGeneratorFacade.streamGenerate(CodeGenTypeEnum.HTML, message, appId, new StreamCallback(
-                        token -> send(emitter, "agent_progress", token),
-                        reasoning -> send(emitter, "reasoning", reasoning),
-                        vo -> {
-                            send(emitter, "done", vo);
-                            emitter.complete();
-                            saveAssistantMessage(appId, userMsg, vo);
-                        },
-                        error -> {
-                            send(emitter, "error", errorMessage(error));
-                            emitter.complete();
-                            saveErrorMessage(appId, userMsg, error);
-                        }), parseReasoningLevel(reasoningLevel)));
+        return startGenerationJobSse(CodeGenTypeEnum.HTML, appId, message, reasoningLevel,
+                idempotencyKey, after, lastEventId, request);
     }
 
     @GetMapping(value = "/chat/multi/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter chatMultiStream(@RequestParam Long appId,
                                       @RequestParam(defaultValue = "你好，请简单介绍一下你自己") String message,
                                       @RequestParam(defaultValue = "standard") String reasoningLevel,
+                                      @RequestParam(required = false) String idempotencyKey,
+                                      @RequestParam(defaultValue = "0") long after,
+                                      @RequestHeader(value = "Last-Event-ID", required = false) String lastEventId,
                                       HttpServletRequest request) {
-        ChatHistory userMsg = saveUserMessage(appId, message, request);
-        return startSse(appId, userMsg, emitter ->
-                aiCodeGeneratorFacade.streamGenerate(CodeGenTypeEnum.MULTI_FILE, message, appId, new StreamCallback(
-                        token -> send(emitter, "agent_progress", token),
-                        reasoning -> send(emitter, "reasoning", reasoning),
-                        vo -> {
-                            send(emitter, "done", vo);
-                            emitter.complete();
-                            saveAssistantMessage(appId, userMsg, vo);
-                        },
-                        error -> {
-                            send(emitter, "error", errorMessage(error));
-                            emitter.complete();
-                            saveErrorMessage(appId, userMsg, error);
-                        }), parseReasoningLevel(reasoningLevel)));
+        return startGenerationJobSse(CodeGenTypeEnum.MULTI_FILE, appId, message, reasoningLevel,
+                idempotencyKey, after, lastEventId, request);
     }
 
     @GetMapping("/chat/vue")
@@ -172,22 +164,12 @@ public class AiChatController {
     public SseEmitter chatVueStream(@RequestParam Long appId,
                                     @RequestParam(defaultValue = "你好，请简单介绍一下你自己") String message,
                                     @RequestParam(defaultValue = "standard") String reasoningLevel,
+                                    @RequestParam(required = false) String idempotencyKey,
+                                    @RequestParam(defaultValue = "0") long after,
+                                    @RequestHeader(value = "Last-Event-ID", required = false) String lastEventId,
                                     HttpServletRequest request) {
-        ChatHistory userMsg = saveUserMessage(appId, message, request);
-        return startSse(appId, userMsg, emitter ->
-                aiCodeGeneratorFacade.streamGenerate(CodeGenTypeEnum.VUE, message, appId, new StreamCallback(
-                        token -> send(emitter, "agent_progress", token),
-                        reasoning -> send(emitter, "reasoning", reasoning),
-                        vo -> {
-                            send(emitter, "done", vo);
-                            emitter.complete();
-                            saveAssistantMessage(appId, userMsg, vo);
-                        },
-                        error -> {
-                            send(emitter, "error", errorMessage(error));
-                            emitter.complete();
-                            saveErrorMessage(appId, userMsg, error);
-                        }), parseReasoningLevel(reasoningLevel)));
+        return startGenerationJobSse(CodeGenTypeEnum.VUE, appId, message, reasoningLevel,
+                idempotencyKey, after, lastEventId, request);
     }
 
     /**
@@ -343,6 +325,61 @@ public class AiChatController {
 
     private ReasoningLevel parseReasoningLevel(String value) {
         return reasoningProfiles.parseLevel(value);
+    }
+
+    /**
+     * 旧 SSE 兼容层：先创建/复用持久化 Job，再读取只读 JobEvent。
+     * EventSource 不能发送自定义 Header，因此旧接口从 query 接收幂等键。
+     */
+    private SseEmitter startGenerationJobSse(CodeGenTypeEnum type,
+                                             Long appId,
+                                             String message,
+                                             String reasoningLevel,
+                                             String idempotencyKey,
+                                             long after,
+                                             String lastEventId,
+                                             HttpServletRequest request) {
+        SseEmitter errorEmitter = newSseEmitter();
+        try {
+            User loginUser = userService.getLoginUser(request);
+            GenerationJobCreateRequest jobRequest = new GenerationJobCreateRequest();
+            jobRequest.setMessage(message);
+            jobRequest.setReasoningLevel(reasoningLevel);
+            jobRequest.setCodeGenType(type.getValue());
+            jobRequest.setRequestType(GenerationJobService.REQUEST_GENERATE);
+            String key = StrUtil.isNotBlank(idempotencyKey)
+                    ? idempotencyKey
+                    : legacyIdempotencyKey(appId, type, message, reasoningLevel);
+            GenerationJobVO job = generationJobService.create(appId, jobRequest, key, loginUser);
+            long cursor = Math.max(after, parseEventSequence(lastEventId));
+            return generationJobSseService.open(job.getJobId(), cursor, true);
+        } catch (RuntimeException e) {
+            send(errorEmitter, "error", errorMessage(e));
+            errorEmitter.complete();
+            return errorEmitter;
+        }
+    }
+
+    /**
+     * 兼容未升级客户端：同一 5 分钟窗口内，同请求的 EventSource 自动重连会命中同一个 Job。
+     */
+    private String legacyIdempotencyKey(Long appId, CodeGenTypeEnum type,
+                                        String message, String reasoningLevel) {
+        long bucket = System.currentTimeMillis() / 300_000L;
+        String digest = DigestUtil.sha256Hex(String.valueOf(appId) + "|" + type.getValue() + "|"
+                + message + "|" + reasoningLevel);
+        return "legacy-" + bucket + "-" + digest.substring(0, 24);
+    }
+
+    private long parseEventSequence(String value) {
+        if (StrUtil.isBlank(value)) {
+            return 0;
+        }
+        try {
+            return Math.max(0, Long.parseLong(value));
+        } catch (NumberFormatException ignored) {
+            return 0;
+        }
     }
 
     /**

@@ -87,6 +87,11 @@ public class AppVO implements Serializable {
     private Long userId;
 
     /**
+     * 所属工作区 id
+     */
+    private Long workspaceId;
+
+    /**
      * 创建时间
      */
     private LocalDateTime createTime;
