@@ -14,6 +14,7 @@ import com.mofanyi.job.GenerationJobQueue;
 import com.mofanyi.runtime.StackProfileRegistry;
 import com.mofanyi.template.TemplateRegistry;
 import com.mofanyi.template.TemplateBundle;
+import com.mofanyi.skill.SkillRegistry;
 import com.mofanyi.model.dto.job.GenerationJobCreateRequest;
 import com.mofanyi.model.vo.GenerationJobVO;
 import org.junit.jupiter.api.BeforeEach;
@@ -70,6 +71,7 @@ class GenerationJobServiceTest {
                 mock(GenerationDeadLetterMapper.class),
                 new StackProfileRegistry(),
                 templateRegistry,
+                new SkillRegistry(),
                 new ObjectMapper());
 
         user = new User();

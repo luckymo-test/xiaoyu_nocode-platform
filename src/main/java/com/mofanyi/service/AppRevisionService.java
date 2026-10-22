@@ -101,6 +101,7 @@ public class AppRevisionService {
                 .templateBundleId(job.getTemplateBundleId())
                 .templateVersion(job.getTemplateVersion())
                 .templateHash(job.getTemplateHash())
+                .skillsJson(job.getSkillsJson())
                 .sourceUri("pending://" + job.getId())
                 .validationStatus(validationStatus)
                 .createdBy(job.getRequestedBy())
@@ -307,6 +308,13 @@ public class AppRevisionService {
                     "version", revision.getTemplateVersion(),
                     "hash", revision.getTemplateHash()));
         }
+        if (StrUtil.isNotBlank(revision.getSkillsJson())) {
+            try {
+                manifest.put("skills", objectMapper.readValue(revision.getSkillsJson(), List.class));
+            } catch (Exception ignored) {
+                manifest.put("skills", List.of());
+            }
+        }
         String validation = revision.getValidationStatus();
         manifest.put("status", "ok".equals(validation) || "NOT_APPLICABLE".equals(validation)
                 || "fixed".equals(validation) ? "VALIDATED" : "PUBLISHED_WITH_WARNINGS");
@@ -431,6 +439,7 @@ public class AppRevisionService {
         vo.setTemplateBundleId(revision.getTemplateBundleId());
         vo.setTemplateVersion(revision.getTemplateVersion());
         vo.setTemplateHash(revision.getTemplateHash());
+        vo.setSkillIds(readSkillIds(revision.getSkillsJson()));
         vo.setSourceUri(revision.getSourceUri());
         vo.setValidationStatus(revision.getValidationStatus());
         vo.setCreatedBy(revision.getCreatedBy());
@@ -465,6 +474,18 @@ public class AppRevisionService {
             return hashes;
         } catch (IOException e) {
             throw new IllegalStateException("读取版本文件树失败: " + root, e);
+        }
+    }
+
+    private List<String> readSkillIds(String json) {
+        if (StrUtil.isBlank(json)) {
+            return List.of();
+        }
+        try {
+            return objectMapper.readValue(json,
+                    objectMapper.getTypeFactory().constructCollectionType(List.class, String.class));
+        } catch (Exception e) {
+            return List.of();
         }
     }
 }

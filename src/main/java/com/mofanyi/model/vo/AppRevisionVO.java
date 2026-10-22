@@ -22,6 +22,7 @@ public class AppRevisionVO implements Serializable {
     private String templateBundleId;
     private String templateVersion;
     private String templateHash;
+    private List<String> skillIds = new ArrayList<>();
     private String sourceUri;
     private String validationStatus;
     private Long createdBy;

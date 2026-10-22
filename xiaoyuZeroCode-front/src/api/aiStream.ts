@@ -56,6 +56,7 @@ function streamGenerationJob(
           codeGenType,
           stackProfileId: 'auto',
           templateHint: 'auto',
+          skills: [],
           requestType: 'generate',
         }),
       })

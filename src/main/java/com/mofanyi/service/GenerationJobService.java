@@ -20,6 +20,8 @@ import com.mofanyi.runtime.StackProfileRegistry;
 import com.mofanyi.runtime.StackProfile;
 import com.mofanyi.template.TemplateRegistry;
 import com.mofanyi.template.TemplateBundle;
+import com.mofanyi.skill.SkillRegistry;
+import com.mofanyi.skill.SkillDefinition;
 import com.mofanyi.model.dto.job.GenerationJobCreateRequest;
 import com.mofanyi.model.enums.AppVisibilityEnum;
 import com.mofanyi.model.enums.AppGenerateStatusEnum;
@@ -38,6 +40,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.LocalDateTime;
 import java.util.HexFormat;
+import java.util.List;
 
 /**
  * 持久化生成任务控制面。数据库是任务真相源，SSE 只读取事件。
@@ -63,6 +66,7 @@ public class GenerationJobService {
     private final GenerationDeadLetterMapper deadLetterMapper;
     private final StackProfileRegistry stackProfiles;
     private final TemplateRegistry templateRegistry;
+    private final SkillRegistry skillRegistry;
 
     @Value("${codegen.jobs.max-attempts:3}")
     private int maxAttempts;
@@ -86,6 +90,7 @@ public class GenerationJobService {
                                 GenerationDeadLetterMapper deadLetterMapper,
                                 StackProfileRegistry stackProfiles,
                                 TemplateRegistry templateRegistry,
+                                SkillRegistry skillRegistry,
                                 ObjectMapper objectMapper) {
         this.jobMapper = jobMapper;
         this.outboxMapper = outboxMapper;
@@ -100,6 +105,7 @@ public class GenerationJobService {
         this.deadLetterMapper = deadLetterMapper;
         this.stackProfiles = stackProfiles;
         this.templateRegistry = templateRegistry;
+        this.skillRegistry = skillRegistry;
         this.objectMapper = objectMapper;
     }
 
@@ -179,6 +185,7 @@ public class GenerationJobService {
                 .templateBundleId(request.getTemplateBundleId())
                 .templateVersion(request.getTemplateVersion())
                 .templateHash(request.getTemplateHash())
+                .skillsJson(writeJson(request.getSkills()))
                 .visibility(request.getVisibility())
                 .baseRevisionId(app.getCurrentRevision())
                 .priority(0)
@@ -371,6 +378,8 @@ public class GenerationJobService {
         request.setTemplateBundleId(template.id());
         request.setTemplateVersion(template.version());
         request.setTemplateHash(template.effectiveHash());
+        List<SkillDefinition> skills = skillRegistry.resolve(request.getSkills(), profile.id());
+        request.setSkills(skills.stream().map(SkillDefinition::id).toList());
         request.setReasoningLevel(reasoningProfiles.parseLevel(request.getReasoningLevel()).code());
         String visibility = StrUtil.blankToDefault(request.getVisibility(),
                 StrUtil.blankToDefault(app.getVisibility(), AppVisibilityEnum.PRIVATE.getValue()));
@@ -416,6 +425,7 @@ public class GenerationJobService {
         vo.setTemplateBundleId(job.getTemplateBundleId());
         vo.setTemplateVersion(job.getTemplateVersion());
         vo.setTemplateHash(job.getTemplateHash());
+        vo.setSkillIds(readSkillIds(job.getSkillsJson()));
         vo.setVisibility(job.getVisibility());
         vo.setAttempt(job.getAttempt());
         vo.setMaxAttempts(job.getMaxAttempts());
@@ -425,5 +435,17 @@ public class GenerationJobService {
         vo.setUpdateTime(job.getUpdateTime());
         vo.setEventsUrl("/v1/generation-jobs/" + job.getId() + "/events");
         return vo;
+    }
+
+    public List<String> readSkillIds(String skillsJson) {
+        if (StrUtil.isBlank(skillsJson)) {
+            return List.of();
+        }
+        try {
+            return objectMapper.readValue(skillsJson,
+                    objectMapper.getTypeFactory().constructCollectionType(List.class, String.class));
+        } catch (Exception e) {
+            return List.of();
+        }
     }
 }

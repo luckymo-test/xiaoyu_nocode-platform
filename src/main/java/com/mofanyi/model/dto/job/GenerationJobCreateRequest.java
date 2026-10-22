@@ -3,6 +3,8 @@ package com.mofanyi.model.dto.job;
 import lombok.Data;
 
 import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * 创建生成任务请求。当前先兼容 HTML / MultiFile / Vue，后续由 StackProfile 扩展。
@@ -18,6 +20,7 @@ public class GenerationJobCreateRequest implements Serializable {
     private String templateBundleId;
     private String templateVersion;
     private String templateHash;
+    private List<String> skills = new ArrayList<>();
     private String requestType;
     private String visibility;
 

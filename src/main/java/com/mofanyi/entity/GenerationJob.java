@@ -71,6 +71,9 @@ public class GenerationJob implements Serializable {
     @Column("templateHash")
     private String templateHash;
 
+    @Column("skillsJson")
+    private String skillsJson;
+
     @Column("baseRevisionId")
     private Long baseRevisionId;
 

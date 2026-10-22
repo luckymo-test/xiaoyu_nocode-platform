@@ -56,6 +56,9 @@ public class AppRevision implements Serializable {
     @Column("templateHash")
     private String templateHash;
 
+    @Column("skillsJson")
+    private String skillsJson;
+
     @Column("sourceUri")
     private String sourceUri;
 

@@ -4,6 +4,8 @@ import lombok.Data;
 
 import java.io.Serializable;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 
 @Data
 public class GenerationJobVO implements Serializable {
@@ -20,6 +22,7 @@ public class GenerationJobVO implements Serializable {
     private String templateBundleId;
     private String templateVersion;
     private String templateHash;
+    private List<String> skillIds = new ArrayList<>();
     private String visibility;
     private Integer attempt;
     private Integer maxAttempts;

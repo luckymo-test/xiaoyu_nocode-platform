@@ -15,6 +15,7 @@ import com.mofanyi.exception.ThrowUtils;
 import com.mofanyi.model.enums.CodeGenTypeEnum;
 import com.mofanyi.service.ManualEditService;
 import com.mofanyi.template.TemplatePromptService;
+import com.mofanyi.skill.SkillPromptService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
@@ -50,6 +51,7 @@ public class VueProjectAgent {
     private final ImageMaterialPlanner imageMaterialPlanner;
     private final com.mofanyi.mapper.AppImageMapper appImageMapper;
     private final TemplatePromptService templatePromptService;
+    private final SkillPromptService skillPromptService;
 
     public VueProjectAgent(CodeGenPromptRegistry promptRegistry,
                            AgentToolLoop agentToolLoop,
@@ -61,7 +63,8 @@ public class VueProjectAgent {
                            ProjectCodeScanner projectCodeScanner,
                            ImageMaterialPlanner imageMaterialPlanner,
                            com.mofanyi.mapper.AppImageMapper appImageMapper,
-                           TemplatePromptService templatePromptService) {
+                           TemplatePromptService templatePromptService,
+                           SkillPromptService skillPromptService) {
         this.promptRegistry = promptRegistry;
         this.agentToolLoop = agentToolLoop;
         this.siteRepairAgent = siteRepairAgent;
@@ -73,6 +76,7 @@ public class VueProjectAgent {
         this.imageMaterialPlanner = imageMaterialPlanner;
         this.appImageMapper = appImageMapper;
         this.templatePromptService = templatePromptService;
+        this.skillPromptService = skillPromptService;
     }
 
     /**
@@ -132,6 +136,10 @@ public class VueProjectAgent {
         String templateSection = templatePromptService.buildSection(appId);
         if (StrUtil.isNotBlank(templateSection)) {
             messages.add(new SystemMessage(templateSection));
+        }
+        String skillSection = skillPromptService.buildSection(appId);
+        if (StrUtil.isNotBlank(skillSection)) {
+            messages.add(new SystemMessage(skillSection));
         }
         // 注入"应用现状"（规格摘要 + 代码库索引）：续接任务时模型需要的是应用现状，而非聊天原文
         String specSection = appSpecService.buildSpecSection(type, appId);

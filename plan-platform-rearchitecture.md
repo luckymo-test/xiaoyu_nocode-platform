@@ -1169,7 +1169,8 @@ jobId  attempt  stage  revision
 ### Phase 0：基线与契约（1～2 天）
 
 > 实施状态（2026-10-22）：默认个人 Workspace、WorkspaceMember、App.workspaceId、
-> 资源 visibility、Job 领域契约、20 条固定 prompt 评估集和通用 Asset Registry 基础
+> 资源 visibility、Job 领域契约、20 条固定 prompt 评估集、通用 Asset Registry 基础和
+> Skill Registry 基础
 > 已落地。真实模型基线报告
 > 仍需在独立离线任务中执行，因此 Phase 0 暂不标记完全完成。
 
@@ -1865,7 +1866,7 @@ Playwright、视觉评估和强沙箱应贯穿 Phase 2 之后，作为持续增�
 - 跨实例取消已通过 CANCEL_REQUESTED + fencing 阻止旧 Worker 写状态/事件；旧模型调用仍需
   等阶段边界退出，尚未做跨线程强制中止。
 - SSE 已可重放，但前端尚未提供独立 Job 列表；页面恢复仍按 App 状态与当前版本进行。
-- 本轮完成编译、前端构建、93 个默认测试、MySQL 5.7 V3～V8 实际迁移和持久化探针；
+- 本轮完成编译、前端构建、96 个默认测试、MySQL 5.7 V3～V9 实际迁移和持久化探针；
   20 条固定 prompt 已入库，真实质量基线仍需离线执行记录。
 
 ### Phase 3 追加实施记录
@@ -1927,3 +1928,13 @@ Playwright、视觉评估和强沙箱应贯穿 Phase 2 之后，作为持续增�
 - 新增 `POST /v1/assets/upload`、`GET /v1/assets`、`GET /v1/assets/{id}`。
 - 当前是本地 Asset Store 与上传链路，缩略图、视频转码、音频波形、3D 预览和 COS/S3
   适配仍待后续 Processor 阶段；生成图片链路暂继续沿用现有 SiteImageService。
+
+### Skill Registry 基础实施记录
+
+- 新增版本化 SkillDefinition：兼容 Profile、允许工具、权限、Prompt 能力说明、验收规则和
+  冲突声明；技能不再只是一段长 Prompt。
+- Job 创建时校验技能存在性、Profile 兼容性和互斥关系，并把技能版本快照锁定到 Job。
+- Job 运行期通过技能上下文注入能力说明；Revision Manifest 记录本次使用的技能集合。
+- 新增 `GET /v1/skills`。
+- 当前完成技能注册/锁定/提示注入；把 allowedTools 真正裁剪为 AgentToolLoop 可用工具集合
+  仍待下一轮接入。

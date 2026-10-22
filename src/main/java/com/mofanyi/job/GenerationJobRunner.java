@@ -22,6 +22,9 @@ import com.mofanyi.workspace.WorkspaceManager;
 import com.mofanyi.template.TemplateContext;
 import com.mofanyi.template.TemplateRegistry;
 import com.mofanyi.template.TemplateBundle;
+import com.mofanyi.skill.SkillContext;
+import com.mofanyi.skill.SkillRegistry;
+import com.mofanyi.skill.SkillDefinition;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -61,6 +64,8 @@ public class GenerationJobRunner {
     private final GenerationJobMetrics metrics;
     private final TemplateRegistry templateRegistry;
     private final TemplateContext templateContext;
+    private final SkillRegistry skillRegistry;
+    private final SkillContext skillContext;
     private final ScheduledExecutorService heartbeatExecutor;
 
     @Value("${codegen.jobs.worker-id:${HOSTNAME:local-worker}}")
@@ -80,6 +85,8 @@ public class GenerationJobRunner {
                                GenerationJobMetrics metrics,
                                TemplateRegistry templateRegistry,
                                TemplateContext templateContext,
+                               SkillRegistry skillRegistry,
+                               SkillContext skillContext,
                                @Qualifier("jobHeartbeatExecutor")
                                ScheduledExecutorService heartbeatExecutor) {
         this.jobService = jobService;
@@ -96,6 +103,8 @@ public class GenerationJobRunner {
         this.metrics = metrics;
         this.templateRegistry = templateRegistry;
         this.templateContext = templateContext;
+        this.skillRegistry = skillRegistry;
+        this.skillContext = skillContext;
         this.heartbeatExecutor = heartbeatExecutor;
     }
 
@@ -106,6 +115,7 @@ public class GenerationJobRunner {
         }
         WorkspaceManager.WorkspaceHandle workspace = null;
         TemplateBundle template = null;
+        java.util.List<SkillDefinition> skills = java.util.List.of();
         CountDownLatch finished = new CountDownLatch(1);
         AtomicBoolean callbackFinished = new AtomicBoolean(false);
         AtomicReference<Throwable> callbackFailure = new AtomicReference<>();
@@ -117,6 +127,7 @@ public class GenerationJobRunner {
         try {
             workspace = workspaceManager.begin(job);
             template = activateTemplate(job);
+            skills = activateSkills(job);
             GenerationJobCreateRequest request = jobService.readCreateRequest(job);
             CodeGenTypeEnum type = CodeGenTypeEnum.getEnumByValue(job.getCodeGenType());
             ReasoningLevel reasoningLevel = reasoningProfiles.parseLevel(request.getReasoningLevel());
@@ -157,6 +168,7 @@ public class GenerationJobRunner {
             heartbeat.cancel(false);
             workspaceManager.close(workspace);
             templateContext.deactivate(job.getAppId(), template);
+            skillContext.deactivate(job.getAppId(), skills);
             if (!callbackFinished.get()) {
                 log.warn("[job] runner 退出但 Agent 未回调完成，jobId={}", jobId);
             }
@@ -174,6 +186,23 @@ public class GenerationJobRunner {
                 ErrorCode.OPERATION_ERROR, "模板版本已变化，拒绝执行旧 Job");
         templateContext.activate(job.getAppId(), bundle);
         return bundle;
+    }
+
+    private java.util.List<SkillDefinition> activateSkills(GenerationJob job) {
+        java.util.List<String> ids = jobService.readSkillIds(job.getSkillsJson());
+        if (ids.isEmpty()) {
+            return java.util.List.of();
+        }
+        java.util.List<SkillDefinition> skills = ids.stream()
+                .map(id -> {
+                    SkillDefinition skill = skillRegistry.get(id);
+                    ThrowUtils.throwIf(skill == null, ErrorCode.OPERATION_ERROR,
+                            "Job 中的技能已不存在：" + id);
+                    return skill;
+                })
+                .toList();
+        skillContext.activate(job.getAppId(), skills);
+        return skills;
     }
 
     private void complete(GenerationJob job, AiCodeGenResultVO result,
