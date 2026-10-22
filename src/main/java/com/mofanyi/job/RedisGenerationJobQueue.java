@@ -83,13 +83,31 @@ public class RedisGenerationJobQueue implements GenerationJobQueue {
     public void retry(Delivery delivery, int delaySeconds) {
         ThrowUtils.throwIf(delivery == null, ErrorCode.PARAMS_ERROR);
         acknowledge(delivery);
-        enqueue(delivery.jobId());
+        schedule(delivery.jobId(), delaySeconds);
     }
 
     @Override
     public void enqueue(Long jobId) {
         ThrowUtils.throwIf(jobId == null || jobId <= 0, ErrorCode.PARAMS_ERROR);
         redisTemplate.opsForStream().add(stream, Map.of("jobId", String.valueOf(jobId)));
+    }
+
+    @Override
+    public void schedule(Long jobId, int delaySeconds) {
+        ThrowUtils.throwIf(jobId == null || jobId <= 0, ErrorCode.PARAMS_ERROR);
+        LocalDateTime now = LocalDateTime.now();
+        GenerationOutbox outbox = GenerationOutbox.builder()
+                .jobId(jobId)
+                .eventType("DISPATCH")
+                .payload(String.valueOf(jobId))
+                .status("PENDING")
+                .retryCount(0)
+                .nextAttemptAt(now.plusSeconds(Math.max(0, delaySeconds)))
+                .createTime(now)
+                .updateTime(now)
+                .build();
+        ThrowUtils.throwIf(outboxMapper.insertSelective(outbox) == 0,
+                ErrorCode.OPERATION_ERROR);
     }
 
     /**

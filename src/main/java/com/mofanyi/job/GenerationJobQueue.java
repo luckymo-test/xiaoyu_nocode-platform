@@ -15,6 +15,8 @@ public interface GenerationJobQueue {
 
     void enqueue(Long jobId);
 
+    void schedule(Long jobId, int delaySeconds);
+
     record Delivery(String deliveryId, Long outboxId, Long jobId) {
     }
 }

@@ -28,26 +28,31 @@ public class GenerationJobDispatcher {
     private final GenerationJobService jobService;
     private final GenerationJobMapper jobMapper;
     private final ExecutorService jobExecutionExecutor;
+    private final GenerationJobMetrics metrics;
 
     public GenerationJobDispatcher(GenerationJobQueue queue,
                                    GenerationJobRunner runner,
                                    GenerationJobService jobService,
                                    GenerationJobMapper jobMapper,
+                                   GenerationJobMetrics metrics,
                                    @Qualifier("jobExecutionExecutor")
                                    ExecutorService jobExecutionExecutor) {
         this.queue = queue;
         this.runner = runner;
         this.jobService = jobService;
         this.jobMapper = jobMapper;
+        this.metrics = metrics;
         this.jobExecutionExecutor = jobExecutionExecutor;
     }
 
     @Scheduled(fixedDelayString = "${codegen.jobs.dispatch-delay-ms:1000}")
     public void dispatch() {
+        metrics.refresh();
         List<GenerationJobQueue.Delivery> deliveries = queue.pollReady(20);
         for (GenerationJobQueue.Delivery delivery : deliveries) {
             try {
                 jobExecutionExecutor.execute(() -> runDelivery(delivery));
+                metrics.dispatched();
             } catch (RuntimeException e) {
                 queue.retry(delivery, 10);
                 log.warn("[job] 提交执行器失败，jobId={}", delivery.jobId(), e);
@@ -57,6 +62,7 @@ public class GenerationJobDispatcher {
 
     @Scheduled(fixedDelayString = "${codegen.jobs.recovery-delay-ms:30000}")
     public void recoverExpiredLeases() {
+        metrics.refresh();
         List<GenerationJob> expired = jobMapper.selectListByQuery(QueryWrapper.create()
                 .eq("status", GenerationJobStatusEnum.RUNNING.getValue())
                 .lt("leaseExpiresAt", LocalDateTime.now())

@@ -4,8 +4,10 @@ import com.mofanyi.entity.GenerationJob;
 import com.mofanyi.entity.GenerationJobEvent;
 import com.mofanyi.entity.AppRevision;
 import com.mofanyi.entity.AppArtifact;
+import com.mofanyi.entity.GenerationDeadLetter;
 import com.mofanyi.mapper.AppRevisionMapper;
 import com.mofanyi.mapper.AppArtifactMapper;
+import com.mofanyi.mapper.GenerationDeadLetterMapper;
 import com.mofanyi.mapper.GenerationJobMapper;
 import com.mofanyi.mapper.WorkspaceMapper;
 import org.junit.jupiter.api.DisplayName;
@@ -43,6 +45,9 @@ class GenerationJobPersistenceProbeTest {
 
     @Autowired
     private AppArtifactMapper artifactMapper;
+
+    @Autowired
+    private GenerationDeadLetterMapper deadLetterMapper;
 
     @Test
     @Transactional
@@ -110,6 +115,21 @@ class GenerationJobPersistenceProbeTest {
                 .createTime(now)
                 .build();
         assertEquals(1, artifactMapper.insertSelective(artifact));
+
+        GenerationDeadLetter deadLetter = GenerationDeadLetter.builder()
+                .jobId(job.getId())
+                .workspaceId(job.getWorkspaceId())
+                .appId(job.getAppId())
+                .requestedBy(1L)
+                .attempt(1)
+                .errorType("TIMEOUT")
+                .errorMessage("probe")
+                .payload("{}")
+                .status("PENDING")
+                .createTime(now)
+                .updateTime(now)
+                .build();
+        assertEquals(1, deadLetterMapper.insertSelective(deadLetter));
 
         assertTrue(workspaceMapper.selectCountByQuery(
                 com.mybatisflex.core.query.QueryWrapper.create()) > 0);

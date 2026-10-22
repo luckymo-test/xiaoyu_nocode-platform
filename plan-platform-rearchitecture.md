@@ -1,7 +1,7 @@
 # 计划书：零代码生成平台可扩展架构重构
 
 > 日期：2026-10-22
-> 状态：Phase 0 数据契约部分 + Phase 1 + Phase 2 已实施；Phase 3 及其后尚未开始
+> 状态：Phase 0 数据契约部分 + Phase 1～3 已实施；Phase 4 及其后尚未开始
 > 目标：在不推翻现有 Agent、记忆、图片和验证能力的前提下，把平台从“单实例同步生成器”演进为
 > **任务可恢复、产物可追踪、运行时可选、模板可组合、Worker 可横向扩展**的生成平台。
 
@@ -1253,6 +1253,9 @@ codegen.artifacts.versioned=false
 
 ### Phase 3：多实例 Lease + Quota（3～5 天）
 
+> 实施状态（2026-10-22）：数据库租约/心跳/fencing、过期接管、用户并发配额、
+> 队列深度保护、指数退避重试、死信与人工重放已完成首版。
+
 #### 目标
 
 支持至少 2 个 API/Worker 实例安全运行。
@@ -1848,8 +1851,20 @@ Playwright、视觉评估和强沙箱应贯穿 Phase 2 之后，作为持续增�
 - 当前 Revision 以本地文件目录为 Artifact Store；COS/S3 实现仍待后续接入。
 - 手动编辑仍直接作用于 live，尚未自动生成新的 Revision。
 - 模板选择尚未实现，因此 Manifest 暂时记录当前 `codeGenType`，还没有 Template Version Hash。
-- 当前取消是单实例协作取消；跨实例取消能够阻止 Job 终态被错误写成成功，但旧实例上的
-  模型调用仍需等阶段边界退出，完整的分布式取消随 Lease/Quota 阶段加强。
+- 跨实例取消已通过 CANCEL_REQUESTED + fencing 阻止旧 Worker 写状态/事件；旧模型调用仍需
+  等阶段边界退出，尚未做跨线程强制中止。
 - SSE 已可重放，但前端尚未提供独立 Job 列表；页面恢复仍按 App 状态与当前版本进行。
-- 本轮完成编译、前端构建、82 个默认测试、MySQL 5.7 V3/V4 实际迁移和持久化探针；
+- 本轮完成编译、前端构建、83 个默认测试、MySQL 5.7 V3～V5 实际迁移和持久化探针；
   20 条固定 prompt 的质量基线仍未建立。
+
+### Phase 3 追加实施记录
+
+- Job 事件写入增加 fencing 校验，旧 Worker 恢复后不能污染新 Worker 的事件流。
+- 用户默认最多同时拥有 2 个活跃 Job；全局 Queued/WaitingRetry 默认上限 1000，均可配置。
+- 429、超时、连接重置、502/503/504 等瞬态错误最多执行 3 次，按 5/10/20... 秒指数退避；
+  参数错误、版本 CAS 冲突和取消不会重试。
+- 每次重试使用新的租约和 fencingToken，并从 live 当前版本重新创建隔离草稿。
+- 达到最大次数后写 `generation_dead_letter`，可通过
+  `POST /v1/generation-jobs/{jobId}/retry` 人工重放。
+- Prometheus 增加 queued/running/waitingRetry/deadLetter gauge，以及 dispatch/retry/failure counter；
+  仍不把 appId/userId 放进指标标签。

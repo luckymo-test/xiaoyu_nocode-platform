@@ -50,6 +50,10 @@ public class GenerationJobRunner {
     private final GeneratedResultContentFormatter contentFormatter;
     private final WorkspaceManager workspaceManager;
     private final AppRevisionService revisionService;
+    private final GenerationJobQueue jobQueue;
+    private final GenerationFailureClassifier failureClassifier;
+    private final com.mofanyi.service.GenerationDeadLetterService deadLetterService;
+    private final GenerationJobMetrics metrics;
     private final ScheduledExecutorService heartbeatExecutor;
 
     @Value("${codegen.jobs.worker-id:${HOSTNAME:local-worker}}")
@@ -63,6 +67,10 @@ public class GenerationJobRunner {
                                GeneratedResultContentFormatter contentFormatter,
                                WorkspaceManager workspaceManager,
                                AppRevisionService revisionService,
+                               GenerationJobQueue jobQueue,
+                               GenerationFailureClassifier failureClassifier,
+                               com.mofanyi.service.GenerationDeadLetterService deadLetterService,
+                               GenerationJobMetrics metrics,
                                @Qualifier("jobHeartbeatExecutor")
                                ScheduledExecutorService heartbeatExecutor) {
         this.jobService = jobService;
@@ -73,6 +81,10 @@ public class GenerationJobRunner {
         this.contentFormatter = contentFormatter;
         this.workspaceManager = workspaceManager;
         this.revisionService = revisionService;
+        this.jobQueue = jobQueue;
+        this.failureClassifier = failureClassifier;
+        this.deadLetterService = deadLetterService;
+        this.metrics = metrics;
         this.heartbeatExecutor = heartbeatExecutor;
     }
 
@@ -114,7 +126,7 @@ public class GenerationJobRunner {
 
             if (!finished.await(MAX_EXECUTION_MINUTES, TimeUnit.MINUTES)) {
                 generatorFacade.stopGenerate(job.getAppId());
-                fail(job, "TIMEOUT", "生成任务执行超时");
+                handleFailure(job, new IllegalStateException("timeout: 生成任务执行超时"));
                 return;
             }
             if (callbackFailure.get() != null) {
@@ -199,6 +211,18 @@ public class GenerationJobRunner {
             return;
         }
         String message = StrUtil.blankToDefault(error.getMessage(), "生成失败");
+        int attempt = job.getAttempt() == null ? 1 : job.getAttempt();
+        int maxAttempts = job.getMaxAttempts() == null ? 1 : job.getMaxAttempts();
+        if (failureClassifier.retryable(error) && attempt < maxAttempts) {
+            int delay = retryDelaySeconds(attempt);
+            appendQuietly(job, "retry_scheduled", "WAITING_RETRY",
+                    Map.of("attempt", attempt, "nextAttempt", attempt + 1,
+                            "delaySeconds", delay, "message", message));
+            jobService.scheduleRetry(job, error.getClass().getSimpleName(), message);
+            jobQueue.schedule(job.getId(), delay);
+            metrics.retried();
+            return;
+        }
         fail(job, error.getClass().getSimpleName(), message);
         saveAssistantMessageQuietly(job, null, message);
     }
@@ -209,6 +233,8 @@ public class GenerationJobRunner {
         payload.put("message", errorMessage);
         emitStage(job, "FAILED", "FAILED");
         appendQuietly(job, "failed", "FAILED", payload);
+        deadLetterService.record(job, errorType, errorMessage);
+        metrics.failed();
         jobService.finish(job, GenerationJobStatusEnum.FAILED.getValue(),
                 "FAILED", errorType, errorMessage);
     }
@@ -229,10 +255,14 @@ public class GenerationJobRunner {
 
     private void appendQuietly(GenerationJob job, String type, String stage, Object payload) {
         try {
-            eventService.append(job.getId(), type, stage, payload);
+            eventService.appendFenced(job, type, stage, payload);
         } catch (RuntimeException e) {
             log.warn("[job] 事件写入失败，jobId={}, type={}", job.getId(), type, e);
         }
+    }
+
+    private int retryDelaySeconds(int attempt) {
+        return Math.min(60, 5 * Math.max(1, (int) Math.pow(2, Math.max(0, attempt - 1))));
     }
 
     private void saveAssistantMessageQuietly(GenerationJob job, AiCodeGenResultVO result, String error) {

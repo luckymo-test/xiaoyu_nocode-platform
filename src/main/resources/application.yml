@@ -76,8 +76,12 @@ codegen:
   jobs:
     worker-id: ${CODEGEN_JOB_WORKER_ID:${HOSTNAME:local-worker}}
     queue: ${CODEGEN_JOB_QUEUE:db}
+    max-attempts: ${CODEGEN_JOB_MAX_ATTEMPTS:3}
     dispatch-delay-ms: ${CODEGEN_JOB_DISPATCH_DELAY_MS:1000}
     recovery-delay-ms: ${CODEGEN_JOB_RECOVERY_DELAY_MS:30000}
+    quota:
+      user-active-jobs: ${CODEGEN_JOB_USER_ACTIVE_LIMIT:2}
+      max-queued-jobs: ${CODEGEN_JOB_MAX_QUEUE_DEPTH:1000}
     redis:
       stream: ${CODEGEN_JOB_REDIS_STREAM:codegen:generation-jobs}
       group: ${CODEGEN_JOB_REDIS_GROUP:generation-workers}

@@ -104,6 +104,28 @@ public interface GenerationJobMapper extends BaseMapper<GenerationJob> {
 
     @Update("""
             update generation_job
+            set status = 'WAITING_RETRY', currentStage = 'WAITING_RETRY',
+                leaseOwner = null, leaseExpiresAt = null,
+                errorType = #{errorType}, errorMessage = #{errorMessage}, updateTime = now()
+            where id = #{jobId} and fencingToken = #{fencingToken}
+              and status in ('RUNNING', 'CANCEL_REQUESTED')
+            """)
+    int scheduleRetry(@Param("jobId") Long jobId,
+                      @Param("fencingToken") Long fencingToken,
+                      @Param("errorType") String errorType,
+                      @Param("errorMessage") String errorMessage);
+
+    @Update("""
+            update generation_job
+            set status = 'QUEUED', currentStage = 'RETRY_REQUESTED',
+                attempt = 0, leaseOwner = null, leaseExpiresAt = null,
+                errorType = null, errorMessage = null, updateTime = now()
+            where id = #{jobId} and status = 'FAILED'
+            """)
+    int requeueFailed(@Param("jobId") Long jobId);
+
+    @Update("""
+            update generation_job
             set status = 'CANCEL_REQUESTED', updateTime = now()
             where id = #{jobId} and status in ('QUEUED', 'RUNNING', 'WAITING_RETRY')
             """)

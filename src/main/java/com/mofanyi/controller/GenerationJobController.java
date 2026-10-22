@@ -82,6 +82,13 @@ public class GenerationJobController {
         return ResultUtils.success(jobService.cancel(jobId, loginUser));
     }
 
+    @PostMapping("/generation-jobs/{jobId}/retry")
+    public BaseResponse<GenerationJobVO> retry(@PathVariable Long jobId,
+                                               HttpServletRequest request) {
+        User loginUser = userService.getLoginUser(request);
+        return ResultUtils.success(jobService.retryFailed(jobId, loginUser));
+    }
+
     private long parseSequence(String value) {
         if (value == null || value.isBlank()) {
             return 0;

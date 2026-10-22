@@ -48,11 +48,17 @@ public class DatabaseGenerationJobQueue implements GenerationJobQueue {
     @Override
     public void retry(Delivery delivery, int delaySeconds) {
         ThrowUtils.throwIf(delivery == null, ErrorCode.PARAMS_ERROR);
-        outboxMapper.markStatus(delivery.outboxId(), "PENDING", Math.max(1, delaySeconds));
+        outboxMapper.markStatus(delivery.outboxId(), "PUBLISHED", 0);
+        schedule(delivery.jobId(), delaySeconds);
     }
 
     @Override
     public void enqueue(Long jobId) {
+        schedule(jobId, 0);
+    }
+
+    @Override
+    public void schedule(Long jobId, int delaySeconds) {
         ThrowUtils.throwIf(jobId == null || jobId <= 0, ErrorCode.PARAMS_ERROR);
         LocalDateTime now = LocalDateTime.now();
         GenerationOutbox outbox = GenerationOutbox.builder()
@@ -61,7 +67,7 @@ public class DatabaseGenerationJobQueue implements GenerationJobQueue {
                 .payload(String.valueOf(jobId))
                 .status("PENDING")
                 .retryCount(0)
-                .nextAttemptAt(now)
+                .nextAttemptAt(now.plusSeconds(Math.max(0, delaySeconds)))
                 .createTime(now)
                 .updateTime(now)
                 .build();

@@ -9,6 +9,8 @@ import com.mofanyi.entity.GenerationJob;
 import com.mofanyi.entity.User;
 import com.mofanyi.mapper.GenerationJobMapper;
 import com.mofanyi.mapper.GenerationOutboxMapper;
+import com.mofanyi.mapper.GenerationDeadLetterMapper;
+import com.mofanyi.job.GenerationJobQueue;
 import com.mofanyi.model.dto.job.GenerationJobCreateRequest;
 import com.mofanyi.model.vo.GenerationJobVO;
 import org.junit.jupiter.api.BeforeEach;
@@ -59,6 +61,8 @@ class GenerationJobServiceTest {
                 mock(AppService.class),
                 mock(AiCodeGeneratorFacade.class),
                 new ReasoningProfileRegistry(),
+                mock(GenerationJobQueue.class),
+                mock(GenerationDeadLetterMapper.class),
                 new ObjectMapper());
 
         user = new User();

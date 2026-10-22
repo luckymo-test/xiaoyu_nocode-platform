@@ -14,6 +14,8 @@ import com.mofanyi.exception.ErrorCode;
 import com.mofanyi.exception.ThrowUtils;
 import com.mofanyi.mapper.GenerationJobMapper;
 import com.mofanyi.mapper.GenerationOutboxMapper;
+import com.mofanyi.mapper.GenerationDeadLetterMapper;
+import com.mofanyi.job.GenerationJobQueue;
 import com.mofanyi.model.dto.job.GenerationJobCreateRequest;
 import com.mofanyi.model.enums.AppVisibilityEnum;
 import com.mofanyi.model.enums.AppGenerateStatusEnum;
@@ -24,6 +26,7 @@ import com.mofanyi.model.vo.GenerationJobVO;
 import com.mybatisflex.core.query.QueryWrapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -52,6 +55,17 @@ public class GenerationJobService {
     private final AiCodeGeneratorFacade aiCodeGeneratorFacade;
     private final ReasoningProfileRegistry reasoningProfiles;
     private final ObjectMapper objectMapper;
+    private final GenerationJobQueue jobQueue;
+    private final GenerationDeadLetterMapper deadLetterMapper;
+
+    @Value("${codegen.jobs.max-attempts:3}")
+    private int maxAttempts;
+
+    @Value("${codegen.jobs.quota.user-active-jobs:2}")
+    private int userActiveJobLimit;
+
+    @Value("${codegen.jobs.quota.max-queued-jobs:1000}")
+    private int maxQueuedJobs;
 
     public GenerationJobService(GenerationJobMapper jobMapper,
                                 GenerationOutboxMapper outboxMapper,
@@ -62,6 +76,8 @@ public class GenerationJobService {
                                 AppService appService,
                                 AiCodeGeneratorFacade aiCodeGeneratorFacade,
                                 ReasoningProfileRegistry reasoningProfiles,
+                                GenerationJobQueue jobQueue,
+                                GenerationDeadLetterMapper deadLetterMapper,
                                 ObjectMapper objectMapper) {
         this.jobMapper = jobMapper;
         this.outboxMapper = outboxMapper;
@@ -72,6 +88,8 @@ public class GenerationJobService {
         this.appService = appService;
         this.aiCodeGeneratorFacade = aiCodeGeneratorFacade;
         this.reasoningProfiles = reasoningProfiles;
+        this.jobQueue = jobQueue;
+        this.deadLetterMapper = deadLetterMapper;
         this.objectMapper = objectMapper;
     }
 
@@ -109,6 +127,20 @@ public class GenerationJobService {
             return toVO(existing);
         }
 
+        long userActiveCount = jobMapper.selectCountByQuery(QueryWrapper.create()
+                .eq("requestedBy", loginUser.getId())
+                .in("status", GenerationJobStatusEnum.QUEUED.getValue(),
+                        GenerationJobStatusEnum.RUNNING.getValue(),
+                        GenerationJobStatusEnum.WAITING_RETRY.getValue(),
+                        GenerationJobStatusEnum.CANCEL_REQUESTED.getValue()));
+        ThrowUtils.throwIf(userActiveCount >= Math.max(1, userActiveJobLimit),
+                ErrorCode.OPERATION_ERROR, "当前用户的生成任务已达并发上限");
+        long queuedCount = jobMapper.selectCountByQuery(QueryWrapper.create()
+                .in("status", GenerationJobStatusEnum.QUEUED.getValue(),
+                        GenerationJobStatusEnum.WAITING_RETRY.getValue()));
+        ThrowUtils.throwIf(queuedCount >= Math.max(1, maxQueuedJobs),
+                ErrorCode.OPERATION_ERROR, "生成队列已满，请稍后重试");
+
         long activeCount = jobMapper.selectCountByQuery(QueryWrapper.create()
                 .eq("appId", appId)
                 .in("status", GenerationJobStatusEnum.QUEUED.getValue(),
@@ -137,7 +169,7 @@ public class GenerationJobService {
                 .baseRevisionId(app.getCurrentRevision())
                 .priority(0)
                 .attempt(0)
-                .maxAttempts(1)
+                .maxAttempts(Math.max(1, maxAttempts))
                 .fencingToken(0L)
                 .nextEventSeq(0L)
                 .createTime(now)
@@ -256,6 +288,36 @@ public class GenerationJobService {
         ThrowUtils.throwIf(jobMapper.recordPublishedRevision(job.getId(), job.getFencingToken(),
                 revisionId, revisionId) != 1,
                 ErrorCode.OPERATION_ERROR, "记录发布版本失败");
+    }
+
+    public void scheduleRetry(GenerationJob job, String errorType, String errorMessage) {
+        ThrowUtils.throwIf(job == null || job.getFencingToken() == null, ErrorCode.PARAMS_ERROR);
+        ThrowUtils.throwIf(jobMapper.scheduleRetry(job.getId(), job.getFencingToken(),
+                        truncate(errorType, 64), truncate(errorMessage, 4000)) != 1,
+                ErrorCode.OPERATION_ERROR, "安排任务重试失败");
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public GenerationJobVO retryFailed(Long jobId, User loginUser) {
+        GenerationJob job = getAuthorized(jobId, loginUser);
+        ThrowUtils.throwIf(!GenerationJobStatusEnum.FAILED.getValue().equals(job.getStatus()),
+                ErrorCode.OPERATION_ERROR, "只有失败任务可以重放");
+        long active = jobMapper.selectCountByQuery(QueryWrapper.create()
+                .eq("appId", job.getAppId())
+                .in("status", GenerationJobStatusEnum.QUEUED.getValue(),
+                        GenerationJobStatusEnum.RUNNING.getValue(),
+                        GenerationJobStatusEnum.WAITING_RETRY.getValue(),
+                        GenerationJobStatusEnum.CANCEL_REQUESTED.getValue()));
+        ThrowUtils.throwIf(active > 0, ErrorCode.OPERATION_ERROR,
+                "该应用已有活跃任务，无法重放死信");
+        ThrowUtils.throwIf(jobMapper.requeueFailed(jobId) != 1,
+                ErrorCode.OPERATION_ERROR, "重放任务失败");
+        eventService.append(jobId, "retry_requested", "RETRY_REQUESTED",
+                java.util.Map.of("message", "用户手动重放失败任务"));
+        deadLetterMapper.markReplayed(jobId, loginUser.getId());
+        appService.updateGenerateStatus(job.getAppId(), AppGenerateStatusEnum.GENERATING.getValue());
+        jobQueue.schedule(jobId, 0);
+        return toVO(requireJob(jobId));
     }
 
     public JsonNode parseRequest(GenerationJob job) {

@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.TextNode;
 import com.mofanyi.entity.GenerationJobEvent;
+import com.mofanyi.entity.GenerationJob;
 import com.mofanyi.exception.ErrorCode;
 import com.mofanyi.exception.ThrowUtils;
 import com.mofanyi.mapper.GenerationJobEventMapper;
@@ -55,6 +56,22 @@ public class GenerationJobEventService {
                 .build();
         ThrowUtils.throwIf(eventMapper.insertSelective(event) == 0, ErrorCode.OPERATION_ERROR);
         return event;
+    }
+
+    /**
+     * 只允许持有当前 fencingToken 的 Runner 写事件，旧 Worker 恢复后不能污染事件流。
+     */
+    public GenerationJobEvent appendFenced(GenerationJob job, String eventType,
+                                           String stage, Object payload) {
+        ThrowUtils.throwIf(job == null || job.getId() == null || job.getFencingToken() == null,
+                ErrorCode.PARAMS_ERROR);
+        long count = jobMapper.selectCountByQuery(QueryWrapper.create()
+                .eq("id", job.getId())
+                .eq("fencingToken", job.getFencingToken())
+                .in("status", "RUNNING", "CANCEL_REQUESTED"));
+        ThrowUtils.throwIf(count == 0, ErrorCode.OPERATION_ERROR,
+                "Worker fencingToken 已失效");
+        return append(job.getId(), eventType, stage, payload);
     }
 
     public List<GenerationJobEvent> listAfter(Long jobId, long afterSeq, int limit) {
