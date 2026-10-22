@@ -211,6 +211,11 @@ public class AppRevisionService {
                 handle.root().resolve(".agent/verify-before.json"), "application/json", "{}");
         addFileArtifact(job, revision, artifacts, artifactRoot, "RENDER_REPORT_AFTER",
                 handle.root().resolve(".agent/verify-after.json"), "application/json", "{}");
+        addScreenshotArtifacts(job, revision, artifacts, artifactRoot,
+                handle.root().resolve(".agent/screenshots"));
+        addFileArtifact(job, revision, artifacts, artifactRoot, "VISUAL_DIFF",
+                handle.root().resolve(".agent/screenshots/visual-diff.json"),
+                "application/json", "{\"semantics\":\"pixel-change-only\"}");
 
         ArtifactStore.StoredArtifact request = artifactStore.storeText(
                 artifactRoot, "requirement-baseline.json", job.getRequestPayload(),
@@ -242,6 +247,30 @@ public class AppRevisionService {
         ArtifactStore.StoredArtifact stored = artifactStore.storeFile(
                 artifactRoot, name, source, mimeType);
         artifacts.add(newArtifact(job, revision, type, stored, metadata));
+    }
+
+    private void addScreenshotArtifacts(GenerationJob job, AppRevision revision,
+                                        List<AppArtifact> artifacts, Path artifactRoot,
+                                        Path screenshotDir) {
+        if (!Files.isDirectory(screenshotDir)) {
+            return;
+        }
+        try (var files = Files.list(screenshotDir)) {
+            files.filter(Files::isRegularFile)
+                    .sorted()
+                    .forEach(path -> {
+                        String name = "screenshot-" + path.getFileName();
+                        ArtifactStore.StoredArtifact stored = artifactStore.storeFile(
+                                artifactRoot, name, path, "image/png");
+                        if (stored != null) {
+                            artifacts.add(newArtifact(job, revision,
+                                    "VIEWPORT_SCREENSHOT", stored,
+                                    "{\"file\":\"" + path.getFileName() + "\"}"));
+                        }
+                    });
+        } catch (IOException e) {
+            throw new IllegalStateException("收集视口截图失败", e);
+        }
     }
 
     private AppArtifact newArtifact(GenerationJob job, AppRevision revision, String type,

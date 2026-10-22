@@ -18,6 +18,7 @@ import com.mofanyi.service.AppService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
+import org.springframework.beans.factory.annotation.Autowired;
 
 import jakarta.annotation.PreDestroy;
 import java.util.concurrent.ConcurrentHashMap;
@@ -67,6 +68,9 @@ public class AiCodeGeneratorFacade {
      * Vue 工程生成线程池（Spring 容器管理，参数见 thread-pool.vue 配置）
      */
     private final ThreadPoolExecutor vueThreadPoolExecutor;
+
+    @Autowired(required = false)
+    private VisualRegressionService visualRegressionService;
 
     public AiCodeGeneratorFacade(CodeFileWriteService codeFileWriteService,
                                  AppService appService,
@@ -385,7 +389,7 @@ public class AiCodeGeneratorFacade {
             return;
         }
         try {
-            RenderVerifier.RenderReport report = renderVerifier.verify(type, appId);
+            RenderVerifier.RenderReport report = renderVerifier.verify(type, appId, "before");
             renderVerifier.persistReport(type, appId, report, "before");
             if (!report.isUsable() || !report.hasProblems()) {
                 renderFixStatus.put(appId, "ok");
@@ -419,8 +423,11 @@ public class AiCodeGeneratorFacade {
             task.bind(Thread.currentThread());
             siteRepairAgent.fixRenderIssues(type, appId, issueText, callContext(appId, "render_fix"), null,
                     reasoningProfiles.defaultReasoningLevel());
-            RenderVerifier.RenderReport after = renderVerifier.verify(type, appId);
+            RenderVerifier.RenderReport after = renderVerifier.verify(type, appId, "after");
             renderVerifier.persistReport(type, appId, after, "after");
+            if (visualRegressionService != null) {
+                visualRegressionService.compareAndPersist(codeFileWriteService, type, appId);
+            }
             renderFixStatus.put(appId, after.hasProblems() ? "still_has_problems" : "fixed");
             log.info("[verify] appId={} 异步修复完成，复验：{}", appId, after.summary());
         } catch (RuntimeException e) {

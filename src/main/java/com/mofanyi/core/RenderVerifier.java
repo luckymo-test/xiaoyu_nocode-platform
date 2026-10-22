@@ -15,11 +15,16 @@ import org.openqa.selenium.logging.LogEntries;
 import org.openqa.selenium.logging.LogEntry;
 import org.openqa.selenium.logging.LogType;
 import org.openqa.selenium.support.ui.WebDriverWait;
+import org.openqa.selenium.OutputType;
+import org.openqa.selenium.TakesScreenshot;
 import org.springframework.stereotype.Service;
 
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Paths;
+import java.nio.file.Path;
+import java.security.MessageDigest;
+import java.util.HexFormat;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -109,7 +114,8 @@ public class RenderVerifier {
      */
     public record ViewportResult(String name, String label, int width, List<String> brokenImages,
                                  boolean overflow, int scrollWidth, int clientWidth,
-                                 int textLength, List<String> consoleErrors) {
+                                 int textLength, List<String> consoleErrors,
+                                 String screenshotPath, String screenshotSha256) {
 
         public boolean hasProblem() {
             return !brokenImages.isEmpty() || overflow || textLength < MIN_TEXT_LENGTH
@@ -187,6 +193,10 @@ public class RenderVerifier {
      * 渲染验证：逐视口渲染并采集问题。浏览器不可用时返回 report.isUsable()==false。
      */
     public RenderReport verify(CodeGenTypeEnum type, Long appId) {
+        return verify(type, appId, "latest");
+    }
+
+    public RenderReport verify(CodeGenTypeEnum type, Long appId, String stage) {
         List<ViewportResult> results = new ArrayList<>();
         List<String> errors = new ArrayList<>();
         if (type == null || appId == null || appId <= 0) {
@@ -208,7 +218,7 @@ public class RenderVerifier {
                 try {
                     driver.manage().window().setSize(new Dimension(vp.width(), vp.height()));
                     Thread.sleep(SETTLE_MILLIS);
-                    results.add(inspect(driver, vp));
+                    results.add(inspect(driver, vp, type, appId, stage));
                 } catch (Exception e) {
                     log.warn("[verify] 视口 {} 渲染失败，appId={}", vp.name(), appId, e);
                     errors.add("视口 " + vp.label() + " 渲染失败：" + e.getMessage());
@@ -251,6 +261,8 @@ public class RenderVerifier {
                     o.set("clientWidth", v.clientWidth());
                     o.set("textLength", v.textLength());
                     o.set("consoleErrors", v.consoleErrors());
+                    o.set("screenshotPath", v.screenshotPath());
+                    o.set("screenshotSha256", v.screenshotSha256());
                     arr.add(o);
                 }
             }
@@ -287,7 +299,8 @@ public class RenderVerifier {
         }
     }
 
-    private ViewportResult inspect(WebDriver driver, Viewport vp) {
+    private ViewportResult inspect(WebDriver driver, Viewport vp, CodeGenTypeEnum type,
+                                   Long appId, String stage) {
         Object raw = ((JavascriptExecutor) driver).executeScript(COLLECT_JS);
         JSONObject obj = toJsonObject(raw);
         List<String> broken = new ArrayList<>();
@@ -297,13 +310,41 @@ public class RenderVerifier {
                 broken.add(String.valueOf(o));
             }
         }
+        String screenshotPath = captureScreenshot(driver, type, appId, stage, vp);
         return new ViewportResult(
                 vp.name(), vp.label(), vp.width(), broken,
                 obj.getBool("overflow", false),
                 obj.getInt("scrollWidth", 0),
                 obj.getInt("clientWidth", 0),
                 obj.getInt("textLength", 0),
-                collectConsoleErrors(driver));
+                collectConsoleErrors(driver), screenshotPath,
+                screenshotPath == null ? null : sha256(Path.of(screenshotPath)));
+    }
+
+    private String captureScreenshot(WebDriver driver, CodeGenTypeEnum type, Long appId,
+                                     String stage, Viewport viewport) {
+        try {
+            byte[] png = ((TakesScreenshot) driver).getScreenshotAs(OutputType.BYTES);
+            String safeStage = stage == null ? "latest" : stage.replaceAll("[^a-zA-Z0-9_-]", "_");
+            String projectDir = codeFileWriteService.getProjectDir(type, appId);
+            File out = Paths.get(projectDir, ".agent", "screenshots",
+                    safeStage + "-" + viewport.name() + ".png").toFile();
+            FileUtil.mkParentDirs(out);
+            FileUtil.writeBytes(png, out);
+            return out.getAbsolutePath();
+        } catch (Exception e) {
+            log.debug("[verify] 截图失败，viewport={}", viewport.name(), e);
+            return null;
+        }
+    }
+
+    private String sha256(Path file) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            return HexFormat.of().formatHex(digest.digest(java.nio.file.Files.readAllBytes(file)));
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /**

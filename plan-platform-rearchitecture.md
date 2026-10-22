@@ -1,8 +1,8 @@
 # 计划书：零代码生成平台可扩展架构重构
 
 > 日期：2026-10-22
-> 状态：Phase 0 数据契约部分 + Phase 1～3 已实施；Phase 4、5 基础契约已落地，
-> React/Next 执行适配与模板 Golden 质量门禁尚未完成
+> 状态：Phase 0 数据契约部分 + Phase 1～3 已实施；Phase 4～6 基础能力已落地，
+> React/Next 执行适配、模板 Golden 门禁与独立容器沙箱尚未完成
 > 目标：在不推翻现有 Agent、记忆、图片和验证能力的前提下，把平台从“单实例同步生成器”演进为
 > **任务可恢复、产物可追踪、运行时可选、模板可组合、Worker 可横向扩展**的生成平台。
 
@@ -1332,6 +1332,9 @@ codegen.artifacts.versioned=false
 
 ### Phase 6：Playwright + 视觉评估 + 沙箱（5～8 天）
 
+> 实施状态（2026-10-22）：三档视口截图、截图 SHA-256、before/after 像素差异报告与
+> Revision 截图 Artifact 已完成；当前仍基于 Selenium，不是 Playwright/容器沙箱。
+
 #### 目标
 
 提升验证能力与生产安全。
@@ -1861,7 +1864,7 @@ Playwright、视觉评估和强沙箱应贯穿 Phase 2 之后，作为持续增�
 - 跨实例取消已通过 CANCEL_REQUESTED + fencing 阻止旧 Worker 写状态/事件；旧模型调用仍需
   等阶段边界退出，尚未做跨线程强制中止。
 - SSE 已可重放，但前端尚未提供独立 Job 列表；页面恢复仍按 App 状态与当前版本进行。
-- 本轮完成编译、前端构建、90 个默认测试、MySQL 5.7 V3～V7 实际迁移和持久化探针；
+- 本轮完成编译、前端构建、91 个默认测试、MySQL 5.7 V3～V7 实际迁移和持久化探针；
   20 条固定 prompt 的质量基线仍未建立。
 
 ### Phase 3 追加实施记录
@@ -1895,3 +1898,13 @@ Playwright、视觉评估和强沙箱应贯穿 Phase 2 之后，作为持续增�
   不属于用户可覆盖指令。
 - 新增 `GET /v1/templates`；模板目前是组合契约基础，尚未实现 Golden screenshot diff、
   人工 rubric 评分和模板升级回归门禁。
+
+### Phase 6 追加实施记录（视觉回归基础）
+
+- RenderVerifier 在 1440/768/375 三档视口执行 DOM/console 检测时同步截图，
+  记录截图路径与 SHA-256。
+- 修复前后截图可计算逐像素变化比例并落盘 `visual-diff.json`；报告明确标注
+  “只表示变化量，不代表审美质量”。
+- `before-* / after-*` 截图和 `VISUAL_DIFF` 已进入 Revision Artifact Graph。
+- 当前浏览器仍由 Selenium 进程创建，不具备独立容器、CPU/内存 cgroup、网络 namespace
+  等强沙箱；这些留待后续 Worker/沙箱阶段。
