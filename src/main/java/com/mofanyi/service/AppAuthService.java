@@ -5,6 +5,8 @@ import com.mofanyi.entity.User;
 import com.mofanyi.exception.ErrorCode;
 import com.mofanyi.exception.ThrowUtils;
 import com.mofanyi.mapper.AppMapper;
+import com.mofanyi.workspace.WorkspaceAclService;
+import com.mofanyi.workspace.WorkspacePermission;
 import org.springframework.stereotype.Component;
 
 /**
@@ -20,9 +22,11 @@ import org.springframework.stereotype.Component;
 public class AppAuthService {
 
     private final AppMapper appMapper;
+    private final WorkspaceAclService workspaceAclService;
 
-    public AppAuthService(AppMapper appMapper) {
+    public AppAuthService(AppMapper appMapper, WorkspaceAclService workspaceAclService) {
         this.appMapper = appMapper;
+        this.workspaceAclService = workspaceAclService;
     }
 
     /**
@@ -52,5 +56,37 @@ public class AppAuthService {
         ThrowUtils.throwIf(loginUser == null || loginUser.getId() == null, ErrorCode.NOT_LOGIN_ERROR);
         ThrowUtils.throwIf(!loginUser.getId().equals(app.getUserId()),
                 ErrorCode.NO_AUTH_ERROR, "只能操作自己的应用");
+    }
+
+    public App requireCanView(Long appId, User loginUser) {
+        return requireWorkspacePermission(appId, loginUser, WorkspacePermission.VIEW);
+    }
+
+    public App requireCanEdit(Long appId, User loginUser) {
+        return requireWorkspacePermission(appId, loginUser, WorkspacePermission.EDIT);
+    }
+
+    public App requireCanGenerate(Long appId, User loginUser) {
+        return requireWorkspacePermission(appId, loginUser, WorkspacePermission.GENERATE);
+    }
+
+    public App requireCanPublish(Long appId, User loginUser) {
+        return requireWorkspacePermission(appId, loginUser, WorkspacePermission.PUBLISH);
+    }
+
+    private App requireWorkspacePermission(Long appId, User loginUser,
+                                           WorkspacePermission permission) {
+        ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
+        ThrowUtils.throwIf(loginUser == null || loginUser.getId() == null,
+                ErrorCode.NOT_LOGIN_ERROR);
+        App app = appMapper.selectOneById(appId);
+        ThrowUtils.throwIf(app == null, ErrorCode.NOT_FOUND_ERROR, "应用不存在");
+        if (loginUser.getId().equals(app.getUserId())) {
+            return app;
+        }
+        ThrowUtils.throwIf(app.getWorkspaceId() == null,
+                ErrorCode.NO_AUTH_ERROR, "应用未归属工作区");
+        workspaceAclService.require(app.getWorkspaceId(), loginUser.getId(), permission);
+        return app;
     }
 }

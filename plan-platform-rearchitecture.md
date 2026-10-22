@@ -1170,7 +1170,7 @@ jobId  attempt  stage  revision
 
 > 实施状态（2026-10-22）：默认个人 Workspace、WorkspaceMember、App.workspaceId、
 > 资源 visibility、Job 领域契约、20 条固定 prompt 评估集、通用 Asset Registry 基础和
-> Skill Registry 基础
+> Skill Registry 基础及团队 RBAC/ACL 基础
 > 已落地。真实模型基线报告
 > 仍需在独立离线任务中执行，因此 Phase 0 暂不标记完全完成。
 
@@ -1866,7 +1866,7 @@ Playwright、视觉评估和强沙箱应贯穿 Phase 2 之后，作为持续增�
 - 跨实例取消已通过 CANCEL_REQUESTED + fencing 阻止旧 Worker 写状态/事件；旧模型调用仍需
   等阶段边界退出，尚未做跨线程强制中止。
 - SSE 已可重放，但前端尚未提供独立 Job 列表；页面恢复仍按 App 状态与当前版本进行。
-- 本轮完成编译、前端构建、96 个默认测试、MySQL 5.7 V3～V9 实际迁移和持久化探针；
+- 本轮完成编译、前端构建、97 个默认测试、MySQL 5.7 V3～V10 实际迁移和持久化探针；
   20 条固定 prompt 已入库，真实质量基线仍需离线执行记录。
 
 ### Phase 3 追加实施记录
@@ -1938,3 +1938,14 @@ Playwright、视觉评估和强沙箱应贯穿 Phase 2 之后，作为持续增�
 - 新增 `GET /v1/skills`。
 - 当前完成技能注册/锁定/提示注入；把 allowedTools 真正裁剪为 AgentToolLoop 可用工具集合
   仍待下一轮接入。
+
+### 团队 RBAC / ACL 基础实施记录
+
+- 新增 WorkspaceRole（OWNER/ADMIN/EDITOR/VIEWER）与 VIEW/EDIT/GENERATE/PUBLISH/DEPLOY/
+  MANAGE_ASSETS/MANAGE_SECRETS/MANAGE_MEMBERS/ADMIN 权限。
+- Job 生成、AI 修改、手动编辑、预览/下载和版本查看不再只允许 App owner，Workspace 成员
+  按角色授权；发布需要 PUBLISH，删除/应用配置等高风险操作仍保留 Owner。
+- 新增成员列表、按 userAccount 添加/改角色、移除成员 API；禁止添加/移除 OWNER。
+- 新增 `workspace_audit_log`，成员变更写审计记录。
+- 当前完成成员直加与角色 ACL；邀请 token/邮件、审批流、组织层级和 App 级细粒度 ACL
+  仍待后续。

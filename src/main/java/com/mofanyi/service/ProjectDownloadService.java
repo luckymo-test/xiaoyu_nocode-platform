@@ -72,7 +72,7 @@ public class ProjectDownloadService {
     public DownloadInfo validate(Long appId, HttpServletRequest request) {
         User loginUser = userService.getLoginUser(request);
         // 归属校验统一走 AppAuthService（plan-refactor 6.1）
-        App app = appAuthService.requireOwner(appId, loginUser);
+        App app = appAuthService.requireCanView(appId, loginUser);
         CodeGenTypeEnum type = CodeGenTypeEnum.getEnumByValue(app.getCodeGenType());
         ThrowUtils.throwIf(type == null, ErrorCode.PARAMS_ERROR, "应用类型未知");
         String projectDir = codeFileWriteService.getLiveProjectDir(type, appId);

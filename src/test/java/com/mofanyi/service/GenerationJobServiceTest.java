@@ -82,7 +82,7 @@ class GenerationJobServiceTest {
         app.setWorkspaceId(WORKSPACE_ID);
         app.setCodeGenType("html");
         app.setVisibility("private");
-        when(appAuthService.requireOwner(APP_ID, user)).thenReturn(app);
+        when(appAuthService.requireCanGenerate(APP_ID, user)).thenReturn(app);
     }
 
     @Test

@@ -185,7 +185,7 @@ public class AiChatController {
         ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
         ThrowUtils.throwIf(StrUtil.isBlank(instruction), ErrorCode.PARAMS_ERROR, "修改意图不能为空");
         User loginUser = userService.getLoginUser(request);
-        App app = appAuthService.requireOwner(appId, loginUser);
+        App app = appAuthService.requireCanEdit(appId, loginUser);
         CodeGenTypeEnum type = CodeGenTypeEnum.getEnumByValue(app.getCodeGenType());
         ThrowUtils.throwIf(type == CodeGenTypeEnum.VUE,
                 ErrorCode.PARAMS_ERROR, "Vue3 工程暂不支持可视化修改");
@@ -221,7 +221,7 @@ public class AiChatController {
                                                       HttpServletRequest request) {
         ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
         User loginUser = userService.getLoginUser(request);
-        App app = appAuthService.requireOwner(appId, loginUser);
+        App app = appAuthService.requireCanEdit(appId, loginUser);
         CodeGenTypeEnum type = CodeGenTypeEnum.getEnumByValue(app.getCodeGenType());
         ThrowUtils.throwIf(type == CodeGenTypeEnum.VUE,
                 ErrorCode.PARAMS_ERROR, "Vue3 工程暂不支持可视化修改");
@@ -236,7 +236,7 @@ public class AiChatController {
     @GetMapping("/render-fix/status")
     public BaseResponse<String> renderFixStatus(@RequestParam Long appId, HttpServletRequest request) {
         User loginUser = userService.getLoginUser(request);
-        appAuthService.requireOwner(appId, loginUser);
+        appAuthService.requireCanView(appId, loginUser);
         return ResultUtils.success(aiCodeGeneratorFacade.renderFixStatus(appId));
     }
 
@@ -247,7 +247,7 @@ public class AiChatController {
     public BaseResponse<Boolean> stopGenerate(@RequestParam Long appId, HttpServletRequest request) {
         ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
         User loginUser = userService.getLoginUser(request);
-        appAuthService.requireOwner(appId, loginUser);
+        appAuthService.requireCanGenerate(appId, loginUser);
         aiCodeGeneratorFacade.stopGenerate(appId);
         return ResultUtils.success(true);
     }

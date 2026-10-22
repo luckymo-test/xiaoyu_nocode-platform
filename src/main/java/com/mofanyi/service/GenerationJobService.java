@@ -124,7 +124,7 @@ public class GenerationJobService {
         ThrowUtils.throwIf(StrUtil.isBlank(idempotencyKey), ErrorCode.PARAMS_ERROR, "Idempotency-Key 不能为空");
         ThrowUtils.throwIf(idempotencyKey.length() > 128, ErrorCode.PARAMS_ERROR, "Idempotency-Key 过长");
 
-        App app = appAuthService.requireOwner(appId, loginUser);
+        App app = appAuthService.requireCanGenerate(appId, loginUser);
         Long workspaceId = app.getWorkspaceId();
         if (workspaceId == null) {
             workspaceId = workspaceService.ensureDefaultWorkspace(loginUser).getId();
@@ -230,7 +230,7 @@ public class GenerationJobService {
         ThrowUtils.throwIf(jobId == null || jobId <= 0, ErrorCode.PARAMS_ERROR);
         ThrowUtils.throwIf(loginUser == null || loginUser.getId() == null, ErrorCode.NOT_LOGIN_ERROR);
         GenerationJob job = requireJob(jobId);
-        appAuthService.requireOwner(job.getAppId(), loginUser);
+        appAuthService.requireCanGenerate(job.getAppId(), loginUser);
         workspaceService.requireMember(job.getWorkspaceId(), loginUser.getId());
         return job;
     }

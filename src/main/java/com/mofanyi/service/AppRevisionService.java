@@ -137,8 +137,6 @@ public class AppRevisionService {
         AppRevision revision = revisionMapper.selectOneById(revisionId);
         ThrowUtils.throwIf(revision == null || !appId.equals(revision.getAppId()),
                 ErrorCode.NOT_FOUND_ERROR, "版本不存在");
-        ThrowUtils.throwIf(!Long.valueOf(userId).equals(app.getUserId()),
-                ErrorCode.NO_AUTH_ERROR, "只能发布自己的应用版本");
         Path source = Path.of(URI.create(revision.getSourceUri()));
         ThrowUtils.throwIf(!Files.isDirectory(source), ErrorCode.OPERATION_ERROR, "版本源码不存在");
         swapLiveFiles(app, revision, source, app.getCurrentRevision());

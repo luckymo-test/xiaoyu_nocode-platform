@@ -42,7 +42,7 @@ public class AppRevisionController {
     @GetMapping
     public BaseResponse<List<AppRevisionVO>> list(@PathVariable Long appId,
                                                   HttpServletRequest request) {
-        requireOwner(appId, request);
+        requirePermission(appId, request, false);
         return ResultUtils.success(revisionService.list(appId, false));
     }
 
@@ -50,7 +50,7 @@ public class AppRevisionController {
     public BaseResponse<AppRevisionVO> get(@PathVariable Long appId,
                                            @PathVariable Long revisionId,
                                            HttpServletRequest request) {
-        requireOwner(appId, request);
+        requirePermission(appId, request, false);
         return ResultUtils.success(revisionService.get(appId, revisionId));
     }
 
@@ -58,7 +58,7 @@ public class AppRevisionController {
     public BaseResponse<AppRevisionVO> publish(@PathVariable Long appId,
                                                @PathVariable Long revisionId,
                                                HttpServletRequest request) {
-        User loginUser = requireOwner(appId, request);
+        User loginUser = requirePermission(appId, request, true);
         return ResultUtils.success(revisionService.publishExisting(
                 appId, revisionId, loginUser.getId()));
     }
@@ -68,7 +68,7 @@ public class AppRevisionController {
                                                    @RequestParam Long from,
                                                    @RequestParam Long to,
                                                    HttpServletRequest request) {
-        requireOwner(appId, request);
+        requirePermission(appId, request, false);
         return ResultUtils.success(revisionService.compare(appId, from, to));
     }
 
@@ -76,15 +76,19 @@ public class AppRevisionController {
     public BaseResponse<AppRevisionVO> rollback(@PathVariable Long appId,
                                                 @PathVariable Long revisionId,
                                                 HttpServletRequest request) {
-        User loginUser = requireOwner(appId, request);
+        User loginUser = requirePermission(appId, request, true);
         return ResultUtils.success(revisionService.publishExisting(
                 appId, revisionId, loginUser.getId()));
     }
 
-    private User requireOwner(Long appId, HttpServletRequest request) {
+    private User requirePermission(Long appId, HttpServletRequest request, boolean publish) {
         ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
         User loginUser = userService.getLoginUser(request);
-        appAuthService.requireOwner(appId, loginUser);
+        if (publish) {
+            appAuthService.requireCanPublish(appId, loginUser);
+        } else {
+            appAuthService.requireCanView(appId, loginUser);
+        }
         return loginUser;
     }
 }

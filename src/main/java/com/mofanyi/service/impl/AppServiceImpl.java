@@ -28,6 +28,8 @@ import com.mofanyi.model.vo.AppVO;
 import com.mofanyi.service.AppService;
 import com.mofanyi.service.ChatHistoryService;
 import com.mofanyi.service.WorkspaceService;
+import com.mofanyi.workspace.WorkspaceAclService;
+import com.mofanyi.workspace.WorkspacePermission;
 import com.mybatisflex.core.logicdelete.LogicDeleteManager;
 import com.mybatisflex.core.paginate.Page;
 import com.mybatisflex.core.constant.SqlOperator;
@@ -80,6 +82,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
     private final AppImageMapper appImageMapper;
     private final AppAuthService appAuthService;
     private final WorkspaceService workspaceService;
+    private final WorkspaceAclService workspaceAclService;
 
     public AppServiceImpl(CodeFileWriteService codeFileWriteService,
                           ChatHistoryService chatHistoryService,
@@ -88,7 +91,8 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
                           CoverImageService coverImageService,
                           AppImageMapper appImageMapper,
                           AppAuthService appAuthService,
-                          WorkspaceService workspaceService) {
+                          WorkspaceService workspaceService,
+                          WorkspaceAclService workspaceAclService) {
         this.codeFileWriteService = codeFileWriteService;
         this.chatHistoryService = chatHistoryService;
         this.redisChatMemoryRepository = redisChatMemoryRepository;
@@ -97,6 +101,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         this.appImageMapper = appImageMapper;
         this.appAuthService = appAuthService;
         this.workspaceService = workspaceService;
+        this.workspaceAclService = workspaceAclService;
     }
 
     @Override
@@ -443,9 +448,13 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         ThrowUtils.throwIf(app == null, ErrorCode.NOT_FOUND_ERROR);
         // 私有应用仅本人或管理员可查看
         if (AppVisibilityEnum.PRIVATE.getValue().equals(app.getVisibility())
-                && !app.getUserId().equals(loginUser.getId())
                 && !isAdmin(loginUser)) {
-            throw new BusinessException(ErrorCode.NO_AUTH_ERROR, "无权查看该应用");
+            if (!app.getUserId().equals(loginUser.getId())) {
+                ThrowUtils.throwIf(app.getWorkspaceId() == null, ErrorCode.NO_AUTH_ERROR,
+                        "无权查看该应用");
+                workspaceAclService.require(app.getWorkspaceId(), loginUser.getId(),
+                        WorkspacePermission.VIEW);
+            }
         }
         return getAppVO(app);
     }

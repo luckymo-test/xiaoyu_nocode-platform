@@ -93,7 +93,7 @@ public class ManualEditController {
      */
     private CodeGenTypeEnum checkOwner(Long appId, HttpServletRequest request) {
         User loginUser = userService.getLoginUser(request);
-        App app = appAuthService.requireOwner(appId, loginUser);
+        App app = appAuthService.requireCanEdit(appId, loginUser);
         CodeGenTypeEnum type = CodeGenTypeEnum.getEnumByValue(app.getCodeGenType());
         ThrowUtils.throwIf(type == null, ErrorCode.PARAMS_ERROR, "应用类型未知");
         ThrowUtils.throwIf(type == CodeGenTypeEnum.VUE,

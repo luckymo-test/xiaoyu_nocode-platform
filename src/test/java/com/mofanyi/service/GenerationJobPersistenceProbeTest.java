@@ -7,11 +7,13 @@ import com.mofanyi.entity.AppArtifact;
 import com.mofanyi.entity.GenerationDeadLetter;
 import com.mofanyi.entity.LibraryAsset;
 import com.mofanyi.entity.LibraryAssetVariant;
+import com.mofanyi.entity.WorkspaceAuditLog;
 import com.mofanyi.mapper.AppRevisionMapper;
 import com.mofanyi.mapper.AppArtifactMapper;
 import com.mofanyi.mapper.GenerationDeadLetterMapper;
 import com.mofanyi.mapper.LibraryAssetMapper;
 import com.mofanyi.mapper.LibraryAssetVariantMapper;
+import com.mofanyi.mapper.WorkspaceAuditLogMapper;
 import com.mofanyi.mapper.GenerationJobMapper;
 import com.mofanyi.mapper.WorkspaceMapper;
 import org.junit.jupiter.api.DisplayName;
@@ -58,6 +60,9 @@ class GenerationJobPersistenceProbeTest {
 
     @Autowired
     private LibraryAssetVariantMapper assetVariantMapper;
+
+    @Autowired
+    private WorkspaceAuditLogMapper auditLogMapper;
 
     @Test
     @Transactional
@@ -182,6 +187,17 @@ class GenerationJobPersistenceProbeTest {
                 .createTime(now)
                 .build();
         assertEquals(1, assetVariantMapper.insertSelective(variant));
+
+        WorkspaceAuditLog audit = WorkspaceAuditLog.builder()
+                .workspaceId(job.getWorkspaceId())
+                .actorId(1L)
+                .action("MEMBER_ADD")
+                .resourceType("WORKSPACE_MEMBER")
+                .resourceId("2")
+                .detail("role=EDITOR")
+                .createTime(now)
+                .build();
+        assertEquals(1, auditLogMapper.insertSelective(audit));
 
         assertTrue(workspaceMapper.selectCountByQuery(
                 com.mybatisflex.core.query.QueryWrapper.create()) > 0);
