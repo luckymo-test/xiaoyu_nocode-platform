@@ -5,9 +5,13 @@ import com.mofanyi.entity.GenerationJobEvent;
 import com.mofanyi.entity.AppRevision;
 import com.mofanyi.entity.AppArtifact;
 import com.mofanyi.entity.GenerationDeadLetter;
+import com.mofanyi.entity.LibraryAsset;
+import com.mofanyi.entity.LibraryAssetVariant;
 import com.mofanyi.mapper.AppRevisionMapper;
 import com.mofanyi.mapper.AppArtifactMapper;
 import com.mofanyi.mapper.GenerationDeadLetterMapper;
+import com.mofanyi.mapper.LibraryAssetMapper;
+import com.mofanyi.mapper.LibraryAssetVariantMapper;
 import com.mofanyi.mapper.GenerationJobMapper;
 import com.mofanyi.mapper.WorkspaceMapper;
 import org.junit.jupiter.api.DisplayName;
@@ -48,6 +52,12 @@ class GenerationJobPersistenceProbeTest {
 
     @Autowired
     private GenerationDeadLetterMapper deadLetterMapper;
+
+    @Autowired
+    private LibraryAssetMapper assetMapper;
+
+    @Autowired
+    private LibraryAssetVariantMapper assetVariantMapper;
 
     @Test
     @Transactional
@@ -137,6 +147,39 @@ class GenerationJobPersistenceProbeTest {
                 .updateTime(now)
                 .build();
         assertEquals(1, deadLetterMapper.insertSelective(deadLetter));
+
+        LibraryAsset asset = LibraryAsset.builder()
+                .workspaceId(job.getWorkspaceId())
+                .ownerId(1L)
+                .assetType("IMAGE")
+                .sourceType("UPLOAD")
+                .displayName("probe.png")
+                .originalUri("file:///probe.png")
+                .sha256("probe-asset-hash")
+                .mimeType("image/png")
+                .extension("png")
+                .sizeBytes(10L)
+                .width(2)
+                .height(2)
+                .visibility("private")
+                .moderationStatus("APPROVED")
+                .metadata("{}")
+                .createTime(now)
+                .updateTime(now)
+                .isDelete(0)
+                .build();
+        assertEquals(1, assetMapper.insertSelective(asset));
+        LibraryAssetVariant variant = LibraryAssetVariant.builder()
+                .assetId(asset.getId())
+                .variantType("ORIGINAL")
+                .uri(asset.getOriginalUri())
+                .format("png")
+                .width(2)
+                .height(2)
+                .sizeBytes(10L)
+                .createTime(now)
+                .build();
+        assertEquals(1, assetVariantMapper.insertSelective(variant));
 
         assertTrue(workspaceMapper.selectCountByQuery(
                 com.mybatisflex.core.query.QueryWrapper.create()) > 0);

@@ -1169,7 +1169,8 @@ jobId  attempt  stage  revision
 ### Phase 0：基线与契约（1～2 天）
 
 > 实施状态（2026-10-22）：默认个人 Workspace、WorkspaceMember、App.workspaceId、
-> 资源 visibility、Job 领域契约和 20 条固定 prompt 评估集已落地。真实模型基线报告
+> 资源 visibility、Job 领域契约、20 条固定 prompt 评估集和通用 Asset Registry 基础
+> 已落地。真实模型基线报告
 > 仍需在独立离线任务中执行，因此 Phase 0 暂不标记完全完成。
 
 #### 目标
@@ -1864,7 +1865,7 @@ Playwright、视觉评估和强沙箱应贯穿 Phase 2 之后，作为持续增�
 - 跨实例取消已通过 CANCEL_REQUESTED + fencing 阻止旧 Worker 写状态/事件；旧模型调用仍需
   等阶段边界退出，尚未做跨线程强制中止。
 - SSE 已可重放，但前端尚未提供独立 Job 列表；页面恢复仍按 App 状态与当前版本进行。
-- 本轮完成编译、前端构建、92 个默认测试、MySQL 5.7 V3～V7 实际迁移和持久化探针；
+- 本轮完成编译、前端构建、93 个默认测试、MySQL 5.7 V3～V8 实际迁移和持久化探针；
   20 条固定 prompt 已入库，真实质量基线仍需离线执行记录。
 
 ### Phase 3 追加实施记录
@@ -1916,3 +1917,13 @@ Playwright、视觉评估和强沙箱应贯穿 Phase 2 之后，作为持续增�
 - 每条需求记录 category、requiredCapabilities、viewportProfile 和 weight，供后续离线运行器
   统一比较 build/render/token/耗时与人工 rubric。
 - 新增 `GET /v1/evaluation/prompts` 查询入口；普通测试只校验样本完整性，不调用真实模型。
+
+### Asset Registry 基础实施记录
+
+- 新增通用 `app_asset` / `app_asset_variant`：支持 IMAGE、VIDEO、AUDIO、MODEL_3D、
+  FONT、OTHER，记录 source/license/visibility/moderation/MIME/尺寸/大小。
+- Upload 采用 Workspace + assetType + SHA-256 唯一约束做内容去重；原始文件进入本地
+  `tmp/assets/{workspaceId}`，并自动写 ORIGINAL variant。
+- 新增 `POST /v1/assets/upload`、`GET /v1/assets`、`GET /v1/assets/{id}`。
+- 当前是本地 Asset Store 与上传链路，缩略图、视频转码、音频波形、3D 预览和 COS/S3
+  适配仍待后续 Processor 阶段；生成图片链路暂继续沿用现有 SiteImageService。
