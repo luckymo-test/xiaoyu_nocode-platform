@@ -9,6 +9,7 @@ import com.mofanyi.entity.LibraryAsset;
 import com.mofanyi.entity.LibraryAssetVariant;
 import com.mofanyi.entity.WorkspaceAuditLog;
 import com.mofanyi.entity.AppAnalyticsEvent;
+import com.mofanyi.entity.AppPublication;
 import com.mofanyi.mapper.AppRevisionMapper;
 import com.mofanyi.mapper.AppArtifactMapper;
 import com.mofanyi.mapper.GenerationDeadLetterMapper;
@@ -17,6 +18,7 @@ import com.mofanyi.mapper.LibraryAssetVariantMapper;
 import com.mofanyi.mapper.WorkspaceAuditLogMapper;
 import com.mofanyi.mapper.AppAnalyticsEventMapper;
 import com.mofanyi.mapper.AppAnalyticsDailyMapper;
+import com.mofanyi.mapper.AppPublicationMapper;
 import com.mofanyi.mapper.GenerationJobMapper;
 import com.mofanyi.mapper.WorkspaceMapper;
 import org.junit.jupiter.api.DisplayName;
@@ -72,6 +74,9 @@ class GenerationJobPersistenceProbeTest {
 
     @Autowired
     private AppAnalyticsDailyMapper analyticsDailyMapper;
+
+    @Autowired
+    private AppPublicationMapper publicationMapper;
 
     @Test
     @Transactional
@@ -222,6 +227,21 @@ class GenerationJobPersistenceProbeTest {
         assertEquals(1, analyticsDailyMapper.increment(
                 analyticsEvent.getId(), job.getAppId(), revision.getId(),
                 now.toLocalDate(), "page_view"));
+
+        AppPublication publication = AppPublication.builder()
+                .appId(job.getAppId())
+                .revisionId(revision.getId())
+                .workspaceId(job.getWorkspaceId())
+                .publisherId(1L)
+                .status("PENDING")
+                .title("probe publication")
+                .description("probe")
+                .license("CC-BY-4.0")
+                .forkAllowed(1)
+                .createTime(now)
+                .updateTime(now)
+                .build();
+        assertEquals(1, publicationMapper.insertSelective(publication));
 
         assertTrue(workspaceMapper.selectCountByQuery(
                 com.mybatisflex.core.query.QueryWrapper.create()) > 0);

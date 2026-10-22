@@ -1170,7 +1170,7 @@ jobId  attempt  stage  revision
 
 > 实施状态（2026-10-22）：默认个人 Workspace、WorkspaceMember、App.workspaceId、
 > 资源 visibility、Job 领域契约、20 条固定 prompt 评估集、通用 Asset Registry 基础和
-> Skill Registry、团队 RBAC/ACL 与 App Analytics 基础
+> Skill Registry、团队 RBAC/ACL、App Analytics 与社区发布审核基础
 > 已落地。真实模型基线报告
 > 仍需在独立离线任务中执行，因此 Phase 0 暂不标记完全完成。
 
@@ -1866,7 +1866,7 @@ Playwright、视觉评估和强沙箱应贯穿 Phase 2 之后，作为持续增�
 - 跨实例取消已通过 CANCEL_REQUESTED + fencing 阻止旧 Worker 写状态/事件；旧模型调用仍需
   等阶段边界退出，尚未做跨线程强制中止。
 - SSE 已可重放，但前端尚未提供独立 Job 列表；页面恢复仍按 App 状态与当前版本进行。
-- 本轮完成编译、前端构建、98 个默认测试、MySQL 5.7 V3～V11 实际迁移和持久化探针；
+- 本轮完成编译、前端构建、99 个默认测试、MySQL 5.7 V3～V12 实际迁移和持久化探针；
   20 条固定 prompt 已入库，真实质量基线仍需离线执行记录。
 
 ### Phase 3 追加实施记录
@@ -1960,3 +1960,12 @@ Playwright、视觉评估和强沙箱应贯穿 Phase 2 之后，作为持续增�
   `GET /v1/apps/{appId}/analytics/daily` 使用 Workspace VIEW 权限。
 - 聚合维度包含 app/revision/date/eventName，可直接比较版本效果。
 - 当前未接前端 Dashboard、采样策略、ClickHouse 和隐私数据自动清洗。
+
+### 社区发布基础实施记录
+
+- 新增 `app_publication`，发布对象绑定不可变 Revision、App、Workspace、License 与
+  forkAllowed，不绑定 live current 指针。
+- 支持提交 PENDING、管理员审核通过/拒绝、公开列表、公开详情和 TAKEDOWN。
+- 同一 Revision 只允许创建一条发布记录；审核接口使用现有 admin role 校验。
+- 当前尚未实现 Fork/Remix、评论、评分、举报和版权申诉流程；这些需要后续独立
+  Community Bounded Context 与引用关系图。
