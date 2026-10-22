@@ -1,0 +1,25 @@
+{
+  "version": "1",
+  "prompts": [
+    {"id":"html-landing-01","category":"landing","prompt":"生成一个面向独立开发者的 SaaS 落地页，突出核心功能和价格方案。","requiredCapabilities":["responsive","hero","pricing"],"viewportProfile":"default","weight":1},
+    {"id":"html-login-02","category":"form","prompt":"生成一个简洁的登录页面，包含账号密码登录、记住我和错误提示。","requiredCapabilities":["responsive","form","validation"],"viewportProfile":"default","weight":1},
+    {"id":"html-blog-03","category":"content","prompt":"生成一个个人技术博客首页，展示文章列表、标签和作者简介。","requiredCapabilities":["responsive","content-list","seo-basic"],"viewportProfile":"default","weight":1},
+    {"id":"html-portfolio-04","category":"portfolio","prompt":"生成一个极简摄影作品集首页，用真实摄影图片展示多个主题。","requiredCapabilities":["responsive","image-gallery","photography"],"viewportProfile":"visual","weight":2},
+    {"id":"html-gallery-05","category":"gallery","prompt":"生成一个照片墙网站，包含自然、城市、人文、动物和电影主题。","requiredCapabilities":["responsive","masonry-gallery","image-gallery"],"viewportProfile":"visual","weight":2},
+    {"id":"html-restaurant-06","category":"business","prompt":"生成一家现代餐厅官网，包含菜单、营业时间、地址和环境照片。","requiredCapabilities":["responsive","menu","map-link","image-gallery"],"viewportProfile":"visual","weight":1},
+    {"id":"html-event-07","category":"marketing","prompt":"生成一个科技大会活动页，包含议程、嘉宾、会场和报名按钮。","requiredCapabilities":["responsive","agenda","speaker-grid","cta"],"viewportProfile":"default","weight":1},
+    {"id":"html-product-08","category":"commerce","prompt":"生成一个智能硬件产品发布页，包含卖点、参数、评价和购买入口。","requiredCapabilities":["responsive","product-feature","pricing","cta"],"viewportProfile":"default","weight":1},
+    {"id":"html-dashboard-09","category":"dashboard","prompt":"生成一个销售数据仪表盘，用卡片和图表展示关键指标。","requiredCapabilities":["responsive","dashboard","chart"],"viewportProfile":"default","weight":2},
+    {"id":"html-docs-10","category":"docs","prompt":"生成一个 API 文档首页，带侧边导航、代码示例和搜索框。","requiredCapabilities":["responsive","navigation","code-block"],"viewportProfile":"default","weight":1},
+    {"id":"html-dark-11","category":"theme","prompt":"生成一个深色电影工作室官网，使用克制的金色强调和大画幅背景。","requiredCapabilities":["responsive","dark-theme","cinematic"],"viewportProfile":"visual","weight":2},
+    {"id":"html-mobile-12","category":"responsive","prompt":"生成一个移动优先的咖啡馆官网，手机上保持舒适阅读和可点击按钮。","requiredCapabilities":["responsive","mobile-first","accessibility"],"viewportProfile":"mobile","weight":2},
+    {"id":"multi-dashboard-13","category":"dashboard","prompt":"生成多文件的管理后台首页，拆分为 HTML、CSS 和 JS，包含统计卡和最近订单。","requiredCapabilities":["multi-file","dashboard","responsive"],"viewportProfile":"default","weight":2},
+    {"id":"multi-booking-14","category":"form","prompt":"生成多文件的酒店预订页，包含日期选择、房型卡片和表单校验。","requiredCapabilities":["multi-file","form","interaction"],"viewportProfile":"default","weight":2},
+    {"id":"multi-course-15","category":"education","prompt":"生成多文件的在线课程首页，包含课程卡片、讲师介绍和章节预览。","requiredCapabilities":["multi-file","content-list","responsive"],"viewportProfile":"default","weight":1},
+    {"id":"multi-travel-16","category":"content","prompt":"生成多文件的旅行目的地页面，包含大图、路线、预算和建议。","requiredCapabilities":["multi-file","image-gallery","responsive"],"viewportProfile":"visual","weight":1},
+    {"id":"vue-todo-17","category":"app","prompt":"生成 Vue3 待办应用，支持新增、完成、筛选和本地持久化。","requiredCapabilities":["vue","interaction","state"],"viewportProfile":"default","weight":2},
+    {"id":"vue-notes-18","category":"app","prompt":"生成 Vue3 笔记应用，支持搜索、标签、编辑和删除。","requiredCapabilities":["vue","search","crud"],"viewportProfile":"default","weight":2},
+    {"id":"vue-shop-19","category":"commerce","prompt":"生成 Vue3 小型商品目录，支持分类筛选、购物车数量和总价计算。","requiredCapabilities":["vue","filter","cart","state"],"viewportProfile":"default","weight":2},
+    {"id":"vue-photography-20","category":"gallery","prompt":"生成 Vue3 摄影作品站，支持主题筛选、灯箱预览和响应式图片。","requiredCapabilities":["vue","image-gallery","filter","responsive-images"],"viewportProfile":"visual","weight":3}
+  ]
+}

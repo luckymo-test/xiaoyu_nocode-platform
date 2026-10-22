@@ -1,7 +1,7 @@
 # 计划书：零代码生成平台可扩展架构重构
 
 > 日期：2026-10-22
-> 状态：Phase 0 数据契约部分 + Phase 1～3 已实施；Phase 4～6 基础能力已落地，
+> 状态：Phase 0 数据契约与固定评估集 + Phase 1～3 已实施；Phase 4～6 基础能力已落地，
 > React/Next 执行适配、模板 Golden 门禁与独立容器沙箱尚未完成
 > 目标：在不推翻现有 Agent、记忆、图片和验证能力的前提下，把平台从“单实例同步生成器”演进为
 > **任务可恢复、产物可追踪、运行时可选、模板可组合、Worker 可横向扩展**的生成平台。
@@ -1169,8 +1169,8 @@ jobId  attempt  stage  revision
 ### Phase 0：基线与契约（1～2 天）
 
 > 实施状态（2026-10-22）：默认个人 Workspace、WorkspaceMember、App.workspaceId、
-> 资源 visibility 和 Job 领域契约已落地。20 条固定 prompt 的评估集与基线报告尚未完成，
-> 因此 Phase 0 只能视为“数据契约部分完成”。
+> 资源 visibility、Job 领域契约和 20 条固定 prompt 评估集已落地。真实模型基线报告
+> 仍需在独立离线任务中执行，因此 Phase 0 暂不标记完全完成。
 
 #### 目标
 
@@ -1864,8 +1864,8 @@ Playwright、视觉评估和强沙箱应贯穿 Phase 2 之后，作为持续增�
 - 跨实例取消已通过 CANCEL_REQUESTED + fencing 阻止旧 Worker 写状态/事件；旧模型调用仍需
   等阶段边界退出，尚未做跨线程强制中止。
 - SSE 已可重放，但前端尚未提供独立 Job 列表；页面恢复仍按 App 状态与当前版本进行。
-- 本轮完成编译、前端构建、91 个默认测试、MySQL 5.7 V3～V7 实际迁移和持久化探针；
-  20 条固定 prompt 的质量基线仍未建立。
+- 本轮完成编译、前端构建、92 个默认测试、MySQL 5.7 V3～V7 实际迁移和持久化探针；
+  20 条固定 prompt 已入库，真实质量基线仍需离线执行记录。
 
 ### Phase 3 追加实施记录
 
@@ -1908,3 +1908,11 @@ Playwright、视觉评估和强沙箱应贯穿 Phase 2 之后，作为持续增�
 - `before-* / after-*` 截图和 `VISUAL_DIFF` 已进入 Revision Artifact Graph。
 - 当前浏览器仍由 Selenium 进程创建，不具备独立容器、CPU/内存 cgroup、网络 namespace
   等强沙箱；这些留待后续 Worker/沙箱阶段。
+
+### Phase 0 追加实施记录（固定评估集）
+
+- 新增版本化 `evaluation/generation-prompts.json`，包含 20 条覆盖 landing、表单、内容、
+  摄影/画廊、Dashboard、移动端、多文件和 Vue 应用的需求。
+- 每条需求记录 category、requiredCapabilities、viewportProfile 和 weight，供后续离线运行器
+  统一比较 build/render/token/耗时与人工 rubric。
+- 新增 `GET /v1/evaluation/prompts` 查询入口；普通测试只校验样本完整性，不调用真实模型。
