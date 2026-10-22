@@ -92,6 +92,11 @@ public class AppVO implements Serializable {
     private Long workspaceId;
 
     /**
+     * 当前发布版本 id
+     */
+    private Long currentRevision;
+
+    /**
      * 创建时间
      */
     private LocalDateTime createTime;

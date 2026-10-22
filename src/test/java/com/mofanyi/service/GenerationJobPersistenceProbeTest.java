@@ -2,6 +2,10 @@ package com.mofanyi.service;
 
 import com.mofanyi.entity.GenerationJob;
 import com.mofanyi.entity.GenerationJobEvent;
+import com.mofanyi.entity.AppRevision;
+import com.mofanyi.entity.AppArtifact;
+import com.mofanyi.mapper.AppRevisionMapper;
+import com.mofanyi.mapper.AppArtifactMapper;
 import com.mofanyi.mapper.GenerationJobMapper;
 import com.mofanyi.mapper.WorkspaceMapper;
 import org.junit.jupiter.api.DisplayName;
@@ -33,6 +37,12 @@ class GenerationJobPersistenceProbeTest {
 
     @Autowired
     private WorkspaceMapper workspaceMapper;
+
+    @Autowired
+    private AppRevisionMapper revisionMapper;
+
+    @Autowired
+    private AppArtifactMapper artifactMapper;
 
     @Test
     @Transactional
@@ -68,6 +78,38 @@ class GenerationJobPersistenceProbeTest {
                 java.util.Map.of("stage", "GENERATE", "status", "RUNNING"));
         assertEquals(1L, event.getSeq());
         assertEquals("RUNNING", eventService.readPayload(event).path("status").asText());
+
+        AppRevision revision = AppRevision.builder()
+                .workspaceId(990001000000000001L)
+                .appId(990001000000000002L)
+                .jobId(job.getId())
+                .revisionNo(1L)
+                .status("CREATED")
+                .codeGenType("html")
+                .sourceUri("file:///probe/source")
+                .validationStatus("ok")
+                .createdBy(1L)
+                .createTime(now)
+                .updateTime(now)
+                .build();
+        assertEquals(1, revisionMapper.insertSelective(revision));
+        AppArtifact artifact = AppArtifact.builder()
+                .revisionId(revision.getId())
+                .jobId(job.getId())
+                .appId(job.getAppId())
+                .workspaceId(job.getWorkspaceId())
+                .artifactType("SOURCE_TREE")
+                .scope("PROJECT")
+                .ownerId(1L)
+                .visibility("private")
+                .uri("file:///probe/source")
+                .sha256("probe")
+                .sizeBytes(1L)
+                .mimeType("application/vnd.xiaoyu.source-tree")
+                .metadata("{}")
+                .createTime(now)
+                .build();
+        assertEquals(1, artifactMapper.insertSelective(artifact));
 
         assertTrue(workspaceMapper.selectCountByQuery(
                 com.mybatisflex.core.query.QueryWrapper.create()) > 0);

@@ -75,7 +75,7 @@ public class ProjectDownloadService {
         App app = appAuthService.requireOwner(appId, loginUser);
         CodeGenTypeEnum type = CodeGenTypeEnum.getEnumByValue(app.getCodeGenType());
         ThrowUtils.throwIf(type == null, ErrorCode.PARAMS_ERROR, "应用类型未知");
-        String projectDir = codeFileWriteService.getProjectDir(type, appId);
+        String projectDir = codeFileWriteService.getLiveProjectDir(type, appId);
         File sourceDir = new File(projectDir);
         ThrowUtils.throwIf(!FileUtil.exist(sourceDir) || !sourceDir.isDirectory(),
                 ErrorCode.OPERATION_ERROR, "应用尚未生成代码，请先生成");

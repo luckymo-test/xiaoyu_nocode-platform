@@ -15,6 +15,8 @@ import com.mofanyi.model.vo.AiCodeGenResultVO;
 import com.mofanyi.service.ChatHistoryService;
 import com.mofanyi.service.GenerationJobEventService;
 import com.mofanyi.service.GenerationJobService;
+import com.mofanyi.service.AppRevisionService;
+import com.mofanyi.workspace.WorkspaceManager;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
@@ -46,6 +48,8 @@ public class GenerationJobRunner {
     private final ReasoningProfileRegistry reasoningProfiles;
     private final ChatHistoryService chatHistoryService;
     private final GeneratedResultContentFormatter contentFormatter;
+    private final WorkspaceManager workspaceManager;
+    private final AppRevisionService revisionService;
     private final ScheduledExecutorService heartbeatExecutor;
 
     @Value("${codegen.jobs.worker-id:${HOSTNAME:local-worker}}")
@@ -57,6 +61,8 @@ public class GenerationJobRunner {
                                ReasoningProfileRegistry reasoningProfiles,
                                ChatHistoryService chatHistoryService,
                                GeneratedResultContentFormatter contentFormatter,
+                               WorkspaceManager workspaceManager,
+                               AppRevisionService revisionService,
                                @Qualifier("jobHeartbeatExecutor")
                                ScheduledExecutorService heartbeatExecutor) {
         this.jobService = jobService;
@@ -65,6 +71,8 @@ public class GenerationJobRunner {
         this.reasoningProfiles = reasoningProfiles;
         this.chatHistoryService = chatHistoryService;
         this.contentFormatter = contentFormatter;
+        this.workspaceManager = workspaceManager;
+        this.revisionService = revisionService;
         this.heartbeatExecutor = heartbeatExecutor;
     }
 
@@ -73,6 +81,7 @@ public class GenerationJobRunner {
         if (job == null) {
             return;
         }
+        WorkspaceManager.WorkspaceHandle workspace = null;
         CountDownLatch finished = new CountDownLatch(1);
         AtomicBoolean callbackFinished = new AtomicBoolean(false);
         AtomicReference<Throwable> callbackFailure = new AtomicReference<>();
@@ -82,6 +91,7 @@ public class GenerationJobRunner {
                 LEASE_SECONDS / 3L, LEASE_SECONDS / 3L, TimeUnit.SECONDS);
 
         try {
+            workspace = workspaceManager.begin(job);
             GenerationJobCreateRequest request = jobService.readCreateRequest(job);
             CodeGenTypeEnum type = CodeGenTypeEnum.getEnumByValue(job.getCodeGenType());
             ReasoningLevel reasoningLevel = reasoningProfiles.parseLevel(request.getReasoningLevel());
@@ -111,7 +121,7 @@ public class GenerationJobRunner {
                 handleFailure(job, callbackFailure.get());
                 return;
             }
-            complete(job, callbackResult.get());
+            complete(job, callbackResult.get(), workspace);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             generatorFacade.stopGenerate(job.getAppId());
@@ -120,13 +130,15 @@ public class GenerationJobRunner {
             handleFailure(job, e);
         } finally {
             heartbeat.cancel(false);
+            workspaceManager.close(workspace);
             if (!callbackFinished.get()) {
                 log.warn("[job] runner 退出但 Agent 未回调完成，jobId={}", jobId);
             }
         }
     }
 
-    private void complete(GenerationJob job, AiCodeGenResultVO result) {
+    private void complete(GenerationJob job, AiCodeGenResultVO result,
+                          WorkspaceManager.WorkspaceHandle workspace) {
         if (result == null) {
             fail(job, "EMPTY_RESULT", "生成结果为空");
             return;
@@ -136,6 +148,17 @@ public class GenerationJobRunner {
             handleFailure(job, new GenerationCancelledException(job.getAppId()));
             return;
         }
+        String validationStatus = awaitRepairAndValidationStatus(job.getAppId());
+        latest = jobService.requireJob(job.getId());
+        if (GenerationJobStatusEnum.CANCEL_REQUESTED.getValue().equals(latest.getStatus())) {
+            handleFailure(job, new GenerationCancelledException(job.getAppId()));
+            return;
+        }
+        var revision = revisionService.publishJob(job, workspace, validationStatus);
+        appendQuietly(job, "artifact_created", "PUBLISH",
+                Map.of("revisionId", String.valueOf(revision.getId()),
+                        "revisionNo", revision.getRevisionNo(),
+                        "validationStatus", validationStatus));
         emitStage(job, "COMPLETED", "SUCCEEDED");
         appendQuietly(job, "completed", "COMPLETED", result);
         saveAssistantMessageQuietly(job, result, null);
@@ -143,6 +166,24 @@ public class GenerationJobRunner {
                 "COMPLETED", null, null)) {
             log.warn("[job] 完成状态写入被 fencing 拒绝，jobId={}", job.getId());
         }
+    }
+
+    private String awaitRepairAndValidationStatus(Long appId) {
+        long deadline = System.currentTimeMillis() + 5 * 60_000L;
+        while (System.currentTimeMillis() < deadline) {
+            String status = generatorFacade.renderFixStatus(appId);
+            if (!"fixing".equals(status)) {
+                return status == null ? "NOT_APPLICABLE" : status;
+            }
+            try {
+                Thread.sleep(1000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("等待渲染修复被中断", e);
+            }
+        }
+        generatorFacade.stopGenerate(appId);
+        throw new IllegalStateException("渲染修复超时，版本未发布");
     }
 
     private void handleFailure(GenerationJob job, Throwable error) {

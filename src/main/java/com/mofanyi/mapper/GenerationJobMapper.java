@@ -93,6 +93,17 @@ public interface GenerationJobMapper extends BaseMapper<GenerationJob> {
 
     @Update("""
             update generation_job
+            set candidateRevisionId = #{candidateRevisionId},
+                publishedRevisionId = #{publishedRevisionId}, updateTime = now()
+            where id = #{jobId} and fencingToken = #{fencingToken}
+            """)
+    int recordPublishedRevision(@Param("jobId") Long jobId,
+                                @Param("fencingToken") Long fencingToken,
+                                @Param("candidateRevisionId") Long candidateRevisionId,
+                                @Param("publishedRevisionId") Long publishedRevisionId);
+
+    @Update("""
+            update generation_job
             set status = 'CANCEL_REQUESTED', updateTime = now()
             where id = #{jobId} and status in ('QUEUED', 'RUNNING', 'WAITING_RETRY')
             """)

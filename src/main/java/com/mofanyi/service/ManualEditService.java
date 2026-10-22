@@ -85,8 +85,8 @@ public class ManualEditService {
             return new UserEditSnapshot(List.of(), List.of());
         }
         return new UserEditSnapshot(
-                extractBlocks(readFile(type, appId, CSS_FILE)),
-                extractBlocks(readFile(type, appId, HTML_FILE)));
+                extractBlocks(readLiveFile(type, appId, CSS_FILE)),
+                extractBlocks(readLiveFile(type, appId, HTML_FILE)));
     }
 
     /**
@@ -151,12 +151,21 @@ public class ManualEditService {
         codeFileWriteService.saveProjectFile(type, appId, relPath, content);
     }
 
+    private String readLiveFile(CodeGenTypeEnum type, Long appId, String relPath) {
+        return codeFileWriteService.readFile(
+                codeFileWriteService.getLiveProjectDir(type, appId), relPath);
+    }
+
+    private void writeLiveFile(CodeGenTypeEnum type, Long appId, String relPath, String content) {
+        codeFileWriteService.saveLiveProjectFile(type, appId, relPath, content);
+    }
+
     /**
      * 列出全部手动修改：先 style（css 顺序），后 text（html 顺序）
      */
     public List<EditItem> list(CodeGenTypeEnum type, Long appId) {
         List<EditItem> items = new ArrayList<>();
-        String css = readFile(type, appId, CSS_FILE);
+        String css = readLiveFile(type, appId, CSS_FILE);
         if (StrUtil.isNotBlank(css)) {
             Matcher m = STYLE_BLOCK.matcher(css);
             while (m.find()) {
@@ -164,7 +173,7 @@ public class ManualEditService {
                 items.add(new EditItem(m.group(1), KIND_STYLE, extractSelector(body), body));
             }
         }
-        String html = readFile(type, appId, HTML_FILE);
+        String html = readLiveFile(type, appId, HTML_FILE);
         if (StrUtil.isNotBlank(html)) {
             Matcher m = TEXT_BLOCK.matcher(html);
             while (m.find()) {
@@ -184,12 +193,12 @@ public class ManualEditService {
         ThrowUtils.throwIf(rule.isEmpty(), ErrorCode.PARAMS_ERROR, "修改内容为空");
         ThrowUtils.throwIf(rule.length() > MAX_CSS_LEN, ErrorCode.PARAMS_ERROR, "修改内容过长");
         checkNoMarker(rule);
-        String base = readFile(type, appId, CSS_FILE);
+        String base = readLiveFile(type, appId, CSS_FILE);
         ThrowUtils.throwIf(StrUtil.isBlank(base),
                 ErrorCode.OPERATION_ERROR, "尚未生成样式文件，请先生成");
         String id = UUID.randomUUID().toString();
         String block = "\n/* @user-edit:" + id + " */\n" + rule + "\n/* @end-user-edit */\n";
-        writeFile(type, appId, CSS_FILE, base + block);
+        writeLiveFile(type, appId, CSS_FILE, base + block);
         String sel = StrUtil.isBlank(selector) ? extractSelector(rule) : selector.trim();
         appSpecService.recordChange(type, appId, "手动编辑", "样式：" + sel);
         return new EditItem(id, KIND_STYLE, sel, rule);
@@ -204,7 +213,7 @@ public class ManualEditService {
         ThrowUtils.throwIf(newText.isEmpty(), ErrorCode.PARAMS_ERROR, "文字内容为空");
         ThrowUtils.throwIf(newText.length() > MAX_TEXT_LEN, ErrorCode.PARAMS_ERROR, "文字内容过长");
         checkNoMarker(newText);
-        String html = readFile(type, appId, HTML_FILE);
+        String html = readLiveFile(type, appId, HTML_FILE);
         ThrowUtils.throwIf(StrUtil.isBlank(html),
                 ErrorCode.OPERATION_ERROR, "尚未生成页面文件，请先生成");
         String id = UUID.randomUUID().toString();
@@ -218,7 +227,7 @@ public class ManualEditService {
                 + "if(e){e.textContent=s.getAttribute('data-text');}})();</script>\n"
                 + "<!-- @end-user-edit -->\n";
         String newHtml = insertBeforeBodyClose(html, block);
-        writeFile(type, appId, HTML_FILE, newHtml);
+        writeLiveFile(type, appId, HTML_FILE, newHtml);
         appSpecService.recordChange(type, appId, "手动编辑", "文字：" + selector.trim() + " → " + newText);
         return new EditItem(id, KIND_TEXT, selector.trim(), newText);
     }
@@ -228,19 +237,19 @@ public class ManualEditService {
      */
     public boolean undo(CodeGenTypeEnum type, Long appId, String id) {
         ThrowUtils.throwIf(StrUtil.isBlank(id), ErrorCode.PARAMS_ERROR, "缺少修改 id");
-        String css = readFile(type, appId, CSS_FILE);
+        String css = readLiveFile(type, appId, CSS_FILE);
         if (StrUtil.isNotBlank(css)) {
             String stripped = removeBlockById(css, id);
             if (stripped != null) {
-                writeFile(type, appId, CSS_FILE, stripped);
+                writeLiveFile(type, appId, CSS_FILE, stripped);
                 return true;
             }
         }
-        String html = readFile(type, appId, HTML_FILE);
+        String html = readLiveFile(type, appId, HTML_FILE);
         if (StrUtil.isNotBlank(html)) {
             String stripped = removeBlockById(html, id);
             if (stripped != null) {
-                writeFile(type, appId, HTML_FILE, stripped);
+                writeLiveFile(type, appId, HTML_FILE, stripped);
                 return true;
             }
         }
@@ -252,7 +261,7 @@ public class ManualEditService {
      */
     public int clear(CodeGenTypeEnum type, Long appId) {
         int count = 0;
-        String css = readFile(type, appId, CSS_FILE);
+        String css = readLiveFile(type, appId, CSS_FILE);
         if (StrUtil.isNotBlank(css)) {
             Matcher m = STYLE_BLOCK.matcher(css);
             int n = 0;
@@ -260,11 +269,11 @@ public class ManualEditService {
                 n++;
             }
             if (n > 0) {
-                writeFile(type, appId, CSS_FILE, STYLE_BLOCK.matcher(css).replaceAll(""));
+                writeLiveFile(type, appId, CSS_FILE, STYLE_BLOCK.matcher(css).replaceAll(""));
                 count += n;
             }
         }
-        String html = readFile(type, appId, HTML_FILE);
+        String html = readLiveFile(type, appId, HTML_FILE);
         if (StrUtil.isNotBlank(html)) {
             Matcher m = TEXT_BLOCK.matcher(html);
             int n = 0;
@@ -272,7 +281,7 @@ public class ManualEditService {
                 n++;
             }
             if (n > 0) {
-                writeFile(type, appId, HTML_FILE, TEXT_BLOCK.matcher(html).replaceAll(""));
+                writeLiveFile(type, appId, HTML_FILE, TEXT_BLOCK.matcher(html).replaceAll(""));
                 count += n;
             }
         }

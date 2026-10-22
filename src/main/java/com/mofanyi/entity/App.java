@@ -122,6 +122,12 @@ public class App implements Serializable {
     private Long workspaceId;
 
     /**
+     * 当前发布版本 id
+     */
+    @Column("currentRevision")
+    private Long currentRevision;
+
+    /**
      * 编辑时间
      */
     @Column("editTime")

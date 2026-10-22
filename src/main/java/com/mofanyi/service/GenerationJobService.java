@@ -134,6 +134,7 @@ public class GenerationJobService {
                 .currentStage(STAGE_QUEUED)
                 .codeGenType(request.getCodeGenType())
                 .visibility(request.getVisibility())
+                .baseRevisionId(app.getCurrentRevision())
                 .priority(0)
                 .attempt(0)
                 .maxAttempts(1)
@@ -248,6 +249,13 @@ public class GenerationJobService {
             appService.updateGenerateStatus(job.getAppId(), appStatus);
         }
         return updated;
+    }
+
+    public void recordPublishedRevision(GenerationJob job, Long revisionId) {
+        ThrowUtils.throwIf(job == null || revisionId == null, ErrorCode.PARAMS_ERROR);
+        ThrowUtils.throwIf(jobMapper.recordPublishedRevision(job.getId(), job.getFencingToken(),
+                revisionId, revisionId) != 1,
+                ErrorCode.OPERATION_ERROR, "记录发布版本失败");
     }
 
     public JsonNode parseRequest(GenerationJob job) {

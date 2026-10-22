@@ -1,7 +1,7 @@
 # 计划书：零代码生成平台可扩展架构重构
 
 > 日期：2026-10-22
-> 状态：Phase 0 数据契约部分 + Phase 1 已实施；Phase 2 及其后尚未开始
+> 状态：Phase 0 数据契约部分 + Phase 1 + Phase 2 已实施；Phase 3 及其后尚未开始
 > 目标：在不推翻现有 Agent、记忆、图片和验证能力的前提下，把平台从“单实例同步生成器”演进为
 > **任务可恢复、产物可追踪、运行时可选、模板可组合、Worker 可横向扩展**的生成平台。
 
@@ -1226,6 +1226,9 @@ codegen.artifacts.versioned=false
 
 ### Phase 2：隔离 Workspace + Artifact Graph + Revision（5～7 天）
 
+> 实施状态（2026-10-22）：隔离草稿、不可变 Revision、Artifact Manifest、原子发布、
+> 版本列表/对比/回滚及前端版本历史入口已完成首版。
+
 #### 目标
 
 解决直接覆盖、不可回滚、产物不可追踪。
@@ -1830,11 +1833,23 @@ Playwright、视觉评估和强沙箱应贯穿 Phase 2 之后，作为持续增�
   MySQL Outbox Relay + Redis Streams Consumer Group。
 - Job 租约、心跳、fencingToken、过期租约重入队与 Outbox `DISPATCHING` 恢复已具备首版。
 
+### Phase 2 追加实施记录
+
+- 每次 Job 从 live 当前内容复制独立 run workspace，Agent、素材、规格、验证和修复全部写草稿。
+- 成功后快照到 `tmp/apps/{appId}/revisions/{revisionId}/source`，生成 SHA-256 Manifest 和
+  `app_artifact` 元数据；失败、取消、超时不修改 live。
+- 发布时先准备完整 stage，再切换 live 目录并用 `app.currentRevision` CAS 防止覆盖；
+  文件切换失败会恢复 backup，启动时也会恢复中断的半发布目录。
+- 新增版本 API：列表、详情、版本对比、发布、回滚；前端增加“版本历史”抽屉。
+- Job 会等待本轮渲染修复结束后再发布，避免异步修复绕过 Revision 直接写 live。
+
 ### 明确边界
 
-- 源码仍写入当前 live 工程目录；隔离 Workspace、Revision、Artifact Graph 与原子发布属于 Phase 2。
+- 当前 Revision 以本地文件目录为 Artifact Store；COS/S3 实现仍待后续接入。
+- 手动编辑仍直接作用于 live，尚未自动生成新的 Revision。
+- 模板选择尚未实现，因此 Manifest 暂时记录当前 `codeGenType`，还没有 Template Version Hash。
 - 当前取消是单实例协作取消；跨实例取消能够阻止 Job 终态被错误写成成功，但旧实例上的
   模型调用仍需等阶段边界退出，完整的分布式取消随 Lease/Quota 阶段加强。
-- SSE 已可重放，但前端尚未提供独立的 Job 历史面板与按 Job 手动恢复选择。
-- 本轮完成编译、前端构建、79 个默认测试和 MySQL 5.7 实际迁移/持久化探针；
+- SSE 已可重放，但前端尚未提供独立 Job 列表；页面恢复仍按 App 状态与当前版本进行。
+- 本轮完成编译、前端构建、82 个默认测试、MySQL 5.7 V3/V4 实际迁移和持久化探针；
   20 条固定 prompt 的质量基线仍未建立。

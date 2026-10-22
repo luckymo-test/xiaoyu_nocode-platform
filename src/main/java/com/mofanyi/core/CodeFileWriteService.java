@@ -7,7 +7,9 @@ import com.mofanyi.exception.ErrorCode;
 import com.mofanyi.exception.ThrowUtils;
 import com.mofanyi.model.enums.CodeGenTypeEnum;
 import com.mofanyi.model.vo.AiCodeGenResultVO;
+import com.mofanyi.workspace.ProjectWorkspaceContext;
 import lombok.Data;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Service;
 
@@ -58,6 +60,9 @@ public class CodeFileWriteService {
      */
     private String domain;
 
+    @Autowired(required = false)
+    private ProjectWorkspaceContext workspaceContext;
+
     /**
      * 部署应用：将临时目录下的项目复制到部署目录（deployKey 作为目录名）
      *
@@ -70,7 +75,9 @@ public class CodeFileWriteService {
         ThrowUtils.throwIf(StrUtil.isBlank(codeGenType), ErrorCode.PARAMS_ERROR);
         ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
         ThrowUtils.throwIf(StrUtil.isBlank(deployKey), ErrorCode.PARAMS_ERROR);
-        Path source = Paths.get(tmpRoot, codeGenType + "_" + appId);
+        CodeGenTypeEnum type = CodeGenTypeEnum.getEnumByValue(codeGenType);
+        ThrowUtils.throwIf(type == null, ErrorCode.PARAMS_ERROR, "未知生成类型");
+        Path source = Paths.get(getLiveProjectDir(type, appId));
         ThrowUtils.throwIf(!FileUtil.exist(source.toFile()),
                 ErrorCode.OPERATION_ERROR, "应用尚未生成代码，请先生成");
         Path target = Paths.get(deployRoot, deployKey);
@@ -93,8 +100,7 @@ public class CodeFileWriteService {
     public String createProjectDir(CodeGenTypeEnum type, Long appId) {
         ThrowUtils.throwIf(type == null, ErrorCode.PARAMS_ERROR);
         ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
-        String dirName = type.getValue() + "_" + appId;
-        Path dir = Paths.get(tmpRoot, dirName);
+        Path dir = projectPath(type, appId);
         FileUtil.mkdir(dir.toFile());
         return dir.toString();
     }
@@ -109,8 +115,16 @@ public class CodeFileWriteService {
     public String getProjectDir(CodeGenTypeEnum type, Long appId) {
         ThrowUtils.throwIf(type == null, ErrorCode.PARAMS_ERROR);
         ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
-        String dirName = type.getValue() + "_" + appId;
-        return Paths.get(tmpRoot, dirName).toString();
+        return projectPath(type, appId).toString();
+    }
+
+    /**
+     * 始终返回 live 工程目录，绕过 Job 隔离上下文。
+     */
+    public String getLiveProjectDir(CodeGenTypeEnum type, Long appId) {
+        ThrowUtils.throwIf(type == null, ErrorCode.PARAMS_ERROR);
+        ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
+        return liveProjectPath(type, appId).toString();
     }
 
     /**
@@ -140,6 +154,28 @@ public class CodeFileWriteService {
             vo.setFiles(readVueProject(projectDir));
         }
         return vo;
+    }
+
+    /**
+     * 外部预览/接口读取当前 live 工程，不读取 Job 尚未发布的草稿。
+     */
+    public AiCodeGenResultVO readLiveProjectCode(CodeGenTypeEnum type, Long appId) {
+        return runLive(() -> readProjectCode(type, appId));
+    }
+
+    /**
+     * 用户手动编辑始终作用于 live 当前版本。
+     */
+    public void saveLiveProjectFile(CodeGenTypeEnum type, Long appId, String path, String content) {
+        runLive(() -> {
+            saveProjectFile(type, appId, path, content);
+            return null;
+        });
+    }
+
+    public <T> T runWithLive(java.util.function.Supplier<T> action) {
+        ThrowUtils.throwIf(action == null, ErrorCode.PARAMS_ERROR);
+        return runLive(action);
     }
 
     /**
@@ -322,5 +358,27 @@ public class CodeFileWriteService {
         if (FileUtil.exist(deployDir.toFile())) {
             FileUtil.del(deployDir.toFile());
         }
+    }
+
+    private Path projectPath(CodeGenTypeEnum type, Long appId) {
+        if (workspaceContext != null) {
+            Path override = workspaceContext.resolve(appId);
+            if (override != null) {
+                return override;
+            }
+        }
+        return liveProjectPath(type, appId);
+    }
+
+    private Path liveProjectPath(CodeGenTypeEnum type, Long appId) {
+        String dirName = type.getValue() + "_" + appId;
+        return Paths.get(tmpRoot, dirName).toAbsolutePath().normalize();
+    }
+
+    private <T> T runLive(java.util.function.Supplier<T> action) {
+        if (workspaceContext == null) {
+            return action.get();
+        }
+        return workspaceContext.withLive(action);
     }
 }

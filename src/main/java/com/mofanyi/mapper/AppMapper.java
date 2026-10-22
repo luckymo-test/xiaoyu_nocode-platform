@@ -48,4 +48,15 @@ public interface AppMapper extends BaseMapper<App> {
               )
             """)
     int failStaleGeneratingWithoutActiveJob();
+
+    @Update("""
+            update app
+            set currentRevision = #{revisionId}
+            where id = #{appId}
+              and ((currentRevision is null and #{expectedRevisionId} is null)
+                   or currentRevision = #{expectedRevisionId})
+            """)
+    int compareAndSetCurrentRevision(@Param("appId") Long appId,
+                                     @Param("expectedRevisionId") Long expectedRevisionId,
+                                     @Param("revisionId") Long revisionId);
 }

@@ -258,7 +258,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         if (type == null) {
             return null;
         }
-        return codeFileWriteService.readProjectCode(type, app.getId());
+        return codeFileWriteService.readLiveProjectCode(type, app.getId());
     }
 
     @Override

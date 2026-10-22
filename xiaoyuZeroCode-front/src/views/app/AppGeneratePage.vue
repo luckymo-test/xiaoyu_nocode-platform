@@ -12,6 +12,7 @@ import {
   EditOutlined,
   FileTextOutlined,
   LinkOutlined,
+  HistoryOutlined,
   RobotOutlined,
   StopOutlined,
   UndoOutlined,
@@ -35,6 +36,15 @@ import {
 } from '@/api/aiStream'
 import { createSseConnection } from '@/utils/sse'
 import { getRenderFixStatus } from '@/api/renderFix'
+import {
+  compareAppRevisions,
+  getAppRevision,
+  listAppRevisions,
+  publishAppRevision,
+  rollbackAppRevision,
+  type AppRevision,
+  type RevisionDiff,
+} from '@/api/appRevision'
 import type { SseCallbacks, SseConnection } from '@/utils/sse'
 import { useUserStore } from '@/stores/user'
 import MarkdownView from '@/components/MarkdownView.vue'
@@ -773,8 +783,117 @@ const clearAllManual = async () => {
 // 部署进度（vue 流式部署状态文案）
 const deployStatus = ref('')
 
+// 版本历史
+const revisionDrawerOpen = ref(false)
+const revisionLoading = ref(false)
+const revisionActionId = ref('')
+const revisions = ref<AppRevision[]>([])
+const selectedRevision = ref<AppRevision | null>(null)
+const revisionDiff = ref<RevisionDiff | null>(null)
+
 // 是否流式生成：创建时通过 query 传入（?stream=true/false），默认流式
 const useStream = computed(() => route.query.stream !== 'false')
+
+const revisionStatusMeta = (status: string) => {
+  switch (status) {
+    case 'PUBLISHED':
+      return { text: '当前版本', color: 'green' }
+    case 'SUPERSEDED':
+      return { text: '历史版本', color: 'default' }
+    case 'CREATED':
+      return { text: '待发布', color: 'blue' }
+    default:
+      return { text: status, color: 'default' }
+  }
+}
+
+const formatRevisionTime = (value?: string) => {
+  if (!value) return '-'
+  return new Date(value).toLocaleString('zh-CN', { hour12: false })
+}
+
+const loadRevisions = async () => {
+  revisionLoading.value = true
+  try {
+    const res = await listAppRevisions(appId.value)
+    if (res.data.code !== 0) {
+      message.error(res.data.message || '加载版本历史失败')
+      return
+    }
+    revisions.value = res.data.data ?? []
+  } catch {
+    message.error('加载版本历史失败')
+  } finally {
+    revisionLoading.value = false
+  }
+}
+
+const openRevisionHistory = async () => {
+  revisionDrawerOpen.value = true
+  selectedRevision.value = null
+  revisionDiff.value = null
+  await loadRevisions()
+}
+
+const inspectRevision = async (revision: AppRevision) => {
+  try {
+    const res = await getAppRevision(appId.value, revision.id)
+    if (res.data.code === 0 && res.data.data) {
+      selectedRevision.value = res.data.data
+    }
+  } catch {
+    message.error('加载版本产物失败')
+  }
+}
+
+const compareWithPrevious = async (revision: AppRevision) => {
+  const index = revisions.value.findIndex((item) => item.id === revision.id)
+  const previous = revisions.value[index + 1]
+  if (!previous) {
+    message.info('这是最早版本，没有可对比的上一版')
+    return
+  }
+  try {
+    const res = await compareAppRevisions(appId.value, previous.id, revision.id)
+    if (res.data.code === 0) {
+      revisionDiff.value = res.data.data
+    }
+  } catch {
+    message.error('版本对比失败')
+  }
+}
+
+const refreshAfterRevisionPublish = async () => {
+  const latestRes = await getAppVoById({ id: appId.value as unknown as number })
+  if (latestRes.data?.data) {
+    app.value = latestRes.data.data
+  }
+  await loadChatHistory()
+  await tryLoadWebsite()
+}
+
+const handlePublishRevision = async (revision: AppRevision) => {
+  if (generating.value || revisionActionId.value) return
+  revisionActionId.value = revision.id
+  try {
+    const res = revision.status === 'PUBLISHED'
+      ? await rollbackAppRevision(appId.value, revision.id)
+      : await publishAppRevision(appId.value, revision.id)
+    if (res.data.code !== 0) {
+      message.error(res.data.message || '切换版本失败')
+      return
+    }
+    message.success(`已切换到版本 v${revision.revisionNo}`)
+    await refreshAfterRevisionPublish()
+    await loadRevisions()
+    selectedRevision.value = null
+    revisionDiff.value = null
+  } catch {
+    message.error('切换版本失败')
+  } finally {
+    revisionActionId.value = ''
+  }
+}
 
 const stopGenerationRecovery = () => {
   generationRecoveryToken++
@@ -1609,6 +1728,11 @@ onUnmounted(() => {
           打开网站
         </a-button>
 
+        <a-button :loading="revisionLoading" @click="openRevisionHistory">
+          <template #icon><HistoryOutlined /></template>
+          版本历史
+        </a-button>
+
         <a-button @click="handleDownloadCode">
           <template #icon><DownloadOutlined /></template>
           下载代码
@@ -2009,6 +2133,100 @@ onUnmounted(() => {
         </div>
       </div>
     </div>
+
+    <a-drawer
+      v-model:open="revisionDrawerOpen"
+      title="版本历史与回滚"
+      :width="560"
+      placement="right"
+    >
+      <a-spin :spinning="revisionLoading">
+        <a-empty v-if="!revisions.length" description="还没有可追踪的发布版本" />
+        <div v-else class="revision-list">
+          <a-card
+            v-for="revision in revisions"
+            :key="revision.id"
+            size="small"
+            class="revision-card"
+            :class="{ active: selectedRevision?.id === revision.id }"
+          >
+            <div class="revision-head">
+              <div>
+                <strong>v{{ revision.revisionNo }}</strong>
+                <a-tag
+                  :color="revisionStatusMeta(revision.status).color"
+                  class="revision-tag"
+                >
+                  {{ revisionStatusMeta(revision.status).text }}
+                </a-tag>
+              </div>
+              <span class="revision-time">{{ formatRevisionTime(revision.createTime) }}</span>
+            </div>
+            <div class="revision-meta">
+              <span>{{ revision.codeGenType }}</span>
+              <span>验证：{{ revision.validationStatus || '未记录' }}</span>
+            </div>
+            <div class="revision-actions">
+              <a-button size="small" @click="inspectRevision(revision)">产物</a-button>
+              <a-button size="small" @click="compareWithPrevious(revision)">对比上一版</a-button>
+              <a-popconfirm
+                v-if="revision.status !== 'PUBLISHED'"
+                title="切换到这个历史版本？当前 live 内容会被替换，但不会触发重新生成。"
+                ok-text="切换"
+                cancel-text="取消"
+                @confirm="handlePublishRevision(revision)"
+              >
+                <a-button
+                  type="primary"
+                  size="small"
+                  :loading="revisionActionId === revision.id"
+                >
+                  发布此版本
+                </a-button>
+              </a-popconfirm>
+            </div>
+
+            <div v-if="selectedRevision?.id === revision.id" class="revision-artifacts">
+              <div class="revision-section-title">Artifact Graph</div>
+              <a-empty
+                v-if="!selectedRevision.artifacts?.length"
+                :image="null"
+                description="没有记录产物"
+              />
+              <div
+                v-for="artifact in selectedRevision.artifacts"
+                :key="artifact.id"
+                class="artifact-row"
+              >
+                <code>{{ artifact.artifactType }}</code>
+                <span>{{ artifact.sha256?.slice(0, 12) || '-' }}</span>
+              </div>
+            </div>
+          </a-card>
+
+          <a-card
+            v-if="revisionDiff"
+            size="small"
+            title="与上一版对比"
+            class="revision-diff-card"
+          >
+            <a-empty v-if="!revisionDiff.files.length" :image="null" description="文件无变化" />
+            <div
+              v-for="file in revisionDiff.files"
+              :key="`${file.changeType}-${file.path}`"
+              class="diff-row"
+            >
+              <a-tag
+                :color="file.changeType === 'ADDED' ? 'green' : file.changeType === 'DELETED' ? 'red' : 'blue'"
+              >
+                {{ file.changeType }}
+              </a-tag>
+              <code :title="file.path">{{ file.path }}</code>
+            </div>
+          </a-card>
+        </div>
+      </a-spin>
+    </a-drawer>
   </div>
 </template>
 
@@ -2866,6 +3084,93 @@ onUnmounted(() => {
 .vue-code {
   flex: 1;
   min-width: 0;
+}
+
+.revision-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.revision-card {
+  border-color: var(--border);
+}
+
+.revision-card.active {
+  border-color: var(--brand-500);
+}
+
+.revision-head,
+.revision-actions,
+.revision-meta,
+.artifact-row,
+.diff-row {
+  display: flex;
+  align-items: center;
+}
+
+.revision-head {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.revision-tag {
+  margin-left: 8px;
+}
+
+.revision-time,
+.revision-meta,
+.artifact-row,
+.diff-row {
+  color: var(--text-3);
+  font-size: var(--font-xs);
+}
+
+.revision-meta {
+  gap: 16px;
+  margin-top: 8px;
+}
+
+.revision-actions {
+  gap: 8px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.revision-artifacts {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+
+.revision-section-title {
+  margin-bottom: 6px;
+  color: var(--text-2);
+  font-size: var(--font-xs);
+  font-weight: 600;
+}
+
+.artifact-row,
+.diff-row {
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0;
+}
+
+.artifact-row code,
+.diff-row code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.revision-diff-card {
+  margin-top: 6px;
+}
+
+.diff-row {
+  justify-content: flex-start;
 }
 
 @media (max-width: 768px) {

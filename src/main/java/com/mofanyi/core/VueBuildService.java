@@ -87,7 +87,7 @@ public class VueBuildService {
      */
     public File build(Long appId, BuildProgress progress) {
         ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
-        String projectDir = codeFileWriteService.getProjectDir(CodeGenTypeEnum.VUE, appId);
+        String projectDir = codeFileWriteService.getLiveProjectDir(CodeGenTypeEnum.VUE, appId);
         ThrowUtils.throwIf(!FileUtil.exist(Paths.get(projectDir).toFile()), ErrorCode.OPERATION_ERROR, "应用尚未生成代码，请先生成");
 
         notify(progress, "START_INSTALL");
@@ -134,7 +134,7 @@ public class VueBuildService {
      */
     public String readVueDist(Long appId) {
         ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
-        String projectDir = codeFileWriteService.getProjectDir(CodeGenTypeEnum.VUE, appId);
+        String projectDir = codeFileWriteService.getLiveProjectDir(CodeGenTypeEnum.VUE, appId);
         File distIndex = Paths.get(projectDir, "dist", "index.html").toFile();
         if (!FileUtil.exist(distIndex)) {
             return null;
