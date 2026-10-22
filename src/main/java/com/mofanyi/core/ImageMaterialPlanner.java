@@ -4,6 +4,8 @@ import cn.hutool.core.util.StrUtil;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mofanyi.ai.ImageCuratorAgent;
+import com.mofanyi.ai.task.GenerationCancelledException;
+import com.mofanyi.ai.task.GenerationTaskRegistry;
 import com.mofanyi.model.enums.CodeGenTypeEnum;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.SystemMessage;
@@ -24,6 +26,11 @@ import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 素材先行（plan-refactor 6.6 / plan-agent-pipeline 6.3）：页面构建<b>之前</b>把图片素材准备好，
@@ -60,6 +67,11 @@ public class ImageMaterialPlanner {
     private static final int MAX_SEARCH_QUERIES = 10;
 
     /**
+     * 原图下载、解码和 COS 上传的并发上限；限制内存峰值，同时避免几十张图完全串行。
+     */
+    private static final int MAX_PARALLEL_UPLOADS = 4;
+
+    /**
      * 分辨率闸门：低于此尺寸的图不用（避免放大后糊）
      */
     private static final int MIN_WIDTH = 800;
@@ -76,6 +88,7 @@ public class ImageMaterialPlanner {
     /** 图源列表（按 @Order），与 searchImage 工具共用同一套编排 */
     private final List<ImageSource> imageSources;
     private final ImageCuratorAgent imageCuratorAgent;
+    private final GenerationTaskRegistry taskRegistry;
     private final CodeFileWriteService codeFileWriteService;
     private final ObjectMapper objectMapper;
 
@@ -86,12 +99,14 @@ public class ImageMaterialPlanner {
                                 @Qualifier("openAiChatModel") ChatModel chatModel,
                                 List<ImageSource> imageSources,
                                 ImageCuratorAgent imageCuratorAgent,
+                                GenerationTaskRegistry taskRegistry,
                                 CodeFileWriteService codeFileWriteService,
                                 ObjectMapper objectMapper) {
         this.siteImageService = siteImageService;
         this.chatModel = chatModel;
         this.imageSources = imageSources;
         this.imageCuratorAgent = imageCuratorAgent;
+        this.taskRegistry = taskRegistry;
         this.codeFileWriteService = codeFileWriteService;
         this.objectMapper = objectMapper;
     }
@@ -175,6 +190,7 @@ public class ImageMaterialPlanner {
             Map<String, List<ImageSource.ImageCandidate>> candidatesByQuery = new LinkedHashMap<>();
             Map<String, String> queryByUrl = new LinkedHashMap<>();
             for (String query : queries) {
+                taskRegistry.checkCancelled(appId);
                 List<ImageSource.ImageCandidate> found = searchCandidates(query);
                 if (!found.isEmpty()) {
                     candidatesByQuery.put(query, found);
@@ -186,6 +202,7 @@ public class ImageMaterialPlanner {
             Map<String, ImageSource.ImageCandidate> deduped = new LinkedHashMap<>();
             int rejectedBySize = 0;
             for (ImageSource.ImageCandidate image : candidates) {
+                taskRegistry.checkCancelled(appId);
                 if (deduped.size() >= MAX_UNIQUE_CANDIDATES) {
                     break;
                 }
@@ -237,24 +254,7 @@ public class ImageMaterialPlanner {
             // ④ 上传 COS（下载失败/上传失败的单张跳过）
             List<Material> materials = new ArrayList<>();
             List<Chosen> uploaded = new ArrayList<>();
-            for (Chosen choice : chosen) {
-                ImageSource.ImageCandidate image = choice.seed().image();
-                try {
-                    SiteImageService.ResponsiveImage responsive =
-                            siteImageService.downloadAndUploadResponsive(appId, image);
-                    siteImageService.saveAppImage(appId, responsive.url());
-                    List<Material.ImageVariant> variants = responsive.variants().stream()
-                            .map(variant -> new Material.ImageVariant(variant.width(), variant.url()))
-                            .toList();
-                    materials.add(new Material(responsive.url(), responsive.width(), responsive.height(),
-                            ratioBucket(responsive.width(), responsive.height()), choice.seed().query(),
-                            choice.purpose(), choice.description(), choice.alt(),
-                            responsive.originalUrl(), variants));
-                    uploaded.add(choice);
-                } catch (Exception e) {
-                    log.warn("[素材] 上传失败，跳过，url={}", image.url(), e);
-                }
-            }
+            uploadResponsiveImages(appId, chosen, materials, uploaded);
             log.info("[素材] 预取完成：候选 {} 张（分辨率淘汰 {}），入选 {} 张，appId={}",
                     candidates.size(), rejectedBySize, materials.size(), appId);
             if (!materials.isEmpty()) {
@@ -265,9 +265,80 @@ public class ImageMaterialPlanner {
             writeMaterialsReport(type, appId, candidates.size(), rejectedBySize, curatorUsed,
                     uploaded, materials, curatorRejections, fallbackReason, queries);
             return materials;
+        } catch (GenerationCancelledException e) {
+            throw e;
         } catch (RuntimeException e) {
             log.warn("[素材] 预取失败，退化为按需搜图，appId={}", appId, e);
             return List.of();
+        }
+    }
+
+    private record UploadedChoice(Chosen choice, SiteImageService.ResponsiveImage responsive) {
+    }
+
+    private void uploadResponsiveImages(Long appId, List<Chosen> chosen,
+                                        List<Material> materials, List<Chosen> uploaded) {
+        if (chosen.isEmpty()) {
+            return;
+        }
+        ExecutorService executor = Executors.newFixedThreadPool(
+                Math.min(MAX_PARALLEL_UPLOADS, chosen.size()), task -> {
+                    Thread thread = new Thread(task, "image-upload");
+                    thread.setDaemon(true);
+                    return thread;
+                });
+        List<Future<UploadedChoice>> futures = new ArrayList<>();
+        try {
+            for (Chosen choice : chosen) {
+                futures.add(executor.submit(() -> {
+                    taskRegistry.checkCancelled(appId);
+                    SiteImageService.ResponsiveImage responsive =
+                            siteImageService.downloadAndUploadResponsive(appId, choice.seed().image());
+                    taskRegistry.checkCancelled(appId);
+                    return new UploadedChoice(choice, responsive);
+                }));
+            }
+            for (int i = 0; i < futures.size(); i++) {
+                Future<UploadedChoice> future = futures.get(i);
+                taskRegistry.checkCancelled(appId);
+                UploadedChoice result;
+                try {
+                    result = future.get();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("图片上传被中断", e);
+                } catch (ExecutionException e) {
+                    Throwable cause = e.getCause();
+                    if (cause instanceof GenerationCancelledException cancelled) {
+                        throw cancelled;
+                    }
+                    ImageSource.ImageCandidate image = chosen.get(i).seed().image();
+                    log.warn("[素材] 响应式上传失败，跳过，url={}", image.url(), cause);
+                    continue;
+                }
+                Chosen choice = result.choice();
+                SiteImageService.ResponsiveImage responsive = result.responsive();
+                try {
+                    siteImageService.saveAppImage(appId, responsive.url());
+                    List<Material.ImageVariant> variants = responsive.variants().stream()
+                            .map(variant -> new Material.ImageVariant(variant.width(), variant.url()))
+                            .toList();
+                    materials.add(new Material(responsive.url(), responsive.width(), responsive.height(),
+                            ratioBucket(responsive.width(), responsive.height()), choice.seed().query(),
+                            choice.purpose(), choice.description(), choice.alt(),
+                            responsive.originalUrl(), variants));
+                    uploaded.add(choice);
+                } catch (Exception e) {
+                    log.warn("[素材] 图片落库失败，跳过，url={}", responsive.originalUrl(), e);
+                }
+            }
+        } finally {
+            executor.shutdownNow();
+            try {
+                executor.awaitTermination(5, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
         }
     }
 

@@ -2,6 +2,7 @@ package com.mofanyi.core;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mofanyi.ai.ImageCuratorAgent;
+import com.mofanyi.ai.task.GenerationTaskRegistry;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.model.ChatModel;
@@ -22,6 +23,7 @@ class ImageMaterialPlannerPromptTest {
                 mock(ChatModel.class),
                 List.of(),
                 mock(ImageCuratorAgent.class),
+                mock(GenerationTaskRegistry.class),
                 mock(CodeFileWriteService.class),
                 new ObjectMapper());
         ImageMaterialPlanner.Material material = new ImageMaterialPlanner.Material(
@@ -128,6 +130,7 @@ class ImageMaterialPlannerPromptTest {
                 mock(ChatModel.class),
                 List.of(),
                 mock(ImageCuratorAgent.class),
+                mock(GenerationTaskRegistry.class),
                 mock(CodeFileWriteService.class),
                 new ObjectMapper());
     }

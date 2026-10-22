@@ -23,9 +23,9 @@ import org.springframework.stereotype.Component;
 public class GenerationRecoveryRunner implements ApplicationRunner {
 
     /**
-     * 单次生成允许的最长运行时长（默认 15 分钟），超过则判定卡死
+     * 单次生成允许的最长运行时长（默认 30 分钟），包含素材预取、模型生成与交付检测。
      */
-    @Value("${codegen.generation.timeout-millis:900000}")
+    @Value("${codegen.generation.timeout-millis:1800000}")
     private long timeoutMillis;
 
     private final GenerationTaskRegistry taskRegistry;
