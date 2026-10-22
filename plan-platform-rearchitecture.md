@@ -1170,7 +1170,7 @@ jobId  attempt  stage  revision
 
 > 实施状态（2026-10-22）：默认个人 Workspace、WorkspaceMember、App.workspaceId、
 > 资源 visibility、Job 领域契约、20 条固定 prompt 评估集、通用 Asset Registry 基础和
-> Skill Registry 基础及团队 RBAC/ACL 基础
+> Skill Registry、团队 RBAC/ACL 与 App Analytics 基础
 > 已落地。真实模型基线报告
 > 仍需在独立离线任务中执行，因此 Phase 0 暂不标记完全完成。
 
@@ -1866,7 +1866,7 @@ Playwright、视觉评估和强沙箱应贯穿 Phase 2 之后，作为持续增�
 - 跨实例取消已通过 CANCEL_REQUESTED + fencing 阻止旧 Worker 写状态/事件；旧模型调用仍需
   等阶段边界退出，尚未做跨线程强制中止。
 - SSE 已可重放，但前端尚未提供独立 Job 列表；页面恢复仍按 App 状态与当前版本进行。
-- 本轮完成编译、前端构建、97 个默认测试、MySQL 5.7 V3～V10 实际迁移和持久化探针；
+- 本轮完成编译、前端构建、98 个默认测试、MySQL 5.7 V3～V11 实际迁移和持久化探针；
   20 条固定 prompt 已入库，真实质量基线仍需离线执行记录。
 
 ### Phase 3 追加实施记录
@@ -1949,3 +1949,14 @@ Playwright、视觉评估和强沙箱应贯穿 Phase 2 之后，作为持续增�
 - 新增 `workspace_audit_log`，成员变更写审计记录。
 - 当前完成成员直加与角色 ACL；邀请 token/邮件、审批流、组织层级和 App 级细粒度 ACL
   仍待后续。
+
+### App Analytics 基础实施记录
+
+- 新增独立的 `app_analytics_event` 高基数明细与 `app_analytics_daily` 日聚合表，与平台
+  AI 调用日志彻底分离。
+- 支持 page_view/session_start/interaction/form_submit/cta_click/conversion/error/
+  resource_failure 事件，记录 revision、path、session、设备分类和粗粒度地区。
+- `POST /v1/analytics/events` 使用 Redis 做每 App 每分钟 1000 事件限流；
+  `GET /v1/apps/{appId}/analytics/daily` 使用 Workspace VIEW 权限。
+- 聚合维度包含 app/revision/date/eventName，可直接比较版本效果。
+- 当前未接前端 Dashboard、采样策略、ClickHouse 和隐私数据自动清洗。

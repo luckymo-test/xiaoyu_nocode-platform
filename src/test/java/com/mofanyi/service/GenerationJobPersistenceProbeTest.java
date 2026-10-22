@@ -8,12 +8,15 @@ import com.mofanyi.entity.GenerationDeadLetter;
 import com.mofanyi.entity.LibraryAsset;
 import com.mofanyi.entity.LibraryAssetVariant;
 import com.mofanyi.entity.WorkspaceAuditLog;
+import com.mofanyi.entity.AppAnalyticsEvent;
 import com.mofanyi.mapper.AppRevisionMapper;
 import com.mofanyi.mapper.AppArtifactMapper;
 import com.mofanyi.mapper.GenerationDeadLetterMapper;
 import com.mofanyi.mapper.LibraryAssetMapper;
 import com.mofanyi.mapper.LibraryAssetVariantMapper;
 import com.mofanyi.mapper.WorkspaceAuditLogMapper;
+import com.mofanyi.mapper.AppAnalyticsEventMapper;
+import com.mofanyi.mapper.AppAnalyticsDailyMapper;
 import com.mofanyi.mapper.GenerationJobMapper;
 import com.mofanyi.mapper.WorkspaceMapper;
 import org.junit.jupiter.api.DisplayName;
@@ -63,6 +66,12 @@ class GenerationJobPersistenceProbeTest {
 
     @Autowired
     private WorkspaceAuditLogMapper auditLogMapper;
+
+    @Autowired
+    private AppAnalyticsEventMapper analyticsEventMapper;
+
+    @Autowired
+    private AppAnalyticsDailyMapper analyticsDailyMapper;
 
     @Test
     @Transactional
@@ -198,6 +207,21 @@ class GenerationJobPersistenceProbeTest {
                 .createTime(now)
                 .build();
         assertEquals(1, auditLogMapper.insertSelective(audit));
+
+        AppAnalyticsEvent analyticsEvent = AppAnalyticsEvent.builder()
+                .appId(job.getAppId())
+                .workspaceId(job.getWorkspaceId())
+                .revisionId(revision.getId())
+                .eventName("page_view")
+                .sessionId("probe-session")
+                .path("/")
+                .eventTime(now)
+                .createTime(now)
+                .build();
+        assertEquals(1, analyticsEventMapper.insertSelective(analyticsEvent));
+        assertEquals(1, analyticsDailyMapper.increment(
+                analyticsEvent.getId(), job.getAppId(), revision.getId(),
+                now.toLocalDate(), "page_view"));
 
         assertTrue(workspaceMapper.selectCountByQuery(
                 com.mybatisflex.core.query.QueryWrapper.create()) > 0);
