@@ -2,6 +2,7 @@ package com.mofanyi.core;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mofanyi.ai.ImageCuratorAgent;
+import com.mofanyi.ai.model.ModelGateway;
 import com.mofanyi.ai.task.GenerationTaskRegistry;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -21,6 +22,7 @@ class ImageMaterialPlannerPromptTest {
         ImageMaterialPlanner planner = new ImageMaterialPlanner(
                 mock(SiteImageService.class),
                 mock(ChatModel.class),
+                mock(ModelGateway.class),
                 List.of(),
                 mock(ImageCuratorAgent.class),
                 mock(GenerationTaskRegistry.class),
@@ -128,6 +130,7 @@ class ImageMaterialPlannerPromptTest {
         return new ImageMaterialPlanner(
                 mock(SiteImageService.class),
                 mock(ChatModel.class),
+                mock(ModelGateway.class),
                 List.of(),
                 mock(ImageCuratorAgent.class),
                 mock(GenerationTaskRegistry.class),

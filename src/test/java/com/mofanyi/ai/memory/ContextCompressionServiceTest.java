@@ -1,6 +1,8 @@
 package com.mofanyi.ai.memory;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mofanyi.ai.model.ModelGateway;
+import com.mofanyi.ai.model.ModelResponse;
 import com.mofanyi.core.CodeFileWriteService;
 import com.mofanyi.model.enums.CodeGenTypeEnum;
 import org.junit.jupiter.api.DisplayName;
@@ -27,6 +29,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class ContextCompressionServiceTest {
@@ -44,7 +47,7 @@ class ContextCompressionServiceTest {
         when(chatModel.call(any(Prompt.class))).thenReturn(summaryResponse());
 
         ContextCompressionService service = new ContextCompressionService(
-                chatModel, codeFileWriteService, new ObjectMapper());
+                chatModel, mock(ModelGateway.class), codeFileWriteService, new ObjectMapper());
         ReflectionTestUtils.setField(service, "enabled", true);
         ReflectionTestUtils.setField(service, "minTokens", 1);
         ReflectionTestUtils.setField(service, "keepRecentRounds", 4);
@@ -81,8 +84,50 @@ class ContextCompressionServiceTest {
         assertEquals(4, ContextCompressionService.recentRoundStart(messages, 4));
     }
 
+    @Test
+    @DisplayName("ModelGateway 开启时压缩不再直接调用 ChatModel")
+    void usesModelGatewayWhenEnabled() {
+        ChatModel chatModel = mock(ChatModel.class);
+        ModelGateway modelGateway = mock(ModelGateway.class);
+        CodeFileWriteService files = mock(CodeFileWriteService.class);
+        when(files.getProjectDir(CodeGenTypeEnum.HTML, 8L))
+                .thenReturn(tempDir.toString());
+        when(modelGateway.chat(any())).thenReturn(new ModelResponse(
+                summaryJson(), "", List.of(), "stop",
+                new com.mofanyi.ai.model.ModelUsage(10, 5),
+                "deepseek", "deepseek-flash", "deepseek-flash"));
+
+        ContextCompressionService service = new ContextCompressionService(
+                chatModel, modelGateway, files, new ObjectMapper());
+        ReflectionTestUtils.setField(service, "enabled", true);
+        ReflectionTestUtils.setField(service, "minTokens", 1);
+        ReflectionTestUtils.setField(service, "keepRecentRounds", 4);
+        ReflectionTestUtils.setField(service, "maxOutputTokens", 1500);
+        ReflectionTestUtils.setField(service, "modelGatewayEnabled", true);
+
+        List<Message> messages = new ArrayList<>();
+        for (int i = 0; i < 8; i++) {
+            messages.add(new UserMessage("第" + i + "轮需求"));
+            messages.add(new AssistantMessage("第" + i + "轮结果"));
+        }
+
+        List<Message> compressed =
+                service.compressIfNeeded(CodeGenTypeEnum.HTML, 8L, messages);
+
+        assertTrue(compressed.get(0).getText().contains("最早目标"));
+        verify(modelGateway).chat(any());
+        verifyNoInteractions(chatModel);
+    }
+
     private static ChatResponse summaryResponse() {
-        String json = """
+        String json = summaryJson();
+        return ChatResponse.builder()
+                .generations(List.of(new Generation(new AssistantMessage(json))))
+                .build();
+    }
+
+    private static String summaryJson() {
+        return """
                 {
                   "objective":"最早目标",
                   "constraints":["保持简洁"],
@@ -93,8 +138,5 @@ class ContextCompressionServiceTest {
                   "lastFocus":"调整作品卡片"
                 }
                 """;
-        return ChatResponse.builder()
-                .generations(List.of(new Generation(new AssistantMessage(json))))
-                .build();
     }
 }

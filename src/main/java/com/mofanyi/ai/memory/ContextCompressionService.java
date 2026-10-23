@@ -3,6 +3,10 @@ package com.mofanyi.ai.memory;
 import cn.hutool.core.util.StrUtil;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mofanyi.ai.model.ModelGateway;
+import com.mofanyi.ai.model.ModelRequest;
+import com.mofanyi.ai.model.ModelResponse;
+import com.mofanyi.ai.model.ModelTask;
 import com.mofanyi.core.CodeFileWriteService;
 import com.mofanyi.model.enums.CodeGenTypeEnum;
 import lombok.extern.slf4j.Slf4j;
@@ -45,6 +49,7 @@ public class ContextCompressionService {
     private static final int MAX_MESSAGE_CHARS = 2_000;
 
     private final ChatModel chatModel;
+    private final ModelGateway modelGateway;
     private final CodeFileWriteService codeFileWriteService;
     private final ObjectMapper objectMapper;
 
@@ -63,10 +68,15 @@ public class ContextCompressionService {
     @Value("${codegen.memory.compression.model:deepseek-flash}")
     private String compressionModel;
 
+    @Value("${codegen.model.gateway.enabled:false}")
+    private boolean modelGatewayEnabled;
+
     public ContextCompressionService(@Qualifier("openAiChatModel") ChatModel chatModel,
+                                     ModelGateway modelGateway,
                                      CodeFileWriteService codeFileWriteService,
                                      ObjectMapper objectMapper) {
         this.chatModel = chatModel;
+        this.modelGateway = modelGateway;
         this.codeFileWriteService = codeFileWriteService;
         this.objectMapper = objectMapper;
     }
@@ -128,11 +138,19 @@ public class ContextCompressionService {
         RuntimeException lastError = null;
         for (int attempt = 1; attempt <= 2; attempt++) {
             try {
-                ChatResponse response = chatModel.call(new Prompt(List.of(
+                List<Message> promptMessages = List.of(
                         new SystemMessage(compressionPrompt()),
-                        new UserMessage(user)), options()));
-                String text = response == null || response.getResult() == null
-                        ? null : response.getResult().getOutput().getText();
+                        new UserMessage(user));
+                String text;
+                if (modelGatewayEnabled) {
+                    ModelResponse response = modelGateway.chat(ModelRequest.textTask(
+                            ModelTask.COMPRESS, promptMessages, 0.1, maxOutputTokens));
+                    text = response == null ? null : response.text();
+                } else {
+                    ChatResponse response = chatModel.call(new Prompt(promptMessages, options()));
+                    text = response == null || response.getResult() == null
+                            ? null : response.getResult().getOutput().getText();
+                }
                 return objectMapper.readTree(extractJson(text));
             } catch (Exception e) {
                 lastError = e instanceof RuntimeException runtime

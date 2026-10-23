@@ -75,6 +75,33 @@ management:
 
 # 代码生成文件临时目录与部署配置
 codegen:
+  model:
+    gateway:
+      enabled: ${CODEGEN_MODEL_GATEWAY_ENABLED:false}
+    routing:
+      enabled: ${CODEGEN_MODEL_ROUTING_ENABLED:false}
+    fallback:
+      enabled: ${CODEGEN_MODEL_FALLBACK_ENABLED:false}
+    default-model: deepseek-flash
+    definitions:
+      deepseek-flash:
+        provider: deepseek
+        model-name: ${CODEGEN_DEEPSEEK_MODEL:deepseek-flash}
+        context-window: 128000
+        max-output-tokens: 65536
+        supports: [tools, vision, streaming, structured-output, reasoning]
+        reasoning-style: deepseek-thinking
+        enabled: true
+    routes:
+      generate: deepseek-flash
+      repair: deepseek-flash
+      modify: deepseek-flash
+      vision-curate: deepseek-flash
+      query-plan: deepseek-flash
+      compress: deepseek-flash
+      research: deepseek-flash
+    fallbacks:
+      deepseek-flash: []
   security:
     # Phase B 灰度开关：默认保留现有 Session/AOP 路径
     spring-security:
