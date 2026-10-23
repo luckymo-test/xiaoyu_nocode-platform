@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.security.access.prepost.PreAuthorize;
 
 import java.util.List;
 
@@ -56,6 +57,7 @@ public class CommunityController {
 
     @PostMapping("/{publicationId}/review")
     @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
+    @PreAuthorize("hasRole('ADMIN')")
     public BaseResponse<AppPublicationVO> review(@PathVariable Long publicationId,
                                                  @RequestBody PublicationReviewRequest body) {
         ThrowUtils.throwIf(body == null || body.getApproved() == null,
@@ -66,6 +68,7 @@ public class CommunityController {
 
     @PostMapping("/{publicationId}/takedown")
     @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
+    @PreAuthorize("hasRole('ADMIN')")
     public BaseResponse<Boolean> takedown(@PathVariable Long publicationId,
                                           @RequestParam(required = false) String note) {
         return ResultUtils.success(publicationService.takedown(publicationId, note));

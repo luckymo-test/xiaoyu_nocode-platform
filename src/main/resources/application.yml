@@ -52,6 +52,9 @@ server:
     session:
       cookie:
         max-age: 2592000
+        http-only: true
+        same-site: lax
+        secure: ${SESSION_COOKIE_SECURE:false}
 
 # 可观测性：指标端点走独立端口 8125（不暴露在业务端口/公网）
 # 访问：http://localhost:8125/actuator/prometheus
@@ -72,6 +75,16 @@ management:
 
 # 代码生成文件临时目录与部署配置
 codegen:
+  security:
+    # Phase B 灰度开关：默认保留现有 Session/AOP 路径
+    spring-security:
+      enabled: ${CODEGEN_SPRING_SECURITY_ENABLED:false}
+    csrf:
+      enabled: ${CODEGEN_CSRF_ENABLED:false}
+    cors:
+      allowed-origins:
+        - ${CODEGEN_CORS_ORIGIN_LOCAL:http://localhost:5199}
+        - ${CODEGEN_CORS_ORIGIN_IP:http://127.0.0.1:5199}
   # Phase 1：持久化 Job 执行内核。默认数据库 Outbox，后续可替换 Redis Streams。
   jobs:
     worker-id: ${CODEGEN_JOB_WORKER_ID:${HOSTNAME:local-worker}}

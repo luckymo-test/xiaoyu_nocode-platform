@@ -19,6 +19,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.security.access.prepost.PreAuthorize;
 
 import java.util.List;
 
@@ -61,6 +62,7 @@ public class ChatHistoryController {
      */
     @PostMapping("/admin/list/page")
     @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
+    @PreAuthorize("hasRole('ADMIN')")
     public BaseResponse<Page<ChatHistory>> listAllByAdmin(@RequestBody ChatHistoryQueryRequest chatHistoryQueryRequest) {
         ThrowUtils.throwIf(chatHistoryQueryRequest == null, ErrorCode.PARAMS_ERROR);
         Page<ChatHistory> chatHistoryPage = chatHistoryService.listAllByAdmin(chatHistoryQueryRequest);
@@ -72,6 +74,7 @@ public class ChatHistoryController {
      */
     @PostMapping("/admin/list/app/page")
     @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
+    @PreAuthorize("hasRole('ADMIN')")
     public BaseResponse<Page<ChatAppVO>> listChatAppByAdmin(@RequestBody ChatHistoryQueryRequest chatHistoryQueryRequest) {
         ThrowUtils.throwIf(chatHistoryQueryRequest == null, ErrorCode.PARAMS_ERROR);
         Page<ChatAppVO> chatAppVOPage = chatHistoryService.listChatAppByAdmin(chatHistoryQueryRequest);

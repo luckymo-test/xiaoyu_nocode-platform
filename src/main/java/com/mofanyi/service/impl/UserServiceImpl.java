@@ -17,6 +17,8 @@ import com.mofanyi.mapper.UserMapper;
 import com.mofanyi.service.UserService;
 import com.mofanyi.service.WorkspaceService;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpSession;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.DigestUtils;
@@ -118,8 +120,12 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User>  implements U
         if (user == null) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "用户不存在或密码错误");
         }
-        // 3. 记录用户的登录态
-        request.getSession().setAttribute(UserConstant.USER_LOGIN_STATE, user);
+        // 3. 登录前轮换已有 Session ID，防止 Session Fixation
+        if (request.getSession(false) != null) {
+            request.changeSessionId();
+        }
+        HttpSession session = request.getSession(true);
+        session.setAttribute(UserConstant.USER_LOGIN_STATE, user);
         // 4. 获得脱敏后的用户信息
         return this.getLoginUserVO(user);
     }
@@ -127,7 +133,9 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User>  implements U
     @Override
     public User getLoginUser(HttpServletRequest request) {
         // 先判断是否已登录
-        Object userObj = request.getSession().getAttribute(UserConstant.USER_LOGIN_STATE);
+        HttpSession session = request.getSession(false);
+        Object userObj = session == null
+                ? null : session.getAttribute(UserConstant.USER_LOGIN_STATE);
         User currentUser = (User) userObj;
         if (currentUser == null || currentUser.getId() == null) {
             throw new BusinessException(ErrorCode.NOT_LOGIN_ERROR);
@@ -144,12 +152,16 @@ public class UserServiceImpl extends ServiceImpl<UserMapper, User>  implements U
     @Override
     public boolean userLogout(HttpServletRequest request) {
         // 先判断是否已登录
-        Object userObj = request.getSession().getAttribute(UserConstant.USER_LOGIN_STATE);
+        HttpSession session = request.getSession(false);
+        Object userObj = session == null
+                ? null : session.getAttribute(UserConstant.USER_LOGIN_STATE);
         if (userObj == null) {
             throw new BusinessException(ErrorCode.OPERATION_ERROR, "未登录");
         }
         // 移除登录态
-        request.getSession().removeAttribute(UserConstant.USER_LOGIN_STATE);
+        session.removeAttribute(UserConstant.USER_LOGIN_STATE);
+        session.invalidate();
+        SecurityContextHolder.clearContext();
         return true;
     }
 

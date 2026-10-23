@@ -32,6 +32,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
@@ -326,6 +327,7 @@ public class AppController {
      */
     @PostMapping("/admin/feature/audit")
     @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
+    @PreAuthorize("hasRole('ADMIN')")
     public BaseResponse<Boolean> auditFeatured(@RequestBody AppFeatureAuditRequest request) {
         ThrowUtils.throwIf(request == null || request.getId() == null || request.getId() <= 0
                 || request.getApproved() == null, ErrorCode.PARAMS_ERROR);
@@ -338,6 +340,7 @@ public class AppController {
      */
     @PostMapping("/admin/feature/cancel")
     @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
+    @PreAuthorize("hasRole('ADMIN')")
     public BaseResponse<Boolean> cancelFeatured(@RequestBody DeleteRequest deleteRequest) {
         ThrowUtils.throwIf(deleteRequest == null || deleteRequest.getId() <= 0, ErrorCode.PARAMS_ERROR);
         boolean result = appService.cancelFeatured(deleteRequest.getId());
@@ -349,6 +352,7 @@ public class AppController {
      */
     @PostMapping("/admin/delete")
     @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
+    @PreAuthorize("hasRole('ADMIN')")
     public BaseResponse<Boolean> deleteAppByAdmin(@RequestBody DeleteRequest deleteRequest) {
         ThrowUtils.throwIf(deleteRequest == null || deleteRequest.getId() <= 0, ErrorCode.PARAMS_ERROR);
         boolean result = appService.deleteAppByAdmin(deleteRequest.getId());
@@ -360,6 +364,7 @@ public class AppController {
      */
     @PostMapping("/admin/update")
     @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
+    @PreAuthorize("hasRole('ADMIN')")
     public BaseResponse<Boolean> updateAppByAdmin(@RequestBody AppUpdateRequest appUpdateRequest) {
         ThrowUtils.throwIf(appUpdateRequest == null || appUpdateRequest.getId() == null,
                 ErrorCode.PARAMS_ERROR);
@@ -372,6 +377,7 @@ public class AppController {
      */
     @PostMapping("/admin/list/page")
     @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
+    @PreAuthorize("hasRole('ADMIN')")
     public BaseResponse<Page<App>> listAppByPage(@RequestBody AppQueryRequest appQueryRequest) {
         ThrowUtils.throwIf(appQueryRequest == null, ErrorCode.PARAMS_ERROR);
         Page<App> appPage = appService.listAppByPage(appQueryRequest);
@@ -383,6 +389,7 @@ public class AppController {
      */
     @GetMapping("/admin/get")
     @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
+    @PreAuthorize("hasRole('ADMIN')")
     public BaseResponse<App> getAppById(long id) {
         App app = appService.getAppById(id);
         return ResultUtils.success(app);
