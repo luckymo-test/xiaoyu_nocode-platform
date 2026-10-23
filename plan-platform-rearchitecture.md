@@ -1969,3 +1969,341 @@ Playwright、视觉评估和强沙箱应贯穿 Phase 2 之后，作为持续增�
 - 同一 Revision 只允许创建一条发布记录；审核接口使用现有 admin role 校验。
 - 当前尚未实现 Fork/Remix、评论、评分、举报和版权申诉流程；这些需要后续独立
   Community Bounded Context 与引用关系图。
+
+---
+
+## 二十七、技术选型复核与执行面改造计划
+
+> 日期：2026-10-23
+> 状态：待实施
+> 目标：在保留现有 Java 控制面、Vue 控制台和 AgentToolLoop 的前提下，优先修复
+> 基础设施老化、安全边界、模型供应商耦合与浏览器/构建执行面问题。
+
+### 1. 结论
+
+当前技术选型没有方向性错误，主要问题是项目已从“单用户代码生成 Demo”演进为
+“持久化 Job + Revision + Team + Skill + Community 平台”，但执行面仍带有早期单体特征。
+
+继续保留：
+
+- Java 21 + Spring Boot 3.5：适合 Job、事务、ACL、Revision、Community 等控制面；
+- Vue 3 + TypeScript + Ant Design Vue：适合管理控制台，不应为了生成 React/Next 而重写；
+- MyBatis-Flex：已经深度使用，迁移 JPA/jOOQ 的收益不足以抵消成本；
+- MySQL + Redis + COS：控制面事务、热状态和对象存储的职责划分基本合理；
+- 自研 AgentToolLoop：预算、取消、逐文件和工具边界是平台的核心能力，不重写；
+- DB Outbox/Redis Streams：当前规模足够，不提前引入 Kafka 或微服务。
+
+需要调整：
+
+- MySQL 5.7 已不适合作为长期平台底座；
+- `spring-ai-alibaba-agent-framework` 当前未实际使用，应移除；
+- AgentToolLoop 直接依赖 OpenAI 特定 Options，需要引入 ModelGateway；
+- Selenium、npm 和页面构建仍运行在 API 主机，需要拆成隔离的 Node Execution Worker；
+- 自定义 Session + AOP 权限需要升级为显式 Spring Security 策略；
+- Vue/Next 等生成运行时必须与控制台技术栈解耦；
+- 浏览器、npm 和模型生成代码不能在宿主机上无限权限执行。
+
+### 2. 改造原则
+
+1. **控制面与执行面分离，不拆微服务**：第一版仍是模块化单体 + 独立 Worker 进程。
+2. **先兼容再替换**：所有执行引擎都通过 Feature Flag 灰度，旧路径至少保留一个版本周期。
+3. **端口优先**：先定义 ModelGateway、BrowserVerifierPort、CommandExecutor、ArtifactStore，
+   再替换具体实现。
+4. **数据库是真相源**：Worker 事件、验证结果和 Artifact 必须可落库/可追踪，不能只存在日志。
+5. **模型自由必须在能力目录内**：模型选择 Profile/Skill/Template，但不能自由执行 shell、
+   安装任意依赖或访问宿主机。
+6. **不以重写换“先进感”**：Vue 控制台、MyBatis-Flex、AgentToolLoop 和现有 Revision 模型
+   均保留，只替换真正有瓶颈的边界。
+
+### 3. 目标结构
+
+```mermaid
+flowchart LR
+    UI[Vue 控制台] --> API[Spring Boot Control API]
+    API --> JOB[Job / Revision / ACL / Publication]
+    JOB --> DB[(MySQL 8)]
+    JOB --> REDIS[(Redis)]
+    JOB --> QUEUE[Outbox / Redis Streams]
+
+    QUEUE --> JAVA[Generation Worker<br/>AgentToolLoop / ModelGateway]
+    QUEUE --> NODE[Node Execution Worker<br/>npm / Playwright]
+
+    JAVA --> MODEL[DeepSeek / OpenAI-compatible]
+    JAVA --> ASSET[COS / Artifact Store]
+    NODE --> SANDBOX[Ephemeral Workspace / Sandbox]
+    SANDBOX --> REPORT[DOM / Network / Screenshot / Trace]
+    REPORT --> ASSET
+```
+
+逻辑模块建议：
+
+```text
+control/
+  job/
+  revision/
+  workspace/
+  security/
+  publication/
+generation/
+  agent/
+  model/
+  material/
+execution/
+  browser/
+  build/
+  sandbox/
+runtime/
+  html-static/
+  vue-vite/
+  react-vite-ts/
+  next-static-export/
+```
+
+第一阶段不强制建立 Maven 多模块，可先通过 package-by-feature 收敛依赖方向；
+当 Worker 真正独立部署后，再拆 Maven module。
+
+### 4. 分阶段计划
+
+#### Phase A：依赖治理与 MySQL 8 基线（1～2 天）
+
+目标：先清理确定无收益的技术债，建立可升级数据库基线。
+
+任务：
+
+- 删除未使用的 `spring-ai-alibaba-agent-framework` 依赖；
+- 用 Maven dependency analysis 检查未声明/未使用依赖；
+- 固定 Spring AI、Spring Boot、MyBatis-Flex、COS SDK 版本；
+- 建立 MySQL 8 测试库，执行现有 V1～V12 Flyway；
+- 检查 MySQL 5.7 专有行为：生成列、唯一索引中的 NULL、日期函数、排序规则和大小写；
+- 评估是否将 longtext JSON 字段逐步迁移为原生 JSON；
+- 记录 MySQL 5.7 → 8 的回滚窗口和备份方案。
+
+验收：
+
+- 后端测试全绿；
+- MySQL 8 上 12 个迁移全部成功；
+- Job、Revision、Asset、Analytics、Publication 探针全通过；
+- 启动后无 SQL 兼容警告；
+- 依赖树中不再出现未使用的 Agent Framework。
+
+#### Phase B：Spring Security 与公共接口边界（2～4 天）
+
+目标：保留 HttpOnly Cookie Session，但把认证、CSRF、CORS 和权限从隐式约定提升为显式策略。
+
+任务：
+
+- 引入 Spring Security FilterChain；
+- 浏览器控制台继续使用 Session，不强行改 JWT；
+- 为 Cookie 写接口启用 CSRF Token，前端请求统一附带；
+- CORS 改为明确 allowlist，禁止 `* + credentials`；
+- 登录成功后轮换 Session ID，修复 Session Fixation；
+- 为公共 Analytics Ingest、Community 等接口规定匿名访问与限流策略；
+- 将 `@AuthCheck` 逐步映射到 Spring Security authorities；
+- 增加越权、CSRF、CORS、Session 固定攻击测试；
+- API Token/OAuth 作为外部开放 API 的独立通道，不和控制台 Session 混用。
+
+Feature Flag：
+
+```text
+codegen.security.spring-security.enabled=false
+codegen.security.csrf.enabled=false
+```
+
+验收：
+
+- 所有现有登录、生成、版本、团队接口行为不变；
+- 缺少 CSRF Token 的 Cookie 写请求被拒绝；
+- 非 allowlist Origin 被拒绝；
+- Workspace 跨租户测试全部失败为拒绝；
+- 公共事件接口具备速率限制和输入上限。
+
+#### Phase C：ModelGateway 与供应商解耦（3～5 天）
+
+目标：让 AgentToolLoop 只依赖平台模型契约，不直接认识 OpenAI/DeepSeek 参数。
+
+建议接口：
+
+```java
+public interface ModelGateway {
+    ModelResponse chat(ModelRequest request);
+
+    Stream<ModelChunk> stream(ModelRequest request);
+}
+```
+
+任务：
+
+- 抽离 `OpenAiChatOptions`、reasoning effort 和 token 上限的供应商适配；
+- AgentToolLoop、ContextCompression、ImageCurator 通过 ModelGateway 调用；
+- 保留现有自研 Loop 的预算、取消、工具执行和流式聚合；
+- 将模型、Prompt、Profile、Tool Schema 版本写入调用明细；
+- 为 DeepSeek 的 reasoning/tool continuation 建立兼容测试；
+- 为未来接第二个供应商准备契约测试，不立即实现多供应商路由；
+- 评估删除“框架内置循环”开关，只保留一个经过验证的执行路径。
+
+Feature Flag：
+
+```text
+codegen.model.gateway.enabled=false
+```
+
+验收：
+
+- 同一 Prompt 在 Gateway 开关前后输出结构一致；
+- token 用量、工具调用顺序和取消语义不退化；
+- 核心 Agent 包不再 import 具体供应商 Options；
+- provider 错误被归一化为 retryable / terminal。
+
+#### Phase D：Playwright Node Execution Worker（5～8 天）
+
+目标：将浏览器验证从 API JVM 拆出，先解决能力和稳定性，再解决强沙箱。
+
+建议 Worker 契约：
+
+```json
+{
+  "jobId": "469...",
+  "revisionId": "42...",
+  "sourceUri": "file-or-cos://...",
+  "viewports": [1440, 768, 375],
+  "checks": ["dom", "console", "network", "screenshot", "trace"],
+  "egressPolicy": "generated-app"
+}
+```
+
+Worker 输出：
+
+```text
+verify-report.json
+network-failures.json
+console-errors.json
+screenshots/desktop.png
+screenshots/tablet.png
+screenshots/mobile.png
+trace.zip
+```
+
+任务：
+
+- Node Worker 使用 Playwright；
+- Java 侧定义 `BrowserVerifierPort`，Selenium 和 Playwright 均为适配器；
+- 通过现有 Outbox/Redis Streams 下发验证任务；
+- Worker 不直接写 MySQL，只上传 Artifact 并回传结构化结果；
+- 支持 network failed、CORS、4xx/5xx、console、overflow、broken image、blank page；
+- 保留现有 Selenium 实现作为 Feature Flag 回退；
+- 将截图、trace、报告登记到 Revision Artifact Graph。
+
+Feature Flag：
+
+```text
+codegen.browser.engine=selenium
+codegen.execution.browser-worker.enabled=false
+```
+
+验收：
+
+- HTML/Multi/Vue 三类应用都能完成三档验证；
+- 与 Selenium 基线对比，核心问题检出率不下降；
+- Worker 崩溃不会卡死 Job；
+- 同一报告可追溯到 Job/Revision/Artifact；
+- API JVM 不再创建浏览器进程。
+
+#### Phase E：隔离 Build / Browser Sandbox（5～10 天）
+
+目标：防止模型生成代码与 npm 依赖获得宿主机权限。
+
+任务：
+
+- 每次执行使用独立临时 workspace；
+- 构建和浏览器运行进入容器或轻量 VM；
+- 限制 CPU、内存、执行时长、进程数与临时盘；
+- 默认无宿主机目录挂载，仅挂载当前 Revision 的临时副本；
+- 网络默认拒绝，仅允许 npm registry、已审核 CDN 和图片域名；
+- npm 使用 lockfile、registry proxy、依赖 allowlist；
+- 禁止访问云元数据地址、内网段和本地管理端口；
+- Worker 进程退出后强制清理 workspace；
+- 记录 build/verify 的资源消耗与超时原因。
+
+验收：
+
+- 恶意 `../../`、绝对路径、内网 URL、云元数据地址被拒绝；
+- 无限循环、巨量文件、超大依赖和 fork bomb 能在配额内终止；
+- Worker 超时后主 API 不受影响；
+- 旧 Worker 无法覆盖新 Revision（继续使用 fencingToken）。
+
+#### Phase F：React / Next 运行时落地（5～8 天）
+
+目标：让模型真正选择现代技术栈，而不是只是注册一个不可用 Profile。
+
+任务：
+
+- 先完成 `react-vite-ts`，再完成 `next-static-export`；
+- 每个 Profile 提供脚手架、依赖 allowlist、Prompt、build、preview、deploy、verify；
+- Next 第一版只支持静态导出，不引入每应用一个 SSR 进程；
+- 扩展 CodeGenTypeEnum 兼容层或引入 RuntimeType，但禁止在 Facade 中继续加 switch；
+- 将 build/preview/deploy 从固定枚举分支迁到 StackProfile；
+- 用固定评估集比较 Vue、React、Next 的 token、耗时、验证通过率和人工评分；
+- 只有通过质量门禁的 Profile 才能从 unavailable 改为 available。
+
+Feature Flag：
+
+```text
+codegen.runtime.react-vite-ts.enabled=false
+codegen.runtime.next-static-export.enabled=false
+```
+
+验收：
+
+- React/Next 与 HTML/Vue 走同一 Job/Revision/Artifact/Verify；
+- 模型不能提交任意 shell 或未注册依赖；
+- 不兼容 Profile 在 Plan 阶段被拒绝；
+- 同一 Revision 可以稳定重建和回滚。
+
+#### Phase G：质量门禁与规模数据（持续）
+
+目标：把“看起来能用”提升为可量化的工程质量。
+
+任务：
+
+- 在真实模型上执行 20 条固定评估集并保存基线；
+- 建立 build、render、token、耗时、修复轮次和人工 rubric；
+- 模板增加 Golden Screenshot 与 layout regression；
+- Analytics 仅在高数据量时迁移 ClickHouse，当前继续 MySQL；
+- 引入 OpenAPI 生成前端 client，减少手写 API drift；
+- 用实际并发压测验证 100 Job、队列积压、死信、Worker 接管和内存占用。
+
+### 5. 本轮明确不做
+
+- 不把 Vue 控制台重写成 React；
+- 不把 MyBatis-Flex 重写成 JPA；
+- 不重写 AgentToolLoop；
+- 不立即拆微服务；
+- 不立即引入 Kafka；
+- 不在第一阶段实现 Next SSR；
+- 不在没有质量门禁时把 React/Next 标记为 available；
+- 不继续把 npm、浏览器和生成代码直接运行在 API 宿主机。
+
+### 6. 关键改造顺序
+
+```text
+依赖治理
+→ MySQL 8
+→ Spring Security / CSRF / CORS
+→ ModelGateway
+→ Playwright Browser Worker
+→ Build/Browser Sandbox
+→ React/Next StackProfile
+→ Golden 质量门禁与规模压测
+```
+
+### 7. 最终验收指标
+
+- 现有 99+ 默认测试持续全绿；
+- MySQL 8 完成全量迁移与回滚演练；
+- 未授权、CSRF、CORS、跨 Workspace 全部拒绝；
+- Agent 核心不依赖供应商 SDK 特定 Options；
+- API 进程不启动浏览器和 npm；
+- 浏览器与构建 Worker 可独立横向扩展；
+- React/Next 只通过 Profile 扩展，不修改 Job/Revision/SSE 核心；
+- 20 条固定 prompt 有真实基线报告；
+- 100 并发任务下 API 快速入队、队列可观测、失败可重试或进入死信。
