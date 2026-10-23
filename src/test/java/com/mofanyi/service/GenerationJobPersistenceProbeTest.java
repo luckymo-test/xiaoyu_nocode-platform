@@ -10,6 +10,7 @@ import com.mofanyi.entity.LibraryAssetVariant;
 import com.mofanyi.entity.WorkspaceAuditLog;
 import com.mofanyi.entity.AppAnalyticsEvent;
 import com.mofanyi.entity.AppPublication;
+import com.mofanyi.entity.Workspace;
 import com.mofanyi.mapper.AppRevisionMapper;
 import com.mofanyi.mapper.AppArtifactMapper;
 import com.mofanyi.mapper.GenerationDeadLetterMapper;
@@ -32,7 +33,6 @@ import java.time.LocalDateTime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * 真实数据库探针：
@@ -80,11 +80,22 @@ class GenerationJobPersistenceProbeTest {
 
     @Test
     @Transactional
-    @DisplayName("新 Job/Event 表可写，迁移已为已有用户回填工作区")
-    void persistsJobAndEventAgainstMySql57() {
+    @DisplayName("新 Job/Event/Revision/Asset 等表在目标数据库上可写")
+    void persistsPlatformTablesAgainstConfiguredDatabase() {
         LocalDateTime now = LocalDateTime.now();
+        Workspace workspace = Workspace.builder()
+                .id(990001000000000001L)
+                .ownerId(1L)
+                .workspaceName("probe-workspace")
+                .visibility("private")
+                .createTime(now)
+                .updateTime(now)
+                .isDelete(0)
+                .build();
+        assertEquals(1, workspaceMapper.insertSelective(workspace));
+
         GenerationJob job = GenerationJob.builder()
-                .workspaceId(990001000000000001L)
+                .workspaceId(workspace.getId())
                 .appId(990001000000000002L)
                 .requestedBy(1L)
                 .requestType("generate")
@@ -243,7 +254,7 @@ class GenerationJobPersistenceProbeTest {
                 .build();
         assertEquals(1, publicationMapper.insertSelective(publication));
 
-        assertTrue(workspaceMapper.selectCountByQuery(
-                com.mybatisflex.core.query.QueryWrapper.create()) > 0);
+        assertEquals(workspace.getOwnerId(),
+                workspaceMapper.selectOneById(workspace.getId()).getOwnerId());
     }
 }
