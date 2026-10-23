@@ -1,7 +1,7 @@
 # 计划书：零代码生成平台后续改造
 
 > 日期：2026-10-23
-> 状态：待实施
+> 状态：Phase A 已完成；Phase B～G 待实施
 > 来源：[plan-platform-rearchitecture.md](plan-platform-rearchitecture.md)
 > 定位：本文件是后续执行和验收的唯一入口；旧计划保留当前架构与实施记录。
 
@@ -103,6 +103,9 @@ runtime/
 
 #### Phase A：依赖治理与 MySQL 8 基线（1～2 天）
 
+状态：已完成（2026-10-24）。执行与回滚手册见
+[docs/mysql8-upgrade.md](docs/mysql8-upgrade.md)。
+
 目标：先清理确定无收益的技术债，建立可升级数据库基线。
 
 任务：
@@ -122,6 +125,15 @@ runtime/
 - Job、Revision、Asset、Analytics、Publication 探针全通过；
 - 启动后无 SQL 兼容警告；
 - 依赖树中不再出现未使用的 Agent Framework。
+
+验收结果：
+
+- 已移除未使用的 Agent Framework，并将 Selenium 统一到 Boot BOM 管理的 4.31.0；
+- 已将 Flyway 固定为 11.20.3，MySQL 8.4 启动无 SQL 兼容警告；
+- 全新 MySQL 8.4 与现有 MySQL 5.7 均通过 V1～V12 和真实数据库探针；
+- MySQL 5.7 仅保留“社区支持结束”提示，不影响当前兼容基线；
+- 已补齐单活跃 Job、终态 Job 生成列 NULL、长文本与生产切换回滚验证；
+- 原生 JSON、MySQL 8 专有语法暂不引入，保留反向逻辑恢复窗口。
 
 #### Phase B：Spring Security 与公共接口边界（2～4 天）
 
