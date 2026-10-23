@@ -20,6 +20,8 @@ AI 应用生成平台。用户通过一句话创建网站或前端工程，平�
 - Lease、heartbeat、`fencingToken` 保护多 Worker 和崩溃恢复。
 - 当前 Agent 循环位于 API 应用内；独立 Generation Worker 仍在后续计划中。
 - 浏览器和 npm 当前仍在本机执行；独立 Playwright/Sandbox Worker 仍在后续计划中。
+- Spring Security、CSRF 与 CORS allowlist 已实现灰度层，默认开关关闭；
+  上线顺序见 [docs/security-migration.md](docs/security-migration.md)。
 
 ## 必读文档
 
@@ -27,6 +29,7 @@ AI 应用生成平台。用户通过一句话创建网站或前端工程，平�
 2. 后续任务唯一执行计划：[plan-platform-remaining-work.md](plan-platform-remaining-work.md)
 3. 历史架构与已完成记录：[plan-platform-rearchitecture.md](plan-platform-rearchitecture.md)
 4. 踩坑与排查记录：[development-notes.md](development-notes.md)
+5. 安全灰度与回滚：[docs/security-migration.md](docs/security-migration.md)
 
 新问题追加到 `development-notes.md` 末尾并保持连续编号，不要把“最新编号”硬编码到其他文档。
 

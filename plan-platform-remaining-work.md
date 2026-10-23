@@ -1,7 +1,7 @@
 # 计划书：零代码生成平台后续改造
 
 > 日期：2026-10-23
-> 状态：Phase A 已完成；Phase B～G 待实施
+> 状态：Phase A、Phase B 已完成；Phase C～G 待实施
 > 来源：[plan-platform-rearchitecture.md](plan-platform-rearchitecture.md)
 > 定位：本文件是后续执行和验收的唯一入口；旧计划保留当前架构与实施记录。
 
@@ -137,6 +137,9 @@ runtime/
 
 #### Phase B：Spring Security 与公共接口边界（2～4 天）
 
+状态：已完成（2026-10-24）。灰度与回滚手册见
+[docs/security-migration.md](docs/security-migration.md)。
+
 目标：保留 HttpOnly Cookie Session，但把认证、CSRF、CORS 和权限从隐式约定提升为显式策略。
 
 任务：
@@ -165,6 +168,17 @@ codegen.security.csrf.enabled=false
 - 非 allowlist Origin 被拒绝；
 - Workspace 跨租户测试全部失败为拒绝；
 - 公共事件接口具备速率限制和输入上限。
+
+验收结果：
+
+- 已引入 Spring Security，并通过 Feature Flag 保留原有 Session/AOP 回退路径；
+- 浏览器控制台继续使用 HttpOnly Cookie Session，角色映射为 `ROLE_ADMIN/ROLE_USER`；
+- Cookie 写接口启用 CSRF；前端自动引导 `XSRF-TOKEN` 并在 Axios/fetch 中附带请求头；
+- CORS 已改为明确 allowlist，禁止通配 Origin 与凭据组合；
+- 登录轮换 Session ID，登出使 Session 失效，实际冒烟确认二次登录 ID 已变化；
+- 未登录、CSRF 缺失、普通用户访问管理员接口均有自动化测试；
+- 公开接口、401/403 统一 JSON 响应和匿名 Analytics 限流边界已固化；
+- `@AuthCheck` 与 `@PreAuthorize` 暂时共存以便灰度，稳定后再移除旧 AOP。
 
 #### Phase C：ModelGateway、模型能力与多供应商适配（5～8 天）
 

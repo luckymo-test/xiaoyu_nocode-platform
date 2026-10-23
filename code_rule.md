@@ -285,7 +285,8 @@ ThrowUtils.throwIf(loginUser == null || loginUser.getId() == null,
 
 - Agent 仍在 API JVM 内执行；目标为独立 Generation Worker。
 - Selenium/npm 仍在 API 主机执行；目标为 Playwright/Sandbox Worker。
-- 权限仍由自定义 Session/AOP 管理；目标为显式 Spring Security FilterChain。
+- Spring Security FilterChain、CSRF 与 CORS allowlist 已实现灰度；默认仍保留
+  自定义 Session/AOP 路径，稳定后再删除旧 AOP。
 - 模型调用仍包含 OpenAI/DeepSeek 参数；目标为 ModelGateway + Adapter。
 - 渲染修复状态仍有 JVM 内存 Map；目标是持久化 JobEvent/状态。
 - 部分生成类型分支仍在 Facade 或构建服务中；目标是 StackProfile。
