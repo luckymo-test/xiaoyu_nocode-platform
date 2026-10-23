@@ -154,11 +154,102 @@ codegen.security.csrf.enabled=false
 - Workspace 跨租户测试全部失败为拒绝；
 - 公共事件接口具备速率限制和输入上限。
 
-#### Phase C：ModelGateway 与供应商解耦（3～5 天）
+#### Phase C：ModelGateway、模型能力与多供应商适配（5～8 天）
 
-目标：让 AgentToolLoop 只依赖平台模型契约，不直接认识 OpenAI/DeepSeek 参数。
+目标：让平台从“可修改 DeepSeek/OpenAI-compatible 模型名”升级为“可按任务选择模型、
+校验模型能力、隔离供应商协议并支持可控降级”的模型执行层。
 
-建议接口：
+##### C.0 当前适配状态
+
+已有的基础：
+
+- 使用 Spring AI `ChatModel` 抽象；
+- Base URL、API Key 和默认模型来自配置；
+- `ReasoningProfile` 已包含 `model` 字段；
+- AgentToolLoop 已集中管理预算、取消、流式聚合、工具执行和用量统计。
+
+当前仍存在的 DeepSeek/OpenAI 假设：
+
+- `AgentToolLoop`、`ImageMaterialPlanner`、`ContextCompressionService` 直接构造
+  `OpenAiChatOptions`；
+- `ImageCuratorAgent` 硬编码 `deepseek-flash`，并直接 POST `/chat/completions`；
+- `WebResearchClient` 同样直接依赖 OpenAI-compatible endpoint；
+- `thinking` extra body、reasoning effort 和 tool continuation 语义带有 DeepSeek 特征；
+- 推理档位预算没有与模型上下文窗口、最大输出和工具能力联动；
+- 视觉选片、查询规划、压缩、生成和修复没有独立的模型路由；
+- AI 指标使用全局模型配置，任务实际使用的模型可能与指标不一致；
+- 没有“模型是否支持 tools/vision/streaming/structured-output”的能力目录；
+- 没有供应商 fallback、熔断、限流或兼容性预检。
+
+因此当前能力边界是：
+
+```text
+可以换模型名                        部分支持
+可以换 OpenAI-compatible Base URL   部分支持
+不同推理档使用不同模型              配置基础已存在
+不同任务使用不同模型                不完整
+Anthropic/Gemini 原生协议           不支持
+按模型能力选择参数                  不支持
+供应商路由、降级、熔断              不支持
+```
+
+##### C.1 模型注册表与能力描述
+
+新增 `ModelDescriptor` / `ModelRegistry`，模型配置不再只有一个字符串。
+
+建议字段：
+
+```text
+id
+provider
+modelName
+contextWindow
+maxOutputTokens
+supportsTools
+supportsVision
+supportsStreaming
+supportsStructuredOutput
+supportsReasoning
+reasoningParameterStyle
+inputPrice / outputPrice
+enabled
+```
+
+建议任务类型：
+
+```java
+public enum ModelTask {
+    GENERATE, REPAIR, MODIFY, VISION_CURATE,
+    QUERY_PLAN, COMPRESS, RESEARCH
+}
+```
+
+配置示例：
+
+```yaml
+codegen:
+  models:
+    deepseek-flash:
+      provider: deepseek
+      model-name: deepseek-flash
+      context-window: 128000
+      max-output-tokens: 65536
+      supports: [tools, vision, streaming, structured-output, reasoning]
+    cheap-planner:
+      provider: openai-compatible
+      model-name: planner-model
+      context-window: 32000
+      max-output-tokens: 4096
+      supports: [streaming, structured-output]
+  model-routes:
+    generate: deepseek-flash
+    repair: deepseek-flash
+    vision-curate: deepseek-flash
+    query-plan: cheap-planner
+    compress: cheap-planner
+```
+
+##### C.2 ModelGateway 接口
 
 ```java
 public interface ModelGateway {
@@ -168,28 +259,90 @@ public interface ModelGateway {
 }
 ```
 
+`ModelRequest` 只包含平台语义：
+
+- task；
+- messages；
+- tools；
+- temperature；
+- 输出上限；
+- reasoning preference；
+- structured output schema；
+- trace/call context。
+
+`ModelResponse` 统一返回：
+
+- 文本；
+- tool calls；
+- reasoning 增量；
+- usage；
+- finish reason；
+- 实际 provider/model；
+- provider 原始错误类型映射。
+
+供应商适配器负责把平台请求转换为具体协议：
+
+```text
+DeepSeekAdapter
+OpenAiCompatibleAdapter
+AnthropicAdapter      后续
+GeminiAdapter         后续
+```
+
+第一版必须完成：
+
+- DeepSeek/OpenAI-compatible 适配器；
+- 第二个 OpenAI-compatible 测试适配器或 mock adapter；
+- 原生 Anthropic/Gemini 只保留接口契约，不立即加入生产实现。
+
+##### C.3 供应商隔离与任务路由
+
 任务：
 
-- 抽离 `OpenAiChatOptions`、reasoning effort 和 token 上限的供应商适配；
-- AgentToolLoop、ContextCompression、ImageCurator 通过 ModelGateway 调用；
-- 保留现有自研 Loop 的预算、取消、工具执行和流式聚合；
-- 将模型、Prompt、Profile、Tool Schema 版本写入调用明细；
-- 为 DeepSeek 的 reasoning/tool continuation 建立兼容测试；
-- 为未来接第二个供应商准备契约测试，不立即实现多供应商路由；
-- 评估删除“框架内置循环”开关，只保留一个经过验证的执行路径。
+- AgentToolLoop、ContextCompression、ImageMaterialPlanner、ImageCurator、WebResearch
+  全部通过 ModelGateway；
+- 删除业务代码中的 `deepseek-flash` 硬编码和直接 `/chat/completions` 调用；
+- `OpenAiChatOptions`、thinking extra body、reasoning effort 只在 Adapter 中出现；
+- 由 ModelRouter 根据 `ModelTask`、reasoning level、能力要求和可用性选择模型；
+- 视觉任务必须预先校验 `supportsVision`；
+- 工具任务必须预先校验 `supportsTools`；
+- compression/query plan 可选择更便宜的小模型；
+- 保留自研 AgentToolLoop 的预算、取消、工具执行和流式聚合；
+- 将实际 provider/model、Prompt、Profile、Tool Schema 版本写入调用明细；
+- 为 DeepSeek reasoning/tool continuation 建立兼容测试；
+- provider 错误归一化为 retryable / terminal，并支持有限 fallback；
+- 增加 circuit breaker 和模型级限流，避免单一供应商故障拖垮全部 Job。
 
 Feature Flag：
 
 ```text
+codegen.model.registry.enabled=false
 codegen.model.gateway.enabled=false
+codegen.model.routing.enabled=false
+codegen.model.fallback.enabled=false
 ```
 
-验收：
+##### C.4 指标与审计
 
-- 同一 Prompt 在 Gateway 开关前后输出结构一致；
-- token 用量、工具调用顺序和取消语义不退化；
-- 核心 Agent 包不再 import 具体供应商 Options；
-- provider 错误被归一化为 retryable / terminal。
+- `ai_call_log` 和 Prometheus 记录实际 `provider`、`model`、`model_task`；
+- 指标标签保持低基数，不写模型原始响应和 Prompt 内容；
+- 模型路由原因、fallback 路径和兼容性拒绝进入结构化日志；
+- 每个 Job/Revision 记录模型、Profile 和路由版本，便于质量对比。
+
+##### C.5 验收
+
+- 只修改配置即可替换 OpenAI-compatible 供应商，不需要改 Agent 核心；
+- 业务包不再 import `OpenAiChatOptions` 或直接拼接 Chat Completions URL；
+- 不同任务可分别使用生成模型、视觉模型、规划模型和压缩模型；
+- 视觉任务不会路由到不支持 vision 的模型；
+- 工具任务不会路由到不支持 tools 的模型；
+- reasoning 参数只由对应 Adapter 生成；
+- token 预算根据模型上下文窗口和最大输出预检；
+- 指标展示实际使用的 provider/model/task，而不是全局默认模型；
+- 主模型发生限流或不可用时，可按策略 fallback 或进入明确失败；
+- 同一 Prompt 在 Gateway 开关前后输出结构、工具顺序和取消语义不退化；
+- DeepSeek reasoning/tool continuation 回归通过；
+- 第二供应商契约测试通过，但不要求第一版覆盖所有原生供应商。
 
 #### Phase C.5：Java Generation Worker 独立进程（3～5 天）
 
@@ -422,6 +575,8 @@ codegen.runtime.next-static-export.enabled=false
 - MySQL 8 完成全量迁移与回滚演练；
 - 未授权、CSRF、CORS、跨 Workspace 全部拒绝；
 - Agent 核心不依赖供应商 SDK 特定 Options；
+- 模型注册表、能力校验、任务路由和实际 provider/model 指标可工作；
+- OpenAI-compatible 模型换供应商只需配置，原生供应商通过 Adapter 扩展；
 - API 进程不执行 Agent、不启动浏览器和 npm；
 - Generation Worker、Browser/Build Worker 可分别限制资源并独立扩容；
 - React/Next 只通过 Profile 扩展，不修改 Job/Revision/SSE 核心；
