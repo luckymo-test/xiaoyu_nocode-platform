@@ -1,5 +1,6 @@
 import { createSseConnection, type SseCallbacks, type SseConnection } from '@/utils/sse'
 import { BASE_URL } from '@/request'
+import { CSRF_HEADER, ensureCsrfToken, getCsrfToken } from '@/utils/csrf'
 
 interface GenerationJobVO {
   jobId: string
@@ -43,13 +44,19 @@ function streamGenerationJob(
 
   void (async () => {
     try {
+      await ensureCsrfToken(BASE_URL)
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': newIdempotencyKey(),
+      }
+      const csrfToken = getCsrfToken()
+      if (csrfToken) {
+        headers[CSRF_HEADER] = csrfToken
+      }
       const response = await fetch(`${BASE_URL}/v1/apps/${appId}/generation-jobs`, {
         method: 'POST',
         credentials: 'include',
-        headers: {
-          'Content-Type': 'application/json',
-          'Idempotency-Key': newIdempotencyKey(),
-        },
+        headers,
         body: JSON.stringify({
           message: message ?? '你好，请简单介绍一下你自己',
           reasoningLevel,
