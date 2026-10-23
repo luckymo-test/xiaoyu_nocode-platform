@@ -1998,6 +1998,7 @@ Playwright、视觉评估和强沙箱应贯穿 Phase 2 之后，作为持续增�
 - MySQL 5.7 已不适合作为长期平台底座；
 - `spring-ai-alibaba-agent-framework` 当前未实际使用，应移除；
 - AgentToolLoop 直接依赖 OpenAI 特定 Options，需要引入 ModelGateway；
+- `GenerationJobRunner` 和 AgentToolLoop 仍在 API JVM 中，需要迁到独立 Generation Worker；
 - Selenium、npm 和页面构建仍运行在 API 主机，需要拆成隔离的 Node Execution Worker；
 - 自定义 Session + AOP 权限需要升级为显式 Spring Security 策略；
 - Vue/Next 等生成运行时必须与控制台技术栈解耦；
@@ -2154,6 +2155,88 @@ codegen.model.gateway.enabled=false
 - 核心 Agent 包不再 import 具体供应商 Options；
 - provider 错误被归一化为 retryable / terminal。
 
+#### Phase C.5：Java Generation Worker 独立进程（3～5 天）
+
+目标：把 AgentToolLoop、模型调用、素材规划和生成阶段从 Control API JVM 中拆出，
+形成独立的 `generation-worker`。这一步解决的不只是代码组织问题，而是 CPU、内存、
+线程池、GC 和故障域与 API 共享的问题。
+
+当前状态：
+
+- `GenerationJobRunner` 仍运行在 Spring Boot API 应用内；
+- Agent 使用 API 进程中的线程池和内存映射；
+- 浏览器和 npm 虽然可以拆成 Node Worker，但生成阶段本身仍可能拖慢 API；
+- 取消和渲染修复状态仍有部分依赖 JVM 内存 Map。
+
+目标边界：
+
+```text
+control-api
+  ├── 登录 / Session / RBAC
+  ├── Job 创建、查询、取消
+  ├── Revision 查询、发布、回滚
+  ├── SSE Event View
+  └── 不执行 Agent、不调用模型、不启动浏览器或 npm
+
+generation-worker
+  ├── 消费持久化 Job
+  ├── AgentToolLoop / ModelGateway
+  ├── 素材规划与文件生成
+  ├── 写 JobEvent / Artifact
+  ├── Lease 心跳与 fencing
+  └── 创建候选 Revision，但不提供控制台 HTTP API
+
+execution-worker
+  ├── npm / build
+  ├── Playwright / 截图 / trace
+  └── 容器或轻量 VM Sandbox
+```
+
+任务：
+
+- 将现有 `GenerationJobRunner`、`AiCodeGeneratorFacade` 的生成执行部分迁到独立启动入口；
+- API 只保留 `GenerationJobService` 的创建、查询、取消和事件读取能力；
+- Worker 通过 Outbox/Redis Streams 消费 Job，继续使用现有 Lease、heartbeat、fencingToken；
+- Worker 与 API 使用相同 MySQL/Redis/Artifact 契约，不通过共享内存传递任务状态；
+- 取消改由 `CANCEL_REQUESTED` 数据库状态和事件通知触发，Worker 在工具边界协作退出；
+- `renderFixStatus` 等进程内状态迁移到 JobEvent、数据库字段或 Worker 查询接口；
+- Worker 启动时校验模板、技能、StackProfile 版本与 Job 快照一致；
+- API 和 Worker 分别配置 CPU、内存、并发和队列消费数量；
+- Worker 提供 `/health`、`/metrics` 或独立管理端口；
+- 支持 `GenerationJobEvent` 继续由 Worker 写入，API 的 SSE 只读取事件；
+- Generation Worker 不得启动浏览器、执行 npm 或读取不相关工作区。
+
+建议 Feature Flag：
+
+```text
+codegen.jobs.execution-mode=embedded
+codegen.generation-worker.enabled=false
+codegen.generation-worker.consumer-concurrency=2
+codegen.generation-worker.lease-seconds=120
+```
+
+推荐迁移顺序：
+
+```text
+API 内嵌 Runner 保持默认
+→ 新 Worker 连接同一数据库，仅消费测试 Job
+→ 灰度放量到 Worker
+→ API 停止直接调用 Agent
+→ 删除或保留 embedded 作为应急回退
+```
+
+验收：
+
+- API 进程不再创建 `GenerationJobRunner`、AgentToolLoop 或模型调用；
+- kill Generation Worker 后，API 登录、SSE、Job 查询和取消接口不受影响；
+- Worker 崩溃后 Lease 到期，任务可被另一个 Worker 接管或进入明确失败状态；
+- Worker A 恢复后，因 fencingToken 失效不能继续写 JobEvent、Artifact 或 Revision；
+- Worker 与 API 可分别设置 CPU/内存限额，单个 Worker 被 OOM kill 不影响 API；
+- 同一 Job 不会同时产生两次有效发布；
+- SSE 断开、页面刷新和 API 重启都不影响 Worker 继续执行；
+- 取消请求在 Worker 的下一个工具副作用边界生效；
+- 以实际并发测试证明 API 和 Worker 的资源曲线可独立观察。
+
 #### Phase D：Playwright Node Execution Worker（5～8 天）
 
 目标：将浏览器验证从 API JVM 拆出，先解决能力和稳定性，再解决强沙箱。
@@ -2290,6 +2373,7 @@ codegen.runtime.next-static-export.enabled=false
 → MySQL 8
 → Spring Security / CSRF / CORS
 → ModelGateway
+→ Java Generation Worker
 → Playwright Browser Worker
 → Build/Browser Sandbox
 → React/Next StackProfile
@@ -2302,8 +2386,8 @@ codegen.runtime.next-static-export.enabled=false
 - MySQL 8 完成全量迁移与回滚演练；
 - 未授权、CSRF、CORS、跨 Workspace 全部拒绝；
 - Agent 核心不依赖供应商 SDK 特定 Options；
-- API 进程不启动浏览器和 npm；
-- 浏览器与构建 Worker 可独立横向扩展；
+- API 进程不执行 Agent、不启动浏览器和 npm；
+- Generation Worker、Browser/Build Worker 可分别限制资源并独立扩容；
 - React/Next 只通过 Profile 扩展，不修改 Job/Revision/SSE 核心；
 - 20 条固定 prompt 有真实基线报告；
 - 100 并发任务下 API 快速入队、队列可观测、失败可重试或进入死信。
