@@ -27,12 +27,14 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
  * 真实数据库探针：
@@ -256,5 +258,61 @@ class GenerationJobPersistenceProbeTest {
 
         assertEquals(workspace.getOwnerId(),
                 workspaceMapper.selectOneById(workspace.getId()).getOwnerId());
+    }
+
+    @Test
+    @Transactional
+    @DisplayName("同一 App 仅允许一个活跃 Job，终态 Job 的生成列唯一键可为空")
+    void enforcesActiveJobLockAndAllowsTerminalHistory() {
+        LocalDateTime now = LocalDateTime.now();
+        Workspace workspace = Workspace.builder()
+                .id(990001000000000011L)
+                .ownerId(1L)
+                .workspaceName("probe-concurrency")
+                .visibility("private")
+                .createTime(now)
+                .updateTime(now)
+                .isDelete(0)
+                .build();
+        assertEquals(1, workspaceMapper.insertSelective(workspace));
+
+        assertEquals(1, jobMapper.insertSelective(newJob(
+                workspace.getId(), 990001000000000021L, "SUCCEEDED", "terminal-1", now)));
+        assertEquals(1, jobMapper.insertSelective(newJob(
+                workspace.getId(), 990001000000000021L, "SUCCEEDED", "terminal-2", now)));
+
+        assertEquals(1, jobMapper.insertSelective(newJob(
+                workspace.getId(), 990001000000000022L, "RUNNING", "active-1", now)));
+        assertThrows(DataIntegrityViolationException.class, () -> jobMapper.insertSelective(newJob(
+                workspace.getId(), 990001000000000022L, "QUEUED", "active-2", now)));
+    }
+
+    private GenerationJob newJob(Long workspaceId, Long appId, String status,
+                                 String idempotencyKey, LocalDateTime now) {
+        return GenerationJob.builder()
+                .workspaceId(workspaceId)
+                .appId(appId)
+                .requestedBy(1L)
+                .requestType("generate")
+                .idempotencyKey("probe-" + idempotencyKey + "-" + System.nanoTime())
+                .requestHash("probe-hash")
+                .requestPayload("{}")
+                .status(status)
+                .currentStage(status)
+                .codeGenType("html")
+                .stackProfileId("html-static")
+                .templateBundleId("default-neutral")
+                .templateVersion("1")
+                .templateHash("probe-template-hash")
+                .skillsJson("[]")
+                .visibility("private")
+                .priority(0)
+                .attempt(0)
+                .maxAttempts(1)
+                .fencingToken(0L)
+                .nextEventSeq(0L)
+                .createTime(now)
+                .updateTime(now)
+                .build();
     }
 }
