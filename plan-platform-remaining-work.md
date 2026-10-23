@@ -1,7 +1,7 @@
 # 计划书：零代码生成平台后续改造
 
 > 日期：2026-10-23
-> 状态：Phase A、Phase B 已完成；Phase C～G 待实施
+> 状态：Phase A、Phase B 已完成；Phase C 进行中；Phase D～G 待实施
 > 来源：[plan-platform-rearchitecture.md](plan-platform-rearchitecture.md)
 > 定位：本文件是后续执行和验收的唯一入口；旧计划保留当前架构与实施记录。
 
@@ -181,6 +181,10 @@ codegen.security.csrf.enabled=false
 - `@AuthCheck` 与 `@PreAuthorize` 暂时共存以便灰度，稳定后再移除旧 AOP。
 
 #### Phase C：ModelGateway、模型能力与多供应商适配（5～8 天）
+
+状态：进行中。已完成模型能力目录、任务路由、上下文预检、OpenAI-compatible
+Adapter，以及压缩/查询规划的灰度迁移；实施边界与剩余项见
+[docs/model-gateway.md](docs/model-gateway.md)。
 
 目标：让平台从“可修改 DeepSeek/OpenAI-compatible 模型名”升级为“可按任务选择模型、
 校验模型能力、隔离供应商协议并支持可控降级”的模型执行层。

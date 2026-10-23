@@ -22,6 +22,8 @@ AI 应用生成平台。用户通过一句话创建网站或前端工程，平�
 - 浏览器和 npm 当前仍在本机执行；独立 Playwright/Sandbox Worker 仍在后续计划中。
 - Spring Security、CSRF 与 CORS allowlist 已实现灰度层，默认开关关闭；
   上线顺序见 [docs/security-migration.md](docs/security-migration.md)。
+- ModelRegistry / ModelGateway 基础已实现，压缩与查询规划支持灰度迁移；
+  生成循环和视觉选片仍在旧路径，见 [docs/model-gateway.md](docs/model-gateway.md)。
 
 ## 必读文档
 
@@ -30,6 +32,7 @@ AI 应用生成平台。用户通过一句话创建网站或前端工程，平�
 3. 历史架构与已完成记录：[plan-platform-rearchitecture.md](plan-platform-rearchitecture.md)
 4. 踩坑与排查记录：[development-notes.md](development-notes.md)
 5. 安全灰度与回滚：[docs/security-migration.md](docs/security-migration.md)
+6. 模型网关与剩余适配：[docs/model-gateway.md](docs/model-gateway.md)
 
 新问题追加到 `development-notes.md` 末尾并保持连续编号，不要把“最新编号”硬编码到其他文档。
 
