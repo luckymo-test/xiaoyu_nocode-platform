@@ -1,7 +1,8 @@
 # 计划书：零代码生成平台后续改造
 
 > 日期：2026-10-23
-> 状态：Phase A、Phase B、Phase C、Phase C.5 功能完成；Phase D～G 待实施
+> 状态：Phase A、Phase B、Phase C、Phase C.5 完成；Phase D 执行框架完成、
+> Vue 构建后验证待 Phase F；Phase E～G 待实施
 > 来源：[plan-platform-rearchitecture.md](plan-platform-rearchitecture.md)
 > 定位：本文件是后续执行和验收的唯一入口；旧计划保留当前架构与实施记录。
 
@@ -379,7 +380,7 @@ codegen.model.fallback.enabled=false
 
 验收结果：
 
-- 135 个默认后端测试通过，18 个外部探针按约定跳过；
+- 137 个默认后端测试通过，19 个外部探针按约定跳过；
 - MySQL 5.7 与 8.4 均从空库执行 V1～V15，并通过 Job、ChatHistory、Artifact 与
   `ai_call_log.jobId` 持久化探针；
 - 压缩、查询规划和视觉选片都通过 `AiCallListener` 写 Prometheus 与 `ai_call_log`；
@@ -478,7 +479,7 @@ API 内嵌 Runner 保持默认
 
 验收结果：
 
-- 135 个默认后端测试通过，18 个外部探针按约定跳过；
+- 137 个默认后端测试通过，19 个外部探针按约定跳过；
 - API 模式上下文验证不存在 `GenerationJobRunner`、`AgentToolLoop`、
   `AiCodeGeneratorFacade`、`VueBuildService` 和旧直连生成 Controller；
 - Worker 模式上下文验证完整消费链和健康指示器存在；
@@ -489,6 +490,10 @@ API 内嵌 Runner 保持默认
 - 浏览器验证暂由 Phase D 的 Execution Worker 接管，Worker 通过启动校验禁止误开。
 
 #### Phase D：Playwright Node Execution Worker（5～8 天）
+
+状态：执行框架完成（2026-10-24）。HTML/MultiFile 真实三视口探针通过；
+Vue 源码必须先由后续 Build Worker 构建，当前不标记为已验证。
+运行手册见 [docs/browser-worker.md](docs/browser-worker.md)。
 
 目标：将浏览器验证从 API JVM 拆出，先解决能力和稳定性，再解决强沙箱。
 
@@ -527,11 +532,30 @@ trace.zip
 - 保留现有 Selenium 实现作为 Feature Flag 回退；
 - 将截图、trace、报告登记到 Revision Artifact Graph。
 
+已完成：
+
+- `BrowserVerifierPort` + Selenium/Playwright 双 Adapter；
+- 独立 `browser-worker` Node 服务，使用 `playwright-core` 和 Edge channel；
+- Worker 内一次性 `127.0.0.1` 静态服务器，避免 `file://` 误报；
+- console、pageerror、request failed、HTTP 4xx/5xx、CORS 信号、图裂、溢出、空白页；
+- 三档截图、network/console JSON、Playwright trace；
+- Revision 登记 `BROWSER_TRACE_*`、`NETWORK_FAILURE_*`、`CONSOLE_ERROR_*`；
+- Worker 工作区根目录限制、1MB 请求上限、最多 5 视口；
+- API 模式不装配 `BrowserVerifierPort`；Generation Worker 禁止本地 Selenium。
+
+尚未完成：
+
+- 当前 Java→Node 使用同步 HTTP；Outbox/Redis Streams 异步下发与回调仍需补齐；
+- Vue 源码的 npm build 与构建产物验证，随 Phase F StackProfile 构建链路完成；
+- 容器/低权限用户、egress allowlist 和资源配额，随 Phase E Sandbox 完成。
+
 Feature Flag：
 
 ```text
-codegen.browser.engine=selenium
-codegen.execution.browser-worker.enabled=false
+codegen.browser.engine=selenium | playwright
+codegen.browser.playwright.url=http://127.0.0.1:8090
+codegen.browser.playwright.connect-timeout-ms=3000
+codegen.browser.playwright.read-timeout-ms=120000
 ```
 
 验收：
@@ -541,6 +565,16 @@ codegen.execution.browser-worker.enabled=false
 - Worker 崩溃不会卡死 Job；
 - 同一报告可追溯到 Job/Revision/Artifact；
 - API JVM 不再创建浏览器进程。
+
+验收结果：
+
+- Selenium/Playwright 返回同一 `RenderReport`，生成修复链路不变；
+- Playwright 真实问题页在 desktop/tablet/mobile 三档均检出图裂和横向溢出；
+- Java Adapter 真实调用 Node Worker 成功，返回截图和 trace；
+- Worker 不可用时返回 unusable report，不阻塞生成发布；
+- API 边界测试确认不装配 `BrowserVerifierPort`；
+- 普通静态 HTML 与 MultiFile 使用同一验证路径；
+- Vue 构建产物验证明确留到 Phase F，避免把未构建源码误报为产品缺陷。
 
 #### Phase E：隔离 Build / Browser Sandbox（5～10 天）
 

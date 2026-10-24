@@ -55,8 +55,8 @@ Worker Profile 默认：
 
 - `server.port=-1`，不暴露业务 Controller；
 - `management.server.port=8126`，只开放健康与指标；
-- `codegen.verify.enabled=false`，Worker 不启动浏览器；
-- 如仍尝试开启浏览器验证，Worker 启动直接失败。
+- `codegen.browser.engine=playwright`，浏览器进程由独立 Node Worker 执行；
+- Worker 内禁止 Selenium；如果开启验证却配置本地 Selenium，启动直接失败。
 
 ## 三、进程边界
 
@@ -122,7 +122,7 @@ Worker 执行前校验：
 
 ## 七、验证结果
 
-- 135 个默认后端测试通过，18 个外部探针按约定跳过；
+- 137 个默认后端测试通过，19 个外部探针按约定跳过；
 - API 模式上下文不存在 Runner、Dispatcher、Agent、Facade、Vue 构建和旧直连 Controller；
 - Worker 模式上下文包含完整消费链和健康指示器；
 - MySQL 5.7 与 8.4 均通过 V1～V15 和 Job 重试 claim 探针；
@@ -156,9 +156,12 @@ Worker 执行前校验：
 
 ## 九、Phase D 衔接
 
-Generation Worker 当前不执行浏览器验证，这是刻意边界。Phase D 将：
+Generation Worker 已通过 `BrowserVerifierPort` 连接独立 Playwright Node Worker：
 
-- 把 Selenium 替换为 Playwright Execution Worker；
-- 通过 `BrowserVerifierPort` 接收验证任务；
-- 将截图、console、overflow、network 和 trace 作为 Artifact 回传；
-- 恢复 Worker 生成后的独立渲染验证闭环。
+- Java JVM 只发送当前工作区与三档视口，不创建浏览器进程；
+- Node Worker 执行 DOM/console/network/screenshot/trace；
+- 报告、截图、console、network 和 trace 进入 Revision Artifact Graph；
+- Selenium Adapter 保留为 Feature Flag 回退，仅允许 embedded 模式；
+- HTTP 静态源消除 `file://` 对 ES module/fetch 的误报。
+
+启动和边界见 [browser-worker.md](browser-worker.md)。
