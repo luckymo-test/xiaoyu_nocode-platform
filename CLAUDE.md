@@ -18,7 +18,8 @@ AI 应用生成平台。用户通过一句话创建网站或前端工程，平�
 - Job、Event、Outbox、Revision 和 Artifact 以 MySQL 为真相源。
 - Redis 用于 Session、热记忆、限流和可选队列，不作为任务状态的唯一来源。
 - Lease、heartbeat、`fencingToken` 保护多 Worker 和崩溃恢复。
-- 当前 Agent 循环位于 API 应用内；独立 Generation Worker 仍在后续计划中。
+- 默认 `embedded` 模式仍在 API 进程执行；生产可切换为 `api + worker`，
+  由独立 Generation Worker 消费 Job，API 不装配 Agent/模型执行链。
 - 浏览器和 npm 当前仍在本机执行；独立 Playwright/Sandbox Worker 仍在后续计划中。
 - Spring Security、CSRF 与 CORS allowlist 已实现灰度层，默认开关关闭；
   上线顺序见 [docs/security-migration.md](docs/security-migration.md)。
@@ -35,6 +36,7 @@ AI 应用生成平台。用户通过一句话创建网站或前端工程，平�
 4. 踩坑与排查记录：[development-notes.md](development-notes.md)
 5. 安全灰度与回滚：[docs/security-migration.md](docs/security-migration.md)
 6. 模型网关与剩余适配：[docs/model-gateway.md](docs/model-gateway.md)
+7. Generation Worker 运行与回滚：[docs/generation-worker.md](docs/generation-worker.md)
 
 新问题追加到 `development-notes.md` 末尾并保持连续编号，不要把“最新编号”硬编码到其他文档。
 

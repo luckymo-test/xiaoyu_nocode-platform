@@ -36,7 +36,8 @@ OpenAI/DeepSeek 的 `OpenAiChatOptions`、thinking extra body 和工具执行参
 - 每个模型有独立熔断和并发配额；
 - fallback 在流式输出开始前生效，禁止把两个供应商的半截输出拼在一起；
 - fallback 对任务路由、显式首选模型和默认模型三条路径都生效；
-- 熔断和并发状态当前为单 JVM 生效，多实例共享状态留到 Generation Worker 阶段。
+- 熔断和并发状态当前在单个 Generation Worker JVM 内生效；多 Worker 共享状态仍需
+  迁移到 Redis。
 
 ### 调用审计与 Revision 快照
 
@@ -114,7 +115,7 @@ routing=false，验证默认模型与能力预检
 
 自动化验证：
 
-- 127 个默认后端测试通过，17 个真实外部探针按约定跳过；
+- 135 个默认后端测试通过，18 个真实外部探针按约定跳过；
 - 视觉任务不会路由到不支持 vision 的模型；
 - 工具任务不会路由到不支持 tools 的模型；
 - 上下文不足时在调用前失败；
@@ -126,7 +127,7 @@ routing=false，验证默认模型与能力预检
 
 真实模型与基础设施探针：
 
-- MySQL 5.7 与 8.4 均从空库执行 V1～V14，并运行 Job、ChatHistory 和
+- MySQL 5.7 与 8.4 均从空库执行 V1～V15，并运行 Job、ChatHistory 和
   `ai_call_log.jobId` 持久化探针；
 - 上下文压缩生成合法结构化摘要；
 - 六主题查询规划生成自然、城市、人文、动物、cosplay、电影六个独立 query；
@@ -139,7 +140,8 @@ routing=false，验证默认模型与能力预检
 
 以下不属于 Phase C 未完成项：
 
-- 熔断和并发配额尚未跨 JVM 共享，随 Java Generation Worker 阶段迁移到 Redis；
+- 熔断和并发配额尚未跨 JVM 共享；Generation Worker 已拆分，但多 Worker 共享状态
+  仍需迁移到 Redis；
 - `ModelExecutionTrace` 是当前嵌入式 Runner 的进程内加速副本，数据库 `ai_call_log`
   仍是最终明细来源；
 - 原生 Anthropic/Gemini 协议只保留 Adapter 扩展点，当前生产实现仍是

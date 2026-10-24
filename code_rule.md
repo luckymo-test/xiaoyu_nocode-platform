@@ -283,7 +283,8 @@ ThrowUtils.throwIf(loginUser == null || loginUser.getId() == null,
 
 以下问题已经存在，但新代码不得继续加深耦合：
 
-- Agent 仍在 API JVM 内执行；目标为独立 Generation Worker。
+- 默认 `embedded` 仍允许 Agent 在 API JVM 内执行；生产 `api` 模式必须由独立
+  Generation Worker 消费 Job，API 不得恢复本地生成入口。
 - Selenium/npm 仍在 API 主机执行；目标为 Playwright/Sandbox Worker。
 - Spring Security FilterChain、CSRF 与 CORS allowlist 已实现灰度；默认仍保留
   自定义 Session/AOP 路径，稳定后再删除旧 AOP。

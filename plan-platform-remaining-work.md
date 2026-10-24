@@ -1,7 +1,7 @@
 # 计划书：零代码生成平台后续改造
 
 > 日期：2026-10-23
-> 状态：Phase A、Phase B、Phase C 已完成；Phase C.5～G 待实施
+> 状态：Phase A、Phase B、Phase C、Phase C.5 功能完成；Phase D～G 待实施
 > 来源：[plan-platform-rearchitecture.md](plan-platform-rearchitecture.md)
 > 定位：本文件是后续执行和验收的唯一入口；旧计划保留当前架构与实施记录。
 
@@ -113,7 +113,7 @@ runtime/
 - 删除未使用的 `spring-ai-alibaba-agent-framework` 依赖；
 - 用 Maven dependency analysis 检查未声明/未使用依赖；
 - 固定 Spring AI、Spring Boot、MyBatis-Flex、COS SDK 版本；
-- 建立 MySQL 8 测试库，执行当时已有的全部 Flyway（当前已扩展到 V1～V14）；
+- 建立 MySQL 8 测试库，执行当时已有的全部 Flyway（当前已扩展到 V1～V15）；
 - 检查 MySQL 5.7 专有行为：生成列、唯一索引中的 NULL、日期函数、排序规则和大小写；
 - 评估是否将 longtext JSON 字段逐步迁移为原生 JSON；
 - 记录 MySQL 5.7 → 8 的回滚窗口和备份方案。
@@ -379,8 +379,8 @@ codegen.model.fallback.enabled=false
 
 验收结果：
 
-- 127 个默认后端测试通过，17 个外部探针按约定跳过；
-- MySQL 5.7 与 8.4 均从空库执行 V1～V14，并通过 Job、ChatHistory、Artifact 与
+- 135 个默认后端测试通过，18 个外部探针按约定跳过；
+- MySQL 5.7 与 8.4 均从空库执行 V1～V15，并通过 Job、ChatHistory、Artifact 与
   `ai_call_log.jobId` 持久化探针；
 - 压缩、查询规划和视觉选片都通过 `AiCallListener` 写 Prometheus 与 `ai_call_log`；
 - Revision Manifest 已记录路由版本、Prompt 指纹、reasoning Profile、Tool Schema 版本和实际调用；
@@ -389,16 +389,23 @@ codegen.model.fallback.enabled=false
 
 #### Phase C.5：Java Generation Worker 独立进程（3～5 天）
 
+状态：功能完成（2026-10-24）；100 Job 并发资源曲线与 OOM 演练按计划归 Phase G。
+运行、冒烟与回滚手册见
+[docs/generation-worker.md](docs/generation-worker.md)。
+
 目标：把 AgentToolLoop、模型调用、素材规划和生成阶段从 Control API JVM 中拆出，
 形成独立的 `generation-worker`。这一步解决的不只是代码组织问题，而是 CPU、内存、
 线程池、GC 和故障域与 API 共享的问题。
 
-当前状态：
+已完成边界：
 
-- `GenerationJobRunner` 仍运行在 Spring Boot API 应用内；
-- Agent 使用 API 进程中的线程池和内存映射；
-- 浏览器和 npm 虽然可以拆成 Node Worker，但生成阶段本身仍可能拖慢 API；
-- 取消和渲染修复状态仍有部分依赖 JVM 内存 Map。
+- `embedded`、`api`、`worker` 三种运行模式；
+- API 模式不装配 Runner、Dispatcher、Agent、模型业务入口、Vue 构建和旧 `/ai/*` 直连 Controller；
+- Worker 模式使用固定大小有界线程池消费持久 Job；
+- 运行中取消改为 `CANCEL_REQUESTED` + Worker 每秒轮询 + 工具边界协作退出；
+- `render_fix` 状态写入 JobEvent，便于 API 只读观察；
+- V15 固化 StackProfile/Skill 版本，Worker 启动前校验；
+- Worker 默认不启动浏览器，不暴露业务 HTTP，只开放独立管理端口。
 
 目标边界：
 
@@ -438,23 +445,23 @@ execution-worker
 - 支持 `GenerationJobEvent` 继续由 Worker 写入，API 的 SSE 只读取事件；
 - Generation Worker 不得启动浏览器、执行 npm 或读取不相关工作区。
 
-建议 Feature Flag：
+运行模式：
 
 ```text
-codegen.jobs.execution-mode=embedded
-codegen.generation-worker.enabled=false
+codegen.jobs.execution-mode=embedded | api | worker
 codegen.generation-worker.consumer-concurrency=2
 codegen.generation-worker.lease-seconds=120
+codegen.generation-worker.cancel-poll-millis=1000
 ```
 
 推荐迁移顺序：
 
 ```text
 API 内嵌 Runner 保持默认
-→ 新 Worker 连接同一数据库，仅消费测试 Job
-→ 灰度放量到 Worker
-→ API 停止直接调用 Agent
-→ 删除或保留 embedded 作为应急回退
+→ Worker 与 API 使用同一数据库启动
+→ API 切到 execution-mode=api
+→ 灰度提高 Worker consumer-concurrency
+→ 保留 embedded 作为应急回退
 ```
 
 验收：
@@ -467,7 +474,19 @@ API 内嵌 Runner 保持默认
 - 同一 Job 不会同时产生两次有效发布；
 - SSE 断开、页面刷新和 API 重启都不影响 Worker 继续执行；
 - 取消请求在 Worker 的下一个工具副作用边界生效；
-- 以实际并发测试证明 API 和 Worker 的资源曲线可独立观察。
+- 100 Job 并发下的 API/Worker 资源曲线、OOM kill 与恢复演练（Phase G）。
+
+验收结果：
+
+- 135 个默认后端测试通过，18 个外部探针按约定跳过；
+- API 模式上下文验证不存在 `GenerationJobRunner`、`AgentToolLoop`、
+  `AiCodeGeneratorFacade`、`VueBuildService` 和旧直连生成 Controller；
+- Worker 模式上下文验证完整消费链和健康指示器存在；
+- MySQL 5.7 与 8.4 均通过 V1～V15，并验证 `WAITING_RETRY` Job 可重新 claim；
+- 真实同库双进程启动：API 8130/管理 8131，Worker 仅管理 8132；
+- API 模式旧 `/ai/chat` 返回 404；杀死 Worker 后 API 健康仍为 UP；
+- Worker 并发有界、Lease 续租和 fencing 逻辑沿用已通过的 Job 持久化机制；
+- 浏览器验证暂由 Phase D 的 Execution Worker 接管，Worker 通过启动校验禁止误开。
 
 #### Phase D：Playwright Node Execution Worker（5～8 天）
 
