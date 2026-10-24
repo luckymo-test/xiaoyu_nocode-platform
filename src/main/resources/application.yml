@@ -82,6 +82,11 @@ codegen:
       enabled: ${CODEGEN_MODEL_ROUTING_ENABLED:false}
     fallback:
       enabled: ${CODEGEN_MODEL_FALLBACK_ENABLED:false}
+    resilience:
+      enabled: ${CODEGEN_MODEL_RESILIENCE_ENABLED:true}
+      failure-threshold: ${CODEGEN_MODEL_FAILURE_THRESHOLD:3}
+      open-duration-ms: ${CODEGEN_MODEL_OPEN_DURATION_MS:30000}
+      max-concurrent-calls: ${CODEGEN_MODEL_MAX_CONCURRENT_CALLS:8}
     default-model: deepseek-flash
     definitions:
       deepseek-flash:
@@ -191,6 +196,7 @@ codegen:
   web-research:
     # 默认关闭；开启后 searchWeb/fetchWeb 才会出现在 Agent 工具列表中
     enabled: ${CODEGEN_WEB_RESEARCH_ENABLED:false}
+    provider: ${CODEGEN_WEB_RESEARCH_PROVIDER:deepseek}
     max-results: ${CODEGEN_WEB_RESEARCH_MAX_RESULTS:5}
     max-content-chars: ${CODEGEN_WEB_RESEARCH_MAX_CONTENT_CHARS:6000}
     cache-ttl-seconds: ${CODEGEN_WEB_RESEARCH_CACHE_TTL_SECONDS:3600}

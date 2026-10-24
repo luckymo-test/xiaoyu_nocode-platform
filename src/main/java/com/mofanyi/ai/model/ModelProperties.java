@@ -18,6 +18,7 @@ public class ModelProperties {
     private Gateway gateway = new Gateway();
     private Routing routing = new Routing();
     private Fallback fallback = new Fallback();
+    private Resilience resilience = new Resilience();
     private String defaultModel = "deepseek-flash";
     private Map<String, Definition> definitions = new LinkedHashMap<>();
     private Map<String, String> routes = new LinkedHashMap<>();
@@ -39,6 +40,15 @@ public class ModelProperties {
     @Setter
     public static class Fallback {
         private boolean enabled;
+    }
+
+    @Getter
+    @Setter
+    public static class Resilience {
+        private boolean enabled = true;
+        private int failureThreshold = 3;
+        private long openDurationMs = 30_000;
+        private int maxConcurrentCalls = 8;
     }
 
     @Getter

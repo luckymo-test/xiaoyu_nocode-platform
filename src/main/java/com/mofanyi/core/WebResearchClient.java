@@ -2,20 +2,13 @@ package com.mofanyi.core;
 
 import cn.hutool.core.util.StrUtil;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mofanyi.exception.ErrorCode;
 import com.mofanyi.exception.ThrowUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.MediaType;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
-import org.springframework.web.client.RestClient;
-import org.springframework.web.client.RestClientResponseException;
 
 import java.net.URI;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -38,8 +31,7 @@ public class WebResearchClient {
     private static final int FETCH_URL_MAX_CHARS = 8192;
     private static final int CACHE_MAX_ENTRIES = 500;
 
-    private final ObjectMapper objectMapper;
-    private final RestClient restClient;
+    private final List<WebResearchTransport> transports;
     private final Map<String, CacheEntry> cache = new ConcurrentHashMap<>();
     private final AtomicLong nextSearchSlot = new AtomicLong();
     private final AtomicLong nextFetchSlot = new AtomicLong();
@@ -59,18 +51,11 @@ public class WebResearchClient {
     @Value("${codegen.web-research.qps:5}")
     private int qps;
 
-    @Value("${spring.ai.openai.base-url:https://api.deepseek.com}")
-    private String baseUrl;
+    @Value("${codegen.web-research.provider:deepseek}")
+    private String provider;
 
-    @Value("${spring.ai.openai.api-key:}")
-    private String apiKey;
-
-    public WebResearchClient(ObjectMapper objectMapper) {
-        this.objectMapper = objectMapper;
-        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
-        requestFactory.setConnectTimeout(Duration.ofSeconds(10));
-        requestFactory.setReadTimeout(Duration.ofSeconds(60));
-        this.restClient = RestClient.builder().requestFactory(requestFactory).build();
+    public WebResearchClient(List<WebResearchTransport> transports) {
+        this.transports = List.copyOf(transports);
     }
 
     public boolean isEnabled() {
@@ -143,7 +128,7 @@ public class WebResearchClient {
             results.add(result);
         }
         Map<String, Object> response = new LinkedHashMap<>();
-        response.put("source", "deepseek_search");
+        response.put("source", provider + "_search");
         response.put("untrusted", true);
         response.put("query", query);
         response.put("results", results);
@@ -156,7 +141,7 @@ public class WebResearchClient {
         acquireSlot(nextFetchSlot);
         JsonNode root = post("/v1/tools/fetch", Map.of("url", url));
         Map<String, Object> response = new LinkedHashMap<>();
-        response.put("source", "deepseek_fetch");
+        response.put("source", provider + "_fetch");
         response.put("untrusted", true);
         response.put("url", url);
         response.put("title", truncate(root.path("title").asText(""), 300));
@@ -167,36 +152,12 @@ public class WebResearchClient {
     }
 
     private JsonNode post(String path, Map<String, Object> body) {
-        ThrowUtils.throwIf(StrUtil.isBlank(apiKey), ErrorCode.OPERATION_ERROR,
-                "网页研究 API Key 未配置");
-        RuntimeException lastError = null;
-        for (int attempt = 1; attempt <= 3; attempt++) {
-            try {
-                String response = restClient.post()
-                        .uri(normalizeBaseUrl() + path)
-                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .body(body)
-                        .retrieve()
-                        .body(String.class);
-                return objectMapper.readTree(response);
-            } catch (RestClientResponseException e) {
-                lastError = e;
-                int status = e.getStatusCode().value();
-                if (!isRetryable(status) || attempt == 3) {
-                    throw e;
-                }
-                sleep(300L * attempt);
-            } catch (Exception e) {
-                lastError = e instanceof RuntimeException runtime
-                        ? runtime : new IllegalStateException(e);
-                if (attempt == 3) {
-                    break;
-                }
-                sleep(300L * attempt);
-            }
-        }
-        throw new IllegalStateException("网页研究请求失败", lastError);
+        return transports.stream()
+                .filter(transport -> transport.id().equalsIgnoreCase(provider))
+                .findFirst()
+                .orElseThrow(() -> new IllegalStateException(
+                        "Web Research provider 未注册：" + provider))
+                .post(path, body);
     }
 
     static String validateFetchUrl(String url) {
@@ -281,27 +242,6 @@ public class WebResearchClient {
         } catch (NumberFormatException e) {
             return false;
         }
-    }
-
-    private static boolean isRetryable(int status) {
-        return status == 408 || status == 429 || status >= 500;
-    }
-
-    private static void sleep(long millis) {
-        if (millis <= 0) {
-            return;
-        }
-        try {
-            Thread.sleep(Math.min(millis, 2_000));
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("网页研究重试被中断", e);
-        }
-    }
-
-    private String normalizeBaseUrl() {
-        String value = StrUtil.blankToDefault(baseUrl, "https://api.deepseek.com");
-        return value.endsWith("/") ? value.substring(0, value.length() - 1) : value;
     }
 
     private static String truncate(String text, int limit) {
