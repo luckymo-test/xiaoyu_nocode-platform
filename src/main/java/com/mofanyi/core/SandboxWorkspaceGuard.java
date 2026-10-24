@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mofanyi.config.SandboxProperties;
 import com.mofanyi.exception.BusinessException;
 import com.mofanyi.exception.ErrorCode;
+import com.mofanyi.runtime.StackProfile;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -40,7 +41,15 @@ public class SandboxWorkspaceGuard {
     }
 
     public Stats validateSource(Path source) {
-        validatePackage(source);
+        validateSource(source, null);
+        return stats(source, properties.getMaxSourceFiles(), properties.getMaxSourceBytes(), true);
+    }
+
+    /**
+     * 按当前 StackProfile 校验依赖和 build 脚本。
+     */
+    public Stats validateSource(Path source, StackProfile profile) {
+        validatePackage(source, profile);
         return stats(source, properties.getMaxSourceFiles(), properties.getMaxSourceBytes(), true);
     }
 
@@ -122,7 +131,7 @@ public class SandboxWorkspaceGuard {
         }
     }
 
-    private void validatePackage(Path source) {
+    private void validatePackage(Path source, StackProfile profile) {
         Path packageJson = source.resolve("package.json");
         if (!Files.isRegularFile(packageJson)) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "缺少 package.json");
@@ -134,12 +143,16 @@ public class SandboxWorkspaceGuard {
         }
         try {
             JsonNode root = objectMapper.readTree(packageJson.toFile());
-            Set<String> allowed = new HashSet<>(properties.getBuild().getAllowedPackages());
+            Set<String> allowed = profile == null || profile.allowedDependencies().isEmpty()
+                    ? new HashSet<>(properties.getBuild().getAllowedPackages())
+                    : new HashSet<>(profile.allowedDependencies());
             validateDependencies(root.path("dependencies"), allowed, "dependencies");
             validateDependencies(root.path("devDependencies"), allowed, "devDependencies");
             String buildScript = root.path("scripts").path("build").asText("").trim()
                     .replaceAll("\\s+", " ");
-            if (!ALLOWED_BUILD_SCRIPTS.contains(buildScript)) {
+            Set<String> allowedScripts = profile == null || profile.allowedBuildScripts().isEmpty()
+                    ? ALLOWED_BUILD_SCRIPTS : profile.allowedBuildScripts();
+            if (!allowedScripts.contains(buildScript)) {
                 throw new BusinessException(ErrorCode.PARAMS_ERROR,
                         "package.json build 脚本不在沙箱 allowlist：" + buildScript);
             }

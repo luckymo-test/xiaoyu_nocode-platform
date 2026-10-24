@@ -36,6 +36,7 @@ import {
 } from '@/api/aiStream'
 import { createSseConnection } from '@/utils/sse'
 import { getRenderFixStatus } from '@/api/renderFix'
+import { listRuntimeProfiles, type RuntimeProfile } from '@/api/runtimeProfile'
 import {
   compareAppRevisions,
   getAppRevision,
@@ -101,6 +102,25 @@ const reasoningStorageKey = computed(() => getReasoningStorageKey(appId.value))
 const reasoningMarks = REASONING_MARKS
 watch(reasoningIndex, (value) => {
   localStorage.setItem(reasoningStorageKey.value, REASONING_LEVELS[value]?.value ?? 'standard')
+})
+
+const runtimeProfiles = ref<RuntimeProfile[]>([])
+const routeStackProfile = typeof route.query.stackProfile === 'string'
+  ? route.query.stackProfile
+  : undefined
+const stackProfileStorageKey = computed(() => `xy-stack-profile-${appId.value}`)
+const selectedStackProfileId = ref(
+  routeStackProfile || localStorage.getItem(`xy-stack-profile-${appId.value}`) || 'auto',
+)
+const generationProfiles = computed(() =>
+  runtimeProfiles.value.filter((profile) => profile.available && profile.compatibilityType === 'vue'),
+)
+const selectedStackProfile = computed(() =>
+  generationProfiles.value.find((profile) => profile.id === selectedStackProfileId.value),
+)
+const selectedStackProfileName = computed(() => selectedStackProfile.value?.displayName || 'Vue 3 + Vite')
+watch(selectedStackProfileId, (value) => {
+  localStorage.setItem(stackProfileStorageKey.value, value)
 })
 
 // 生成中的动态进度文案（如"正在生成 index.html…"、"正在搜索图片…"），用于让用户明确生成在推进
@@ -1245,7 +1265,13 @@ const sendMessage = async (text?: string, auto = false) => {
           genProgress.value = ''
         },
       }
-      connection = streamGenerateVueProject(appId.value, content, callbacks, reasoningLevel.value)
+      connection = streamGenerateVueProject(
+        appId.value,
+        content,
+        callbacks,
+        reasoningLevel.value,
+        selectedStackProfileId.value,
+      )
       return
     }
     // html/multi_file 模式：agent 逐文件生成，SSE 推送 agent_progress（每文件完整代码）。
@@ -1670,12 +1696,22 @@ watch(
   scrollToBottom,
 )
 
-onMounted(() => {
+onMounted(async () => {
   if (!routeReasoning) {
     const savedReasoning = localStorage.getItem(getReasoningStorageKey(appId.value))
     reasoningIndex.value = savedReasoning
       ? parseReasoningIndex(savedReasoning)
       : DEFAULT_REASONING_INDEX
+  }
+  try {
+    const res = await listRuntimeProfiles()
+    runtimeProfiles.value = res.code === 0 ? res.data : []
+    if (!selectedStackProfile.value && generationProfiles.value.length > 0) {
+      selectedStackProfileId.value = generationProfiles.value[0].id
+    }
+    localStorage.setItem(stackProfileStorageKey.value, selectedStackProfileId.value)
+  } catch {
+    runtimeProfiles.value = []
   }
   loadApp()
 })
@@ -1697,7 +1733,7 @@ onUnmounted(() => {
         <div class="gen-title">
           <span class="app-name">{{ app?.appName || '应用生成' }}</span>
           <div class="gen-tags">
-            <a-tag v-if="app && isVue" color="green">Vue3 工程</a-tag>
+            <a-tag v-if="app && isVue" color="green">{{ selectedStackProfileName }}</a-tag>
             <a-tag v-else-if="app && isMultiFile" color="purple">多文件</a-tag>
             <a-tag v-else-if="app" color="blue">单文件</a-tag>
             <a-tag v-if="app?.deployKey" color="cyan">已部署</a-tag>
@@ -1845,6 +1881,17 @@ onUnmounted(() => {
           <span class="gen-progress-text">{{ genProgress }}</span>
         </div>
         <div class="reasoning-bar" title="档位越高，思考更充分，但耗时和 token 消耗也会增加">
+          <a-select
+            v-if="isVue && generationProfiles.length > 1"
+            v-model:value="selectedStackProfileId"
+            class="runtime-profile-select"
+            size="small"
+            :disabled="generating"
+            :options="generationProfiles.map((profile) => ({
+              label: profile.displayName,
+              value: profile.id,
+            }))"
+          />
           <span class="reasoning-label">推理强度</span>
           <a-slider
             v-model:value="reasoningIndex"
@@ -2661,6 +2708,10 @@ onUnmounted(() => {
   color: var(--text-2);
   font-size: 12px;
   white-space: nowrap;
+}
+
+.runtime-profile-select {
+  width: 170px;
 }
 
 .reasoning-slider {

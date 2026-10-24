@@ -3,9 +3,11 @@ package com.mofanyi.runtime;
 import com.mofanyi.exception.ErrorCode;
 import com.mofanyi.exception.ThrowUtils;
 import com.mofanyi.model.enums.CodeGenTypeEnum;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -20,37 +22,48 @@ public class StackProfileRegistry {
 
     private final Map<String, StackProfile> profiles;
 
-    public StackProfileRegistry() {
+    public StackProfileRegistry(
+            @Value("${codegen.runtime.react-vite-ts.enabled:false}") boolean reactEnabled,
+            @Value("${codegen.runtime.next-static-export.enabled:false}") boolean nextEnabled) {
         Map<String, StackProfile> values = new LinkedHashMap<>();
         register(values, new BuiltInProfile(
                 "html-static", "1", "原生 HTML", CodeGenTypeEnum.HTML,
                 Set.of("static", "responsive", "seo-basic"), true, null,
-                List.of(), List.of(), "."));
+                List.of(), List.of(), ".", Set.of(), Set.of()));
         register(values, new BuiltInProfile(
                 "multi-file-static", "1", "原生多文件", CodeGenTypeEnum.MULTI_FILE,
                 Set.of("static", "multi-file", "responsive"), true, null,
-                List.of(), List.of(), "."));
+                List.of(), List.of(), ".", Set.of(), Set.of()));
         register(values, new BuiltInProfile(
                 "vue-vite", "1", "Vue 3 + Vite", CodeGenTypeEnum.VUE,
                 Set.of("spa", "routing", "interaction"), true, null,
-                List.of(new CommandSpec("install", List.of("npm", "install"), Duration.ofMinutes(5))),
-                List.of(new CommandSpec("build", List.of("npm", "run", "build"), Duration.ofMinutes(5))),
-                "dist"));
-        register(values, new BuiltInProfile(
-                "react-vite-ts", "1", "React + Vite + TypeScript", CodeGenTypeEnum.VUE,
-                Set.of("spa", "routing", "interaction", "typescript"), false,
-                "Prompt/脚手架适配尚未完成",
                 List.of(new CommandSpec("install", List.of("npm", "ci"), Duration.ofMinutes(5))),
                 List.of(new CommandSpec("build", List.of("npm", "run", "build"), Duration.ofMinutes(5))),
-                "dist"));
+                "dist",
+                Set.of("vue", "vite", "@vitejs/plugin-vue", "typescript", "vue-tsc",
+                        "pinia", "vue-router", "axios", "gsap"),
+                Set.of("vite build", "vue-tsc --noEmit && vite build",
+                        "vue-tsc -b && vite build")));
+        register(values, new BuiltInProfile(
+                "react-vite-ts", "1", "React + Vite + TypeScript", CodeGenTypeEnum.VUE,
+                Set.of("spa", "routing", "interaction", "typescript"), reactEnabled,
+                reactEnabled ? null : "Feature Flag 未开启",
+                List.of(new CommandSpec("install", List.of("npm", "ci"), Duration.ofMinutes(5))),
+                List.of(new CommandSpec("build", List.of("npm", "run", "build"), Duration.ofMinutes(5))),
+                "dist",
+                Set.of("react", "react-dom", "@types/react", "@types/react-dom",
+                        "vite", "@vitejs/plugin-react", "typescript",
+                        "react-router-dom", "gsap", "lucide-react", "framer-motion"),
+                Set.of("vite build", "tsc --noEmit && vite build",
+                        "tsc -b && vite build")));
         register(values, new BuiltInProfile(
                 "next-static-export", "1", "Next.js Static Export", CodeGenTypeEnum.VUE,
-                Set.of("ssg", "routing", "seo", "motion", "typescript"), false,
-                "静态导出脚手架与验证流程尚未完成",
+                Set.of("ssg", "routing", "seo", "motion", "typescript"), nextEnabled,
+                nextEnabled ? null : "静态导出脚手架与验证流程尚未完成",
                 List.of(new CommandSpec("install", List.of("npm", "ci"), Duration.ofMinutes(8))),
                 List.of(new CommandSpec("build", List.of("npm", "run", "build"), Duration.ofMinutes(8))),
-                "out"));
-        this.profiles = Map.copyOf(values);
+                "out", Set.of(), Set.of()));
+        this.profiles = Collections.unmodifiableMap(new LinkedHashMap<>(values));
     }
 
     public StackProfile require(String profileId) {
@@ -99,6 +112,8 @@ public class StackProfileRegistry {
             String unavailableReason,
             List<CommandSpec> installCommands,
             List<CommandSpec> buildCommands,
-            String outputDirectory) implements StackProfile {
+            String outputDirectory,
+            Set<String> allowedDependencies,
+            Set<String> allowedBuildScripts) implements StackProfile {
     }
 }

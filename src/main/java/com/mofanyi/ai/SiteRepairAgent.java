@@ -12,6 +12,8 @@ import com.mofanyi.exception.ErrorCode;
 import com.mofanyi.exception.ThrowUtils;
 import com.mofanyi.job.GenerationExecutionCondition;
 import com.mofanyi.model.enums.CodeGenTypeEnum;
+import com.mofanyi.runtime.StackProfile;
+import com.mofanyi.runtime.StackProfileContext;
 import com.mofanyi.service.ManualEditService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.Message;
@@ -41,19 +43,22 @@ public class SiteRepairAgent {
     private final AppSpecService appSpecService;
     private final ProjectCodeScanner projectCodeScanner;
     private final CodeFileWriteService codeFileWriteService;
+    private final StackProfileContext stackProfileContext;
 
     public SiteRepairAgent(AgentToolLoop agentToolLoop,
                            CodeGenPromptRegistry promptRegistry,
                            ManualEditService manualEditService,
                            AppSpecService appSpecService,
                            ProjectCodeScanner projectCodeScanner,
-                           CodeFileWriteService codeFileWriteService) {
+                           CodeFileWriteService codeFileWriteService,
+                           StackProfileContext stackProfileContext) {
         this.agentToolLoop = agentToolLoop;
         this.promptRegistry = promptRegistry;
         this.manualEditService = manualEditService;
         this.appSpecService = appSpecService;
         this.projectCodeScanner = projectCodeScanner;
         this.codeFileWriteService = codeFileWriteService;
+        this.stackProfileContext = stackProfileContext;
     }
 
     /**
@@ -68,8 +73,9 @@ public class SiteRepairAgent {
         Map<String, String> files = new LinkedHashMap<>();
         AtomicBoolean finished = new AtomicBoolean(false);
         AtomicReference<String> description = new AtomicReference<>("");
+        StackProfile profile = stackProfileContext.resolve(appId, CodeGenTypeEnum.VUE);
         List<Message> messages = new ArrayList<>();
-        messages.add(new SystemMessage(promptRegistry.vueFix()));
+        messages.add(new SystemMessage(promptRegistry.buildFix(profile.id())));
         messages.add(new UserMessage("构建失败，错误日志如下：\n" + errorLog
                 + "\n\n当前工程相关文件内容：\n" + buildFilesContext(appId)
                 + "\n\n请修复导致报错的文件后调用 finish 结束。"));

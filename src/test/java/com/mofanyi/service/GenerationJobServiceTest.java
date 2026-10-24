@@ -73,7 +73,7 @@ class GenerationJobServiceTest {
                 new ReasoningProfileRegistry(),
                 mock(GenerationJobQueue.class),
                 mock(GenerationDeadLetterMapper.class),
-                new StackProfileRegistry(),
+                new StackProfileRegistry(false, false),
                 templateRegistry,
                 new SkillRegistry(),
                 new ObjectMapper());

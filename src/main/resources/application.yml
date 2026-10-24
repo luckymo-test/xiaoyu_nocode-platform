@@ -78,6 +78,7 @@ codegen:
   node:
     # 默认使用 PATH 中与应用 Node 版本匹配的 npm shim；仅在离线定制环境显式开启。
     use-explicit-cli: ${CODEGEN_NODE_USE_EXPLICIT_CLI:false}
+    corepack-command: ${CODEGEN_NODE_COREPACK_COMMAND:}
   model:
     routing:
       enabled: ${CODEGEN_MODEL_ROUTING_ENABLED:false}
@@ -177,6 +178,11 @@ codegen:
         stream: ${CODEGEN_PLAYWRIGHT_REDIS_STREAM:codegen:browser-verify:requests}
         result-prefix: ${CODEGEN_PLAYWRIGHT_REDIS_RESULT_PREFIX:codegen:browser-verify:result:}
         poll-millis: ${CODEGEN_PLAYWRIGHT_REDIS_POLL_MILLIS:200}
+  runtime:
+    react-vite-ts:
+      enabled: ${CODEGEN_RUNTIME_REACT_VITE_TS_ENABLED:false}
+    next-static-export:
+      enabled: ${CODEGEN_RUNTIME_NEXT_STATIC_EXPORT_ENABLED:false}
   # Agent 循环形态（S5）：true=自管循环（逐步预算真正生效）；false=框架内部循环（现状，默认）
   agent:
     self-managed-loop:

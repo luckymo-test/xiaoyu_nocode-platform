@@ -15,6 +15,8 @@ import com.mofanyi.model.enums.ChatMessageTypeEnum;
 import com.mofanyi.model.enums.CodeGenTypeEnum;
 import com.mofanyi.model.enums.GenerationJobStatusEnum;
 import com.mofanyi.model.vo.AiCodeGenResultVO;
+import com.mofanyi.runtime.StackProfile;
+import com.mofanyi.runtime.StackProfileContext;
 import com.mofanyi.service.ChatHistoryService;
 import com.mofanyi.service.GenerationJobEventService;
 import com.mofanyi.service.GenerationJobService;
@@ -69,6 +71,7 @@ public class GenerationJobRunner {
     private final SkillContext skillContext;
     private final ModelExecutionTrace modelExecutionTrace;
     private final GenerationRuntimeSnapshotValidator runtimeSnapshotValidator;
+    private final StackProfileContext stackProfileContext;
     private final ScheduledExecutorService heartbeatExecutor;
 
     @Value("${codegen.jobs.worker-id:${HOSTNAME:local-worker}}")
@@ -97,6 +100,7 @@ public class GenerationJobRunner {
                                SkillContext skillContext,
                                ModelExecutionTrace modelExecutionTrace,
                                GenerationRuntimeSnapshotValidator runtimeSnapshotValidator,
+                               StackProfileContext stackProfileContext,
                                @Qualifier("jobHeartbeatExecutor")
                                ScheduledExecutorService heartbeatExecutor) {
         this.jobService = jobService;
@@ -116,6 +120,7 @@ public class GenerationJobRunner {
         this.skillContext = skillContext;
         this.modelExecutionTrace = modelExecutionTrace;
         this.runtimeSnapshotValidator = runtimeSnapshotValidator;
+        this.stackProfileContext = stackProfileContext;
         this.heartbeatExecutor = heartbeatExecutor;
     }
 
@@ -126,6 +131,7 @@ public class GenerationJobRunner {
         }
         WorkspaceManager.WorkspaceHandle workspace = null;
         TemplateBundle template = null;
+        StackProfile stackProfile = null;
         java.util.List<SkillDefinition> skills = java.util.List.of();
         CountDownLatch finished = new CountDownLatch(1);
         AtomicBoolean callbackFinished = new AtomicBoolean(false);
@@ -140,7 +146,8 @@ public class GenerationJobRunner {
                 monitorMillis, Math.min(monitorMillis, leaseRenewMillis), TimeUnit.MILLISECONDS);
 
         try {
-            runtimeSnapshotValidator.validateProfile(job);
+            stackProfile = runtimeSnapshotValidator.validateProfile(job);
+            stackProfileContext.activate(job.getAppId(), stackProfile);
             workspace = workspaceManager.begin(job);
             template = activateTemplate(job);
             skills = activateSkills(job);
@@ -185,6 +192,7 @@ public class GenerationJobRunner {
         } finally {
             heartbeat.cancel(false);
             workspaceManager.close(workspace);
+            stackProfileContext.deactivate(job.getAppId(), stackProfile);
             templateContext.deactivate(job.getAppId(), template);
             skillContext.deactivate(job.getAppId(), skills);
             if (!callbackFinished.get()) {

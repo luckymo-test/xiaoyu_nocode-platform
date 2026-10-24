@@ -14,6 +14,8 @@ import com.mofanyi.exception.ErrorCode;
 import com.mofanyi.exception.ThrowUtils;
 import com.mofanyi.job.GenerationExecutionCondition;
 import com.mofanyi.model.enums.CodeGenTypeEnum;
+import com.mofanyi.runtime.StackProfile;
+import com.mofanyi.runtime.StackProfileContext;
 import com.mofanyi.service.ManualEditService;
 import com.mofanyi.template.TemplatePromptService;
 import com.mofanyi.skill.SkillPromptService;
@@ -55,6 +57,7 @@ public class VueProjectAgent {
     private final com.mofanyi.mapper.AppImageMapper appImageMapper;
     private final TemplatePromptService templatePromptService;
     private final SkillPromptService skillPromptService;
+    private final StackProfileContext stackProfileContext;
 
     public VueProjectAgent(CodeGenPromptRegistry promptRegistry,
                            AgentToolLoop agentToolLoop,
@@ -67,7 +70,8 @@ public class VueProjectAgent {
                            ImageMaterialPlanner imageMaterialPlanner,
                            com.mofanyi.mapper.AppImageMapper appImageMapper,
                            TemplatePromptService templatePromptService,
-                           SkillPromptService skillPromptService) {
+                           SkillPromptService skillPromptService,
+                           StackProfileContext stackProfileContext) {
         this.promptRegistry = promptRegistry;
         this.agentToolLoop = agentToolLoop;
         this.siteRepairAgent = siteRepairAgent;
@@ -80,6 +84,7 @@ public class VueProjectAgent {
         this.appImageMapper = appImageMapper;
         this.templatePromptService = templatePromptService;
         this.skillPromptService = skillPromptService;
+        this.stackProfileContext = stackProfileContext;
     }
 
     /**
@@ -133,9 +138,10 @@ public class VueProjectAgent {
         Map<String, String> files = new LinkedHashMap<>();
         AtomicBoolean finished = new AtomicBoolean(false);
         AtomicReference<String> description = new AtomicReference<>("");
+        StackProfile stackProfile = stackProfileContext.resolve(appId, type);
 
         List<Message> messages = new ArrayList<>();
-        messages.add(new SystemMessage(promptRegistry.system(type)));
+        messages.add(new SystemMessage(promptRegistry.system(stackProfile.id(), type)));
         String templateSection = templatePromptService.buildSection(appId);
         if (StrUtil.isNotBlank(templateSection)) {
             messages.add(new SystemMessage(templateSection));
@@ -178,7 +184,8 @@ public class VueProjectAgent {
         }
 
         // 状态只进应用规格；对话记忆只保留用户意图，避免同一摘要注入两份
-        String changeSummary = buildChangeSummary(type, description.get(), files.keySet());
+        String changeSummary = buildChangeSummary(stackProfile, type,
+                description.get(), files.keySet());
         agentMemoryService.appendTurn(appId, userMessage, null);
         appSpecService.recordChange(type, appId, "生成", changeSummary);
 
@@ -191,9 +198,11 @@ public class VueProjectAgent {
      * 构造应用规格的变更摘要：生成类型 + 产出文件索引 + 简短说明。
      * 状态摘要只写入规格，不再复制到对话记忆。
      */
-    private String buildChangeSummary(CodeGenTypeEnum type, String description, Set<String> paths) {
+    private String buildChangeSummary(StackProfile profile, CodeGenTypeEnum type,
+                                      String description, Set<String> paths) {
         StringBuilder sb = new StringBuilder();
-        sb.append("已完成").append(type.getValue()).append("生成。");
+        sb.append("已完成").append(profile.displayName())
+                .append("（").append(type.getValue()).append("）生成。");
         if (paths != null && !paths.isEmpty()) {
             sb.append("产出文件：").append(String.join("、", paths)).append("。");
         }

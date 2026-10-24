@@ -30,6 +30,8 @@ class CodeGenPromptStaticTest {
             "prompt/codegen_multifile_prompt.txt",
             "prompt/codegen_vue_prompt.txt",
             "prompt/codegen_vue_fix_prompt.txt",
+            "prompt/codegen_react_vite_prompt.txt",
+            "prompt/codegen_react_fix_prompt.txt",
             "prompt/codegen_modify_prompt.txt",
             "prompt/codegen_render_fix_prompt.txt");
 
@@ -85,6 +87,9 @@ class CodeGenPromptStaticTest {
         assertTrue(config.multiFilePrompt().contains("HTML、CSS、JavaScript 必须分离"));
         assertTrue(config.vueFixPrompt().contains("src/App.vue"));
         assertTrue(config.vueFixPrompt().contains("Vue 组件路径必须使用 `.vue`"));
+        assertTrue(config.reactPrompt().contains("createRoot"));
+        assertTrue(config.reactPrompt().contains("tsc --noEmit && vite build"));
+        assertTrue(config.reactFixPrompt().contains("不得用 `any`"));
         assertTrue(config.renderFixPrompt().contains("隐藏的灯箱"));
         assertTrue(config.vuePrompt().contains("PROMPT_VERSION: vue-v2"));
         assertTrue(config.singleHtmlPrompt().contains("已有素材清单时不要为了图片重复调用"));

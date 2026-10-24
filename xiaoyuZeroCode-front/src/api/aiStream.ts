@@ -31,6 +31,7 @@ function streamGenerationJob(
   codeGenType: 'html' | 'multi_file' | 'vue',
   callbacks: SseCallbacks,
   reasoningLevel: string,
+  stackProfileId = 'auto',
 ): SseConnection {
   let closed = false
   let eventSource: EventSource | null = null
@@ -61,7 +62,7 @@ function streamGenerationJob(
           message: message ?? '你好，请简单介绍一下你自己',
           reasoningLevel,
           codeGenType,
-          stackProfileId: 'auto',
+          stackProfileId,
           templateHint: 'auto',
           skills: [],
           requestType: 'generate',
@@ -179,8 +180,9 @@ export function streamGenerateVueProject(
   message: string | undefined,
   callbacks: SseCallbacks,
   reasoningLevel = 'standard',
+  stackProfileId = 'auto',
 ): SseConnection {
-  return streamGenerationJob(appId, message, 'vue', callbacks, reasoningLevel)
+  return streamGenerationJob(appId, message, 'vue', callbacks, reasoningLevel, stackProfileId)
 }
 
 /**

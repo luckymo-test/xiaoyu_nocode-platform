@@ -11,6 +11,10 @@ import com.mofanyi.exception.ErrorCode;
 import com.mofanyi.exception.ThrowUtils;
 import com.mofanyi.job.GenerationExecutionCondition;
 import com.mofanyi.model.enums.CodeGenTypeEnum;
+import com.mofanyi.runtime.CommandSpec;
+import com.mofanyi.runtime.StackProfile;
+import com.mofanyi.runtime.StackProfileContext;
+import com.mofanyi.runtime.StackProfileRegistry;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -23,7 +27,6 @@ import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -58,6 +61,8 @@ public class VueBuildService {
     private final SandboxProperties sandboxProperties;
     private final SandboxWorkspaceGuard sandboxGuard;
     private final ObjectMapper objectMapper;
+    private final StackProfileContext stackProfileContext;
+    private final StackProfileRegistry stackProfiles;
 
     /**
      * node 可执行文件绝对路径；为空时用 PATH 里的 node。
@@ -76,18 +81,28 @@ public class VueBuildService {
     @Value("${codegen.node.use-explicit-cli:false}")
     private boolean useExplicitNodeCli;
 
+    /**
+     * 可选 Corepack npm 启动器（如 corepack），用于隔离宿主损坏或版本不匹配的 npm。
+     */
+    @Value("${codegen.node.corepack-command:}")
+    private String corepackCommand;
+
     public VueBuildService(CodeFileWriteService codeFileWriteService,
                            SiteRepairAgent siteRepairAgent,
                            ReasoningProfileRegistry reasoningProfiles,
                            SandboxProperties sandboxProperties,
                            SandboxWorkspaceGuard sandboxGuard,
-                           ObjectMapper objectMapper) {
+                           ObjectMapper objectMapper,
+                           StackProfileContext stackProfileContext,
+                           StackProfileRegistry stackProfiles) {
         this.codeFileWriteService = codeFileWriteService;
         this.siteRepairAgent = siteRepairAgent;
         this.reasoningProfiles = reasoningProfiles;
         this.sandboxProperties = sandboxProperties;
         this.sandboxGuard = sandboxGuard;
         this.objectMapper = objectMapper;
+        this.stackProfileContext = stackProfileContext;
+        this.stackProfiles = stackProfiles;
     }
 
     /**
@@ -110,6 +125,8 @@ public class VueBuildService {
                 CodeGenTypeEnum.VUE, appId)).toAbsolutePath().normalize();
         ThrowUtils.throwIf(!Files.isDirectory(liveDir), ErrorCode.OPERATION_ERROR,
                 "应用尚未生成代码，请先生成");
+        StackProfile profile = resolveProfile(appId, liveDir);
+        Path outputDir = resolveOutputDirectory(liveDir, profile.outputDirectory());
         long startedAt = System.currentTimeMillis();
         Path sandbox = null;
         SandboxWorkspaceGuard.Stats sourceStats = null;
@@ -118,13 +135,13 @@ public class VueBuildService {
         ExecResult build = null;
         String failureReason = null;
         try {
-            sourceStats = sandboxGuard.validateSource(liveDir);
+            sourceStats = sandboxGuard.validateSource(liveDir, profile);
             sandbox = sandboxGuard.createBuildWorkspace(
                     codeFileWriteService.getTmpRoot(), appId);
             sandboxGuard.syncSource(liveDir, sandbox);
 
             notify(progress, "START_INSTALL");
-            install = exec(sandbox, "install");
+            install = exec(sandbox, "install", profile);
             if (!install.success()) {
                 failureReason = install.timedOut()
                         ? "npm install 超时" : "npm install 失败：" + extractError(install.all());
@@ -132,7 +149,7 @@ public class VueBuildService {
             }
 
             notify(progress, "START_BUILD");
-            build = exec(sandbox, "run build");
+            build = exec(sandbox, "run build", profile);
             for (int attempt = 0; attempt < MAX_FIX_ATTEMPTS && !build.success(); attempt++) {
                 String error = build.timedOut()
                         ? "构建命令超时" : extractError(build.all());
@@ -147,10 +164,10 @@ public class VueBuildService {
                     notify(progress, "FIX_FAILED|" + truncate(e.getMessage(), 200));
                     break;
                 }
-                sourceStats = sandboxGuard.validateSource(liveDir);
+                sourceStats = sandboxGuard.validateSource(liveDir, profile);
                 sandboxGuard.syncSource(liveDir, sandbox);
                 notify(progress, "REBUILDING");
-                build = exec(sandbox, "run build");
+                build = exec(sandbox, "run build", profile);
             }
             if (!build.success()) {
                 failureReason = build.timedOut() ? "构建命令超时"
@@ -159,19 +176,19 @@ public class VueBuildService {
                 throw new BusinessException(ErrorCode.OPERATION_ERROR, failureReason);
             }
 
-            Path sandboxDist = sandbox.resolve("dist");
+            Path sandboxDist = resolveOutputDirectory(sandbox, profile.outputDirectory());
             outputStats = sandboxGuard.validateOutput(sandboxDist);
-            sandboxGuard.replaceOutput(sandboxDist, liveDir.resolve("dist"));
+            sandboxGuard.replaceOutput(sandboxDist, outputDir);
             notify(progress, "BUILD_OK");
             writeBuildReport(appId, startedAt, true, null,
-                    sourceStats, outputStats, install, build);
-            return liveDir.resolve("dist").toFile();
+                    sourceStats, outputStats, install, build, profile);
+            return outputDir.toFile();
         } catch (RuntimeException e) {
             if (failureReason == null) {
                 failureReason = truncate(e.getMessage(), 1_000);
             }
             writeBuildReport(appId, startedAt, false, failureReason,
-                    sourceStats, outputStats, install, build);
+                    sourceStats, outputStats, install, build, profile);
             throw e;
         } finally {
             sandboxGuard.cleanup(sandbox);
@@ -189,7 +206,13 @@ public class VueBuildService {
     public String readVueDist(Long appId) {
         ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
         String projectDir = codeFileWriteService.getLiveProjectDir(CodeGenTypeEnum.VUE, appId);
-        File distIndex = Paths.get(projectDir, "dist", "index.html").toFile();
+        Path projectPath = Path.of(projectDir).toAbsolutePath().normalize();
+        if (!Files.isDirectory(projectPath)) {
+            return null;
+        }
+        StackProfile profile = resolveProfile(appId, projectPath);
+        Path outputDir = resolveOutputDirectory(projectPath, profile.outputDirectory());
+        File distIndex = outputDir.resolve("index.html").toFile();
         if (!FileUtil.exist(distIndex)) {
             return null;
         }
@@ -200,7 +223,7 @@ public class VueBuildService {
         StringBuffer cssSb = new StringBuffer();
         while (cssMatcher.find()) {
             String assetPath = cssMatcher.group(1).replaceFirst("^\\./", "");
-            File asset = Paths.get(projectDir, "dist", assetPath.replaceFirst("^/", "")).toFile();
+            File asset = outputDir.resolve(assetPath.replaceFirst("^/", "")).toFile();
             String content = FileUtil.exist(asset) ? FileUtil.readString(asset, StandardCharsets.UTF_8) : "";
             cssMatcher.appendReplacement(cssSb, Matcher.quoteReplacement("<style>" + content + "</style>"));
         }
@@ -212,7 +235,7 @@ public class VueBuildService {
         StringBuffer jsSb = new StringBuffer();
         while (jsMatcher.find()) {
             String assetPath = jsMatcher.group(1).replaceFirst("^\\./", "");
-            File asset = Paths.get(projectDir, "dist", assetPath.replaceFirst("^/", "")).toFile();
+            File asset = outputDir.resolve(assetPath.replaceFirst("^/", "")).toFile();
             String content = FileUtil.exist(asset) ? FileUtil.readString(asset, StandardCharsets.UTF_8) : "";
             // 去掉 type="module" 的 crossorigin 属性，内联 module 脚本
             jsMatcher.appendReplacement(jsSb,
@@ -228,10 +251,17 @@ public class VueBuildService {
      * 优先 node.exe <npm-cli.js> <args...>（不依赖 PATH），否则回退 npm.cmd。
      * args 按空格拆成多个 token（如 "run build" → run + build）。
      */
-    private ExecResult exec(Path workDir, String action) {
-        List<String> argTokens = new ArrayList<>();
+    private ExecResult exec(Path workDir, String action, StackProfile profile) {
+        CommandSpec command = "install".equals(action)
+                ? firstCommand(profile.installCommands())
+                : firstCommand(profile.buildCommands());
+        ThrowUtils.throwIf(command == null || command.noop(),
+                ErrorCode.OPERATION_ERROR, "StackProfile 未配置 " + action + " 命令");
+        List<String> executable = command.executable();
+        ThrowUtils.throwIf(!"npm".equals(executable.getFirst()),
+                ErrorCode.OPERATION_ERROR, "Build Sandbox 只允许 npm 命令");
+        List<String> argTokens = new ArrayList<>(executable.subList(1, executable.size()));
         if ("install".equals(action)) {
-            argTokens.add("install");
             if (sandboxProperties.getBuild().isIgnoreScripts()) {
                 argTokens.add("--ignore-scripts");
             }
@@ -240,12 +270,19 @@ public class VueBuildService {
             if (StrUtil.isNotBlank(sandboxProperties.getBuild().getRegistry())) {
                 argTokens.add("--registry=" + sandboxProperties.getBuild().getRegistry());
             }
-        } else {
-            argTokens.add("run");
-            argTokens.add("build");
         }
         List<String> cmd = new ArrayList<>();
-        if (useExplicitNodeCli
+        if (StrUtil.isNotBlank(corepackCommand)) {
+            if (IS_WINDOWS) {
+                cmd.add("cmd.exe");
+                cmd.add("/d");
+                cmd.add("/s");
+                cmd.add("/c");
+            }
+            cmd.add(corepackCommand);
+            cmd.add("npm");
+            cmd.addAll(argTokens);
+        } else if (useExplicitNodeCli
                 && StrUtil.isNotBlank(nodeCommand) && StrUtil.isNotBlank(npmCliPath)) {
             cmd.add(nodeCommand);
             cmd.add(npmCliPath);
@@ -261,8 +298,9 @@ public class VueBuildService {
             cmd.add("npm");
             cmd.addAll(argTokens);
         }
-        long timeoutMillis = Math.max(30,
-                sandboxProperties.getCommandTimeoutSeconds()) * 1_000L;
+        long timeoutMillis = Math.min(
+                Math.max(30, sandboxProperties.getCommandTimeoutSeconds()) * 1_000L,
+                Math.max(30_000L, command.timeout().toMillis()));
         try {
             ProcessBuilder pb = new ProcessBuilder(cmd);
             pb.directory(workDir.toFile());
@@ -316,10 +354,18 @@ public class VueBuildService {
         Path temp = sandbox.resolve(".tmp");
         Path home = sandbox.resolve(".home");
         Path npmUserConfig = sandbox.resolve(".npmrc");
+        Path appData = sandbox.resolve(".appdata");
+        Path localAppData = sandbox.resolve(".localappdata");
+        Path xdgConfig = sandbox.resolve(".config");
+        Path xdgCache = sandbox.resolve(".cache");
         try {
             Files.createDirectories(cache);
             Files.createDirectories(temp);
             Files.createDirectories(home);
+            Files.createDirectories(appData);
+            Files.createDirectories(localAppData);
+            Files.createDirectories(xdgConfig);
+            Files.createDirectories(xdgCache);
             if (!Files.exists(npmUserConfig)) {
                 Files.writeString(npmUserConfig, "", StandardCharsets.UTF_8);
             }
@@ -328,6 +374,11 @@ public class VueBuildService {
                     "创建 npm 隔离目录失败：" + e.getMessage());
         }
         environment.put("HOME", home.toString());
+        environment.put("USERPROFILE", home.toString());
+        environment.put("APPDATA", appData.toString());
+        environment.put("LOCALAPPDATA", localAppData.toString());
+        environment.put("XDG_CONFIG_HOME", xdgConfig.toString());
+        environment.put("XDG_CACHE_HOME", xdgCache.toString());
         environment.put("TEMP", temp.toString());
         environment.put("TMP", temp.toString());
         environment.put("TMPDIR", temp.toString());
@@ -335,6 +386,13 @@ public class VueBuildService {
         environment.put("NPM_CONFIG_USERCONFIG", npmUserConfig.toString());
         environment.put("NPM_CONFIG_REGISTRY", sandboxProperties.getBuild().getRegistry());
         environment.put("NPM_CONFIG_UPDATE_NOTIFIER", "false");
+        environment.put("COREPACK_HOME", sandbox.resolve(".corepack").toString());
+        try {
+            Files.createDirectories(sandbox.resolve(".corepack"));
+        } catch (Exception e) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR,
+                    "创建 Corepack 隔离目录失败：" + e.getMessage());
+        }
         environment.put("CI", "1");
     }
 
@@ -402,11 +460,14 @@ public class VueBuildService {
                                   String failureReason,
                                   SandboxWorkspaceGuard.Stats sourceStats,
                                   SandboxWorkspaceGuard.Stats outputStats,
-                                  ExecResult install, ExecResult build) {
+                                  ExecResult install, ExecResult build,
+                                  StackProfile profile) {
         try {
             Map<String, Object> report = new LinkedHashMap<>();
             report.put("generatedAt", LocalDateTime.now().toString());
             report.put("appId", String.valueOf(appId));
+            report.put("stackProfileId", profile.id());
+            report.put("stackProfileVersion", profile.version());
             report.put("success", success);
             report.put("failureReason", failureReason);
             report.put("durationMs", System.currentTimeMillis() - startedAt);
@@ -429,6 +490,46 @@ public class VueBuildService {
 
     private String truncate(String s) {
         return truncate(s, 800);
+    }
+
+    private StackProfile resolveProfile(Long appId, Path projectDir) {
+        StackProfile active = stackProfileContext.get(appId);
+        if (active != null) {
+            return active;
+        }
+        try {
+            Path packageJson = projectDir.resolve("package.json");
+            if (Files.isRegularFile(packageJson)) {
+                var root = objectMapper.readTree(packageJson.toFile());
+                if (root.path("dependencies").has("react")) {
+                    return stackProfiles.require("react-vite-ts");
+                }
+                if (root.path("dependencies").has("next")) {
+                    return stackProfiles.require("next-static-export");
+                }
+            }
+        } catch (BusinessException e) {
+            throw e;
+        } catch (Exception e) {
+            log.warn("[build] 无法从 package.json 识别 StackProfile，appId={}", appId, e);
+        }
+        return stackProfiles.resolve("auto", CodeGenTypeEnum.VUE);
+    }
+
+    private Path resolveOutputDirectory(Path projectRoot, String outputDirectory) {
+        ThrowUtils.throwIf(StrUtil.isBlank(outputDirectory), ErrorCode.OPERATION_ERROR,
+                "StackProfile 缺少输出目录");
+        Path relative = Path.of(outputDirectory);
+        ThrowUtils.throwIf(relative.isAbsolute(), ErrorCode.OPERATION_ERROR,
+                "StackProfile 输出目录必须是相对路径");
+        Path resolved = projectRoot.resolve(relative).normalize();
+        ThrowUtils.throwIf(!resolved.startsWith(projectRoot.normalize()),
+                ErrorCode.OPERATION_ERROR, "StackProfile 输出目录越界");
+        return resolved;
+    }
+
+    private CommandSpec firstCommand(List<CommandSpec> commands) {
+        return commands == null || commands.isEmpty() ? null : commands.getFirst();
     }
 
     private String truncate(String s, int max) {

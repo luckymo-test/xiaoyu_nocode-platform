@@ -13,7 +13,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 
 @RestController
-@RequestMapping("/v1/stack-profiles")
+@RequestMapping({"/v1/stack-profiles", "/v1/runtime-profiles"})
 public class StackProfileController {
 
     private final StackProfileRegistry registry;
@@ -36,8 +36,10 @@ public class StackProfileController {
         vo.setCapabilities(profile.capabilities().stream().sorted().toList());
         vo.setAvailable(profile.available());
         vo.setUnavailableReason(profile.unavailableReason());
-        vo.setInstallCommands(profile.installCommands().stream().map(CommandSpec::executable).toList());
-        vo.setBuildCommands(profile.buildCommands().stream().map(CommandSpec::executable).toList());
+        vo.setInstallCommands(profile.installCommands().stream()
+                .map(CommandSpec::executable).toList());
+        vo.setBuildCommands(profile.buildCommands().stream()
+                .map(CommandSpec::executable).toList());
         vo.setOutputDirectory(profile.outputDirectory());
         return vo;
     }

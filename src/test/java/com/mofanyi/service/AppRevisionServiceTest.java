@@ -60,7 +60,8 @@ class AppRevisionServiceTest {
                 revisionMapper, artifactMapper, appMapper, workspaceManager,
                 new ArtifactStore(), files, new ObjectMapper(), jobService,
                 new ModelRegistry(new ModelProperties()), trace,
-                new CodeGenPromptRegistry("html", "multi", "vue", "vue-fix", "modify", "render-fix"));
+                new CodeGenPromptRegistry("html", "multi", "vue", "vue-fix",
+                        "react", "react-fix", "modify", "render-fix"));
 
         App app = new App();
         app.setId(7L);

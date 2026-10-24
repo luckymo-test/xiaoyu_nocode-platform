@@ -3,7 +3,7 @@
 > 日期：2026-10-23
 > 状态：Phase A、Phase B、Phase C、Phase C.5、Phase D 完成；
 > Phase E 代码级沙箱完成，容器镜像/编排/探针已准备，真实强隔离验收待部署环境；
-> Phase F～G 待实施
+> Phase F 的 React/Vite/TypeScript 闭环已完成，Next 与 Phase G 待实施
 > 来源：[plan-platform-rearchitecture.md](plan-platform-rearchitecture.md)
 > 定位：本文件是后续执行和验收的唯一入口；旧计划保留当前架构与实施记录。
 
@@ -641,6 +641,9 @@ Docker/WSL/Podman。执行边界见 [docs/sandbox.md](docs/sandbox.md)。
 
 #### Phase F：React / Next 运行时落地（5～8 天）
 
+状态：`react-vite-ts` 已完成（2026-10-24，Feature Flag 默认关闭）；
+`next-static-export` 待实施。运行边界见 [docs/stack-runtime.md](docs/stack-runtime.md)。
+
 目标：让模型真正选择现代技术栈，而不是只是注册一个不可用 Profile。
 
 任务：
@@ -652,6 +655,22 @@ Docker/WSL/Podman。执行边界见 [docs/sandbox.md](docs/sandbox.md)。
 - 将 build/preview/deploy 从固定枚举分支迁到 StackProfile；
 - 用固定评估集比较 Vue、React、Next 的 token、耗时、验证通过率和人工评分；
 - 只有通过质量门禁的 Profile 才能从 unavailable 改为 available。
+
+React 已完成：
+
+- Job 激活 `StackProfileContext`，Prompt、构建和构建修复读取同一快照；
+- React 独立 system prompt、TypeScript 修复 prompt、依赖和 build 脚本 allowlist；
+- `GET /v1/runtime-profiles` 暴露版本、能力和 Feature Flag 状态；
+- 控制台可按可用 Profile 选择 React，并在后续对话中保持选择；
+- 真实 fixture 完成 `npm ci + tsc --noEmit + vite build`；
+- React dist 完成 desktop/tablet/mobile 三档 Playwright 验证；
+- `build-report.json` 记录实际 StackProfile 和版本。
+
+React 待完成：
+
+- 用 20 条固定评估集完成 Vue/React 对照，达到质量门禁后再默认开放；
+- 将 `VueBuildService` 重命名为中性的 StackBuildService，并删除剩余 Vue 命名兼容债务；
+- Next 静态导出、`out` 目录验证和对应 Feature Flag。
 
 Feature Flag：
 

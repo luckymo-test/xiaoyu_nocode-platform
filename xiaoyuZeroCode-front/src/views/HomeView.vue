@@ -16,6 +16,7 @@ import {
   listMyAppVoByPage,
   listPublicAppVoByPage,
 } from '@/api/appController'
+import { listRuntimeProfiles, type RuntimeProfile } from '@/api/runtimeProfile'
 import AppCard from '@/components/AppCard.vue'
 import EmptyState from '@/components/EmptyState.vue'
 import TableSkeleton from '@/components/TableSkeleton.vue'
@@ -38,18 +39,20 @@ interface GenerateMode {
   label: string
   codeGenType: string
   stream: boolean
+  stackProfileId?: string
 }
 
-const generateModes: GenerateMode[] = [
+const generateModes = ref<GenerateMode[]>([
   { label: '单文件生成', codeGenType: 'html', stream: false },
   { label: '多文件生成', codeGenType: 'multi_file', stream: false },
   { label: '单文件流式生成', codeGenType: 'html', stream: true },
   { label: '多文件流式生成', codeGenType: 'multi_file', stream: true },
   { label: 'Vue3 工程生成', codeGenType: 'vue', stream: true },
-]
+])
+const runtimeProfiles = ref<RuntimeProfile[]>([])
 
 const selectedModeIndex = ref(2)
-const selectedMode = computed(() => generateModes[selectedModeIndex.value])
+const selectedMode = computed(() => generateModes.value[selectedModeIndex.value])
 const reasoningIndex = ref(
   parseReasoningIndex(localStorage.getItem(NEW_APP_REASONING_STORAGE_KEY)),
 )
@@ -69,7 +72,9 @@ const visibilityOptions = [
   { label: '公开', value: 'public' },
   { label: '私有', value: 'private' },
 ]
-const modeOptions = generateModes.map((m, i) => ({ label: m.label, value: i }))
+const modeOptions = computed(() =>
+  generateModes.value.map((mode, index) => ({ label: mode.label, value: index })),
+)
 
 /** 冷启动引导：点一下就能填进输入框 */
 const examplePrompts = [
@@ -97,8 +102,12 @@ const handleCreate = async () => {
     })
     if (res.data.code === 0 && res.data.data) {
       message.success('创建成功，正在生成应用...')
+      const profileQuery = selectedMode.value.stackProfileId
+        ? `&stackProfile=${encodeURIComponent(selectedMode.value.stackProfileId)}`
+        : ''
       router.push(
-        `/app/gen/${res.data.data}?stream=${selectedMode.value.stream}&reasoning=${reasoningLevel.value}`,
+        `/app/gen/${res.data.data}?stream=${selectedMode.value.stream}`
+          + `&reasoning=${reasoningLevel.value}${profileQuery}`,
       )
     } else {
       message.error(res.data.message || '创建失败')
@@ -263,6 +272,21 @@ const focusStudio = () => {
 
 onMounted(() => {
   loadTab('mine')
+  void listRuntimeProfiles().then((res) => {
+    runtimeProfiles.value = res.code === 0 ? res.data : []
+    if (runtimeProfiles.value.some((profile) =>
+      profile.id === 'react-vite-ts' && profile.available
+    ) && !generateModes.value.some((mode) => mode.stackProfileId === 'react-vite-ts')) {
+      generateModes.value.push({
+        label: 'React + TypeScript',
+        codeGenType: 'vue',
+        stream: true,
+        stackProfileId: 'react-vite-ts',
+      })
+    }
+  }).catch(() => {
+    runtimeProfiles.value = []
+  })
 })
 
 const columns = [

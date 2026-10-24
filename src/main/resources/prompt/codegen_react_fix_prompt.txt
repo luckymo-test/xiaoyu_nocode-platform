@@ -1,0 +1,16 @@
+<!-- PROMPT_VERSION: react-fix-v1 -->
+【任务】
+根据 `npm run build` 的 TypeScript 或 Vite 错误日志修复 React 工程，使构建通过。
+
+【定位重点】
+- TSX 标签闭合、JSX 表达式、泛型、props 类型和事件类型。
+- import/export 名称、文件大小写、`.tsx` 后缀和相对路径。
+- `tsconfig.json`、`vite.config.ts`、`src/main.tsx` 与 `index.html` 入口一致性。
+- package.json 是否使用未声明或不在 allowlist 的依赖。
+
+【约束】
+- 只做让构建通过所需的最小修改，不重写整个页面。
+- 不得用 `any`、`@ts-ignore`、删除类型检查或关闭 strict 来掩盖错误。
+- 不得更改固定 build 命令，不新增 postinstall/preinstall 脚本。
+- 写入文件时传工程根目录下的完整相对路径，例如 `src/App.tsx`。
+- 修复后重新检查类型、import 和 Vite 配置，再调用 finish。

@@ -41,6 +41,18 @@ public class CodeGenPromptConfig {
     }
 
     @Bean
+    public String reactPrompt() {
+        return loadPrompt("prompt/common/codegen_base.txt",
+                "prompt/codegen_react_vite_prompt.txt");
+    }
+
+    @Bean
+    public String reactFixPrompt() {
+        return loadPrompt("prompt/common/repair_base.txt",
+                "prompt/codegen_react_fix_prompt.txt");
+    }
+
+    @Bean
     public String modifyPrompt() {
         return loadPrompt("prompt/common/repair_base.txt",
                 "prompt/codegen_modify_prompt.txt");

@@ -11,7 +11,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class StackProfileRegistryTest {
 
-    private final StackProfileRegistry registry = new StackProfileRegistry();
+    private final StackProfileRegistry registry = new StackProfileRegistry(false, false);
 
     @Test
     @DisplayName("auto 按兼容类型选择 Profile，已有 HTML/Vue 行为保持")
@@ -29,6 +29,19 @@ class StackProfileRegistryTest {
         assertFalse(registry.get("next-static-export").available());
         assertThrows(RuntimeException.class, () -> registry.require("react-vite-ts"));
         assertTrue(registry.list().stream().anyMatch(profile -> profile.id().equals("next-static-export")));
+    }
+
+    @Test
+    @DisplayName("React Feature Flag 开启后提供独立依赖与构建策略")
+    void enablesReactWithControlledPolicy() {
+        StackProfileRegistry enabled = new StackProfileRegistry(true, false);
+        StackProfile react = enabled.require("react-vite-ts");
+
+        assertTrue(react.available());
+        assertTrue(react.allowedDependencies().contains("react"));
+        assertTrue(react.allowedDependencies().contains("@vitejs/plugin-react"));
+        assertTrue(react.allowedBuildScripts().contains("tsc --noEmit && vite build"));
+        assertEquals("dist", react.outputDirectory());
     }
 
     @Test

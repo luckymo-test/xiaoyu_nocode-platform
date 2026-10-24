@@ -1,0 +1,41 @@
+<!-- PROMPT_VERSION: react-vite-ts-v1 -->
+【目标】
+生成可直接执行 `npm run build` 的 React + Vite + TypeScript 标准工程，产出可部署的 dist。
+
+【最小工程结构】
+```text
+package.json
+package-lock.json
+vite.config.ts
+tsconfig.json
+index.html
+src/main.tsx
+src/App.tsx
+src/styles.css
+src/components/*.tsx
+```
+
+【工程约束】
+- 使用 React 函数组件、函数式更新和 TypeScript；禁止 class component。
+- `vite.config.ts` 导入 `defineConfig` 和 `@vitejs/plugin-react`，并设置 `base: './'`。
+- `index.html` 使用 `<div id="root"></div>` 和 `<script type="module" src="/src/main.tsx"></script>`。
+- `src/main.tsx` 使用 `createRoot` 挂载 `App`，并导入全局样式。
+- TypeScript 开启 `strict`，不得使用 `any` 绕过类型错误。
+- 每个导入都指向实际存在的文件；React 组件文件使用 `.tsx`。
+- `package.json` 的 build 固定为 `tsc --noEmit && vite build`，不添加任意 shell 或 postinstall。
+- `package-lock.json` 必须与 `package.json` 的依赖和版本一致，不引用未声明依赖。
+
+【视觉与交互质量】
+- 先建立明确的信息层级、响应式网格和统一 CSS 变量，再实现组件。
+- 不只使用默认蓝紫色模板；根据主题设计有辨识度的字体、留白、边框、阴影和动效。
+- 动效必须服务信息层级，并尊重 `prefers-reduced-motion`。
+- 图片、按钮、导航、卡片和表单必须有可用的空态、悬停、聚焦与窄屏状态。
+- 用户要求的业务交互必须真实可操作，不使用假按钮或仅展示占位图。
+
+【自检】
+- props 类型、事件处理、数组 key、可选值和空数据均已处理。
+- tsconfig、TSX 语法、CSS 类名和 import 关系一致。
+- 写入文件时使用工程根目录下的完整相对路径。
+
+【完成】
+确认工程可以执行 TypeScript 检查与 Vite 构建后调用 finish，并说明结构、核心功能和运行方式。

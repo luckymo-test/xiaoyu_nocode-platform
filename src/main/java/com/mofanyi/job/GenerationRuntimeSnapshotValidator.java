@@ -35,7 +35,7 @@ public class GenerationRuntimeSnapshotValidator {
         this.skills = skills;
     }
 
-    public void validateProfile(GenerationJob job) {
+    public StackProfile validateProfile(GenerationJob job) {
         ThrowUtils.throwIf(job == null || StrUtil.isBlank(job.getStackProfileId()),
                 ErrorCode.OPERATION_ERROR, "Job 缺少 StackProfile");
         StackProfile profile = stackProfiles.require(job.getStackProfileId());
@@ -45,6 +45,7 @@ public class GenerationRuntimeSnapshotValidator {
         ThrowUtils.throwIf(StrUtil.isNotBlank(job.getStackProfileVersion())
                         && !job.getStackProfileVersion().equals(profile.version()),
                 ErrorCode.OPERATION_ERROR, "StackProfile 版本已变化，拒绝执行旧 Job");
+        return profile;
     }
 
     public List<SkillDefinition> validateAndLoadSkills(GenerationJob job) {

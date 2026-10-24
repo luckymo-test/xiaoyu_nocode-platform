@@ -23,6 +23,8 @@ public class CodeGenPromptRegistry {
     private final String multiFilePrompt;
     private final String vuePrompt;
     private final String vueFixPrompt;
+    private final String reactPrompt;
+    private final String reactFixPrompt;
     private final String modifyPrompt;
     private final String renderFixPrompt;
 
@@ -30,12 +32,16 @@ public class CodeGenPromptRegistry {
                                  String multiFilePrompt,
                                  @Qualifier("vuePrompt") String vuePrompt,
                                  @Qualifier("vueFixPrompt") String vueFixPrompt,
+                                 @Qualifier("reactPrompt") String reactPrompt,
+                                 @Qualifier("reactFixPrompt") String reactFixPrompt,
                                  @Qualifier("modifyPrompt") String modifyPrompt,
                                  @Qualifier("renderFixPrompt") String renderFixPrompt) {
         this.singleHtmlPrompt = singleHtmlPrompt;
         this.multiFilePrompt = multiFilePrompt;
         this.vuePrompt = vuePrompt;
         this.vueFixPrompt = vueFixPrompt;
+        this.reactPrompt = reactPrompt;
+        this.reactFixPrompt = reactFixPrompt;
         this.modifyPrompt = modifyPrompt;
         this.renderFixPrompt = renderFixPrompt;
     }
@@ -52,10 +58,23 @@ public class CodeGenPromptRegistry {
     }
 
     /**
+     * Runtime profile takes precedence over the legacy compatibility enum.
+     */
+    public String system(String stackProfileId, CodeGenTypeEnum type) {
+        return "react-vite-ts".equals(stackProfileId)
+                ? reactPrompt : system(type);
+    }
+
+    /**
      * Vue 构建失败修复用的 prompt
      */
     public String vueFix() {
         return vueFixPrompt;
+    }
+
+    public String buildFix(String stackProfileId) {
+        return "react-vite-ts".equals(stackProfileId)
+                ? reactFixPrompt : vueFixPrompt;
     }
 
     /**
@@ -81,6 +100,8 @@ public class CodeGenPromptRegistry {
         versions.put("multi-file", com.mofanyi.ai.model.ModelExecutionTrace.version(multiFilePrompt));
         versions.put("vue", com.mofanyi.ai.model.ModelExecutionTrace.version(vuePrompt));
         versions.put("vue-fix", com.mofanyi.ai.model.ModelExecutionTrace.version(vueFixPrompt));
+        versions.put("react", com.mofanyi.ai.model.ModelExecutionTrace.version(reactPrompt));
+        versions.put("react-fix", com.mofanyi.ai.model.ModelExecutionTrace.version(reactFixPrompt));
         versions.put("modify", com.mofanyi.ai.model.ModelExecutionTrace.version(modifyPrompt));
         versions.put("render-fix", com.mofanyi.ai.model.ModelExecutionTrace.version(renderFixPrompt));
         return versions;

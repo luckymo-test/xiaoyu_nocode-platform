@@ -3,6 +3,7 @@ package com.mofanyi.core;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mofanyi.config.SandboxProperties;
 import com.mofanyi.exception.BusinessException;
+import com.mofanyi.runtime.StackProfileRegistry;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -64,6 +65,37 @@ class SandboxWorkspaceGuardTest {
         Files.writeString(tempDir.resolve("package-lock.json"), "{}");
         properties.setMaxSourceFiles(1);
         assertThrows(BusinessException.class, () -> guard.validateSource(tempDir));
+    }
+
+    @Test
+    @DisplayName("React Profile 接受声明内依赖并拒绝任意包")
+    void validatesReactProfilePolicy() throws Exception {
+        SandboxWorkspaceGuard guard = new SandboxWorkspaceGuard(
+                new SandboxProperties(), new ObjectMapper());
+        var react = new StackProfileRegistry(true, false).require("react-vite-ts");
+        writeProject("""
+                {
+                  "scripts":{"build":"tsc --noEmit && vite build"},
+                  "dependencies":{"react":"19.1.0","react-dom":"19.1.0"},
+                  "devDependencies":{
+                    "@types/react":"19.1.2",
+                    "@types/react-dom":"19.1.2",
+                    "@vitejs/plugin-react":"4.4.1",
+                    "typescript":"5.8.3",
+                    "vite":"6.3.5"
+                  }
+                }
+                """);
+
+        assertDoesNotThrow(() -> guard.validateSource(tempDir, react));
+
+        writeProject("""
+                {
+                  "scripts":{"build":"tsc --noEmit && vite build"},
+                  "dependencies":{"react":"19.1.0","unreviewed-package":"1.0.0"}
+                }
+                """);
+        assertThrows(BusinessException.class, () -> guard.validateSource(tempDir, react));
     }
 
     private void writeProject(String packageJson) throws Exception {

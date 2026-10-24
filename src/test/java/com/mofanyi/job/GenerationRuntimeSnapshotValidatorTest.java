@@ -20,7 +20,7 @@ class GenerationRuntimeSnapshotValidatorTest {
     private final GenerationJobService jobService = mock(GenerationJobService.class);
     private final GenerationRuntimeSnapshotValidator validator =
             new GenerationRuntimeSnapshotValidator(
-                    jobService, new StackProfileRegistry(), new SkillRegistry());
+                    jobService, new StackProfileRegistry(false, false), new SkillRegistry());
 
     @Test
     @DisplayName("StackProfile 版本与 Job 快照不一致时拒绝旧 Job")
