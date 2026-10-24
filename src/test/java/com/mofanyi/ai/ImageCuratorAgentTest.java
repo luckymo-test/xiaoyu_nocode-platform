@@ -2,9 +2,15 @@ package com.mofanyi.ai;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mofanyi.ai.model.ModelGateway;
+import com.mofanyi.ai.model.ModelResponse;
+import com.mofanyi.ai.model.ModelTask;
+import com.mofanyi.ai.model.ModelUsage;
+import com.mofanyi.core.AiCallContext;
+import com.mofanyi.core.AiCallListener;
 import com.mofanyi.core.SiteImageService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.UserMessage;
 
@@ -16,11 +22,17 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 
 class ImageCuratorAgentTest {
 
     private final ImageCuratorAgent agent = new ImageCuratorAgent(
-            mock(SiteImageService.class), mock(ModelGateway.class), new ObjectMapper());
+            mock(SiteImageService.class), mock(ModelGateway.class),
+            mock(AiCallListener.class), new ObjectMapper());
 
     @Test
     @DisplayName("严格过滤越界 id、重复选片和非法用途")
@@ -108,37 +120,6 @@ class ImageCuratorAgentTest {
     }
 
     @Test
-    @DisplayName("每张候选图前必须携带同一 id 的需求相关事实")
-    @SuppressWarnings("unchecked")
-    void visualContentBindsFactsToEachImage() {
-        String requirement = "摄影工作室官网，主视觉必须是穿汉服的人，作品区展示园林环境";
-        ImageCuratorAgent.Candidate first = new ImageCuratorAgent.Candidate(
-                17, "https://example.com/hanfu.jpg", 1200, 1800,
-                "hanfu garden", "pexels");
-        ImageCuratorAgent.VisualCandidate visual = new ImageCuratorAgent.VisualCandidate(
-                first, 1024, 1536, new byte[]{1, 2, 3});
-
-        List<Map<String, Object>> content = agent.buildVisualContent(
-                requirement, List.of(visual), false);
-
-        assertEquals(4, content.size());
-        String header = (String) content.get(0).get("text");
-        assertTrue(header.contains(requirement));
-        assertTrue(header.contains("语义依据"));
-        assertTrue(header.contains("禁止按图片出现顺序猜 id"));
-
-        String candidateFacts = (String) content.get(1).get("text");
-        assertTrue(candidateFacts.contains("id=17"));
-        assertTrue(candidateFacts.contains("1024x1536"));
-        assertTrue(candidateFacts.contains("hanfu garden"));
-        assertTrue(candidateFacts.contains("pexels"));
-
-        Map<String, Object> image = (Map<String, Object>) content.get(2).get("image_url");
-        assertTrue(((String) image.get("url")).startsWith("data:image/jpeg;base64,"));
-        assertEquals("low", image.get("detail"));
-    }
-
-    @Test
     @DisplayName("Gateway 多模态请求把每个候选事实与对应图片放在同一消息")
     void gatewayMessagesBindFactsToMedia() {
         ImageCuratorAgent.Candidate candidate = new ImageCuratorAgent.Candidate(
@@ -158,6 +139,37 @@ class ImageCuratorAgentTest {
         assertTrue(candidateMessage.getText().contains("cosplay portrait photography"));
         assertEquals(1, candidateMessage.getMedia().size());
         assertEquals(3, candidateMessage.getMedia().getFirst().getDataAsByteArray().length);
+    }
+
+    @Test
+    @DisplayName("视觉选片成功时写入统一 AI 调用审计")
+    void visualCurateWritesUnifiedCallAudit() {
+        ModelGateway gateway = mock(ModelGateway.class);
+        AiCallListener listener = mock(AiCallListener.class);
+        when(gateway.chat(any())).thenReturn(new ModelResponse(
+                """
+                        {"needed":true,"suggestedCount":1,"selected":[
+                          {"id":1,"score":9,"purpose":"hero","description":"cosplay 人物","alt":"cosplay 主视觉"}
+                        ],"rejected":[]}
+                        """,
+                "", List.of(), "stop", new ModelUsage(30, 10),
+                "deepseek", "deepseek-flash", "deepseek-flash"));
+        ImageCuratorAgent gatewayAgent = new ImageCuratorAgent(
+                mock(SiteImageService.class), gateway, listener, new ObjectMapper());
+        ImageCuratorAgent.Candidate candidate = new ImageCuratorAgent.Candidate(
+                1, "https://example.com/cosplay.jpg", 1000, 1500,
+                "cosplay portrait photography", "pexels");
+        ImageCuratorAgent.VisualCandidate visual = new ImageCuratorAgent.VisualCandidate(
+                candidate, 800, 1200, new byte[]{1, 2, 3});
+        AiCallContext context = AiCallContext.ofJob(7L, 3L, "html", 99L);
+
+        ReflectionTestUtils.invokeMethod(gatewayAgent, "evaluateBatch",
+                "cosplay 照片墙", List.of(visual), false, context, 7L);
+
+        verify(listener).onSuccess(eq(context), eq("stop"), eq(30L), eq(10L),
+                anyLong(), eq("standard"), eq("deepseek"),
+                eq("deepseek-flash"), eq("deepseek-flash"),
+                eq(ModelTask.VISION_CURATE.name()));
     }
 
 }

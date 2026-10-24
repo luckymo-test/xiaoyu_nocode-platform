@@ -1,6 +1,7 @@
 package com.mofanyi.core;
 
 import com.mofanyi.entity.AiCallLog;
+import com.mofanyi.ai.model.ModelExecutionTrace;
 import com.mofanyi.mapper.AiCallLogMapper;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -30,10 +31,11 @@ class AiCallListenerTest {
             ((Runnable) invocation.getArgument(0)).run();
             return null;
         }).when(writer).submit(any(Runnable.class));
-        AiCallListener listener = new AiCallListener(metrics, mapper, writer);
+        AiCallListener listener = new AiCallListener(
+                metrics, mapper, new ModelExecutionTrace(), writer);
 
         listener.onSuccess(
-                AiCallContext.of(7L, 3L, "generate"),
+                AiCallContext.ofJob(7L, 3L, "generate", 99L),
                 "stop", 12, 8, 120, "high",
                 "deepseek", "deepseek-chat", "GENERATE");
 
@@ -41,6 +43,7 @@ class AiCallListenerTest {
         verify(mapper).insert(rowCaptor.capture());
         AiCallLog row = rowCaptor.getValue();
         assertEquals("deepseek", row.getProvider());
+        assertEquals(99L, row.getJobId());
         assertEquals("deepseek-chat", row.getModel());
         assertEquals("GENERATE", row.getModelTask());
         Counter total = registry.get("ai_call_total")

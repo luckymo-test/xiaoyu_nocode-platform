@@ -1,6 +1,7 @@
 package com.mofanyi.ai.model.gateway;
 
 import com.mofanyi.ai.model.ModelChunk;
+import com.mofanyi.ai.model.ModelCapability;
 import com.mofanyi.ai.model.ModelCircuitBreaker;
 import com.mofanyi.ai.model.ModelConcurrencyLimiter;
 import com.mofanyi.ai.model.ModelDescriptor;
@@ -15,6 +16,7 @@ import org.springframework.stereotype.Component;
 import reactor.core.publisher.Flux;
 
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 @Component
@@ -128,27 +130,41 @@ public class DefaultModelGateway implements ModelGateway {
     }
 
     private List<ModelDescriptor> candidates(ModelRequest request) {
-        ThrowUtils.throwIf(!properties.getGateway().isEnabled(),
-                ErrorCode.OPERATION_ERROR, "ModelGateway 未启用");
         if (request.preferredModelId() != null && !request.preferredModelId().isBlank()) {
-            ModelDescriptor preferred = registry.require(request.preferredModelId());
-            registry.validateCandidate(preferred, registry.requiredCapabilities(
-                            request.task(), request.requiredCapabilities()),
-                    request.estimatedInputTokens(), request.requestedOutputTokens());
-            return List.of(preferred);
+            return candidatesWithFallback(request.preferredModelId(), request);
         }
         if (!properties.getRouting().isEnabled()) {
-            ModelDescriptor fallback = registry.require(properties.getDefaultModel());
-            registry.validateCandidate(fallback, registry.requiredCapabilities(
-                            request.task(), request.requiredCapabilities()),
-                    request.estimatedInputTokens(), request.requestedOutputTokens());
-            return List.of(fallback);
+            return candidatesWithFallback(properties.getDefaultModel(), request);
         }
         return registry.routeCandidates(
                 request.task(),
                 request.requiredCapabilities(),
                 request.estimatedInputTokens(),
                 request.requestedOutputTokens());
+    }
+
+    private List<ModelDescriptor> candidatesWithFallback(String primaryId, ModelRequest request) {
+        List<String> ids = new java.util.ArrayList<>();
+        ids.add(primaryId);
+        if (properties.getFallback().isEnabled()) {
+            ids.addAll(properties.getFallbacks().getOrDefault(primaryId, List.of()));
+        }
+        Set<ModelCapability> capabilities = registry.requiredCapabilities(
+                request.task(), request.requiredCapabilities());
+        List<ModelDescriptor> candidates = new java.util.ArrayList<>();
+        for (String id : ids) {
+            try {
+                ModelDescriptor descriptor = registry.require(id);
+                registry.validateCandidate(descriptor, capabilities,
+                        request.estimatedInputTokens(), request.requestedOutputTokens());
+                candidates.add(descriptor);
+            } catch (RuntimeException ignored) {
+                // 与路由模式一致：不满足能力/上下文的候选不进入 fallback 链。
+            }
+        }
+        ThrowUtils.throwIf(candidates.isEmpty(), ErrorCode.OPERATION_ERROR,
+                "没有满足任务的候选模型：" + ids);
+        return List.copyOf(candidates);
     }
 
     private ModelAdapter adapter(ModelDescriptor descriptor) {

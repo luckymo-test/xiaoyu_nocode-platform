@@ -15,7 +15,6 @@ import java.util.Map;
 @ConfigurationProperties(prefix = "codegen.model")
 public class ModelProperties {
 
-    private Gateway gateway = new Gateway();
     private Routing routing = new Routing();
     private Fallback fallback = new Fallback();
     private Resilience resilience = new Resilience();
@@ -23,12 +22,6 @@ public class ModelProperties {
     private Map<String, Definition> definitions = new LinkedHashMap<>();
     private Map<String, String> routes = new LinkedHashMap<>();
     private Map<String, List<String>> fallbacks = new LinkedHashMap<>();
-
-    @Getter
-    @Setter
-    public static class Gateway {
-        private boolean enabled;
-    }
 
     @Getter
     @Setter

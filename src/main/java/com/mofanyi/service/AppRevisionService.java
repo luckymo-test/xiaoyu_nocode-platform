@@ -4,6 +4,9 @@ import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.util.StrUtil;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mofanyi.artifact.ArtifactStore;
+import com.mofanyi.ai.CodeGenPromptRegistry;
+import com.mofanyi.ai.model.ModelExecutionTrace;
+import com.mofanyi.ai.model.ModelRegistry;
 import com.mofanyi.core.CodeFileWriteService;
 import com.mofanyi.entity.App;
 import com.mofanyi.entity.AppArtifact;
@@ -52,6 +55,9 @@ public class AppRevisionService {
     private final CodeFileWriteService codeFileWriteService;
     private final ObjectMapper objectMapper;
     private final GenerationJobService jobService;
+    private final ModelRegistry modelRegistry;
+    private final ModelExecutionTrace modelExecutionTrace;
+    private final CodeGenPromptRegistry promptRegistry;
 
     public AppRevisionService(AppRevisionMapper revisionMapper,
                               AppArtifactMapper artifactMapper,
@@ -60,7 +66,10 @@ public class AppRevisionService {
                               ArtifactStore artifactStore,
                               CodeFileWriteService codeFileWriteService,
                               ObjectMapper objectMapper,
-                              GenerationJobService jobService) {
+                              GenerationJobService jobService,
+                              ModelRegistry modelRegistry,
+                              ModelExecutionTrace modelExecutionTrace,
+                              CodeGenPromptRegistry promptRegistry) {
         this.revisionMapper = revisionMapper;
         this.artifactMapper = artifactMapper;
         this.appMapper = appMapper;
@@ -69,6 +78,9 @@ public class AppRevisionService {
         this.codeFileWriteService = codeFileWriteService;
         this.objectMapper = objectMapper;
         this.jobService = jobService;
+        this.modelRegistry = modelRegistry;
+        this.modelExecutionTrace = modelExecutionTrace;
+        this.promptRegistry = promptRegistry;
     }
 
     /**
@@ -84,6 +96,7 @@ public class AppRevisionService {
                 || reusable.getId().equals(app.getCurrentRevision()))) {
             publishMarkers(reusable);
             jobService.recordPublishedRevision(job, reusable.getId());
+            modelExecutionTrace.clear(job.getId());
             return reusable;
         }
         removeIncompleteRevision(job, reusable);
@@ -121,6 +134,7 @@ public class AppRevisionService {
         swapLiveFiles(app, revision, source, job.getBaseRevisionId());
         publishMarkers(revision);
         jobService.recordPublishedRevision(job, revision.getId());
+        modelExecutionTrace.clear(job.getId());
         log.info("[revision] 发布完成，appId={}, revision={}, jobId={}",
                 app.getId(), revision.getId(), job.getId());
         return revision;
@@ -300,6 +314,9 @@ public class AppRevisionService {
         manifest.put("baseRevision", revision.getBaseRevisionId() == null
                 ? null : String.valueOf(revision.getBaseRevisionId()));
         manifest.put("stackProfile", revision.getCodeGenType());
+        manifest.put("promptVersions", promptRegistry.versions());
+        manifest.put("modelExecution",
+                modelExecutionTrace.snapshot(revision.getJobId(), modelRegistry));
         if (revision.getTemplateBundleId() != null) {
             manifest.put("template", Map.of(
                     "id", revision.getTemplateBundleId(),

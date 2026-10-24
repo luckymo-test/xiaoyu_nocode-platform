@@ -17,7 +17,6 @@ class ModelPropertiesBindingTest {
     @DisplayName("YAML 风格的模型能力、任务路由与开关可以正确绑定")
     void bindsRegistryConfiguration() {
         MockEnvironment environment = new MockEnvironment()
-                .withProperty("codegen.model.gateway.enabled", "true")
                 .withProperty("codegen.model.routing.enabled", "true")
                 .withProperty("codegen.model.default-model", "deepseek-flash")
                 .withProperty("codegen.model.definitions.deepseek-flash.provider", "deepseek")
@@ -36,7 +35,6 @@ class ModelPropertiesBindingTest {
         ModelDescriptor descriptor = registry.route(
                 ModelTask.QUERY_PLAN, Set.of(), 1_000, 500);
 
-        assertTrue(properties.getGateway().isEnabled());
         assertTrue(properties.getRouting().isEnabled());
         assertEquals("deepseek", descriptor.provider());
         assertEquals(128_000, descriptor.contextWindow());

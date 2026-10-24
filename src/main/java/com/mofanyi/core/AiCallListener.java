@@ -1,6 +1,7 @@
 package com.mofanyi.core;
 
 import com.mofanyi.entity.AiCallLog;
+import com.mofanyi.ai.model.ModelExecutionTrace;
 import com.mofanyi.mapper.AiCallLogMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
@@ -20,6 +21,7 @@ public class AiCallListener {
 
     private final AiMetricsRecorder metrics;
     private final AiCallLogMapper aiCallLogMapper;
+    private final ModelExecutionTrace modelExecutionTrace;
 
     /**
      * 明细落库执行器：虚拟线程、短任务，不阻塞生成。
@@ -28,9 +30,11 @@ public class AiCallListener {
     private final ExecutorService detailWriter;
 
     public AiCallListener(AiMetricsRecorder metrics, AiCallLogMapper aiCallLogMapper,
+                          ModelExecutionTrace modelExecutionTrace,
                           @Qualifier("aiCallDetailExecutor") ExecutorService detailWriter) {
         this.metrics = metrics;
         this.aiCallLogMapper = aiCallLogMapper;
+        this.modelExecutionTrace = modelExecutionTrace;
         this.detailWriter = detailWriter;
     }
 
@@ -52,13 +56,25 @@ public class AiCallListener {
                           long inputTokens, long outputTokens, long durationMs,
                           String reasoningLevel, String provider,
                           String actualModel, String modelTask) {
+        onSuccess(ctx, finishReason, inputTokens, outputTokens, durationMs,
+                reasoningLevel, provider, actualModel, actualModel, modelTask);
+    }
+
+    public void onSuccess(AiCallContext ctx, String finishReason,
+                          long inputTokens, long outputTokens, long durationMs,
+                          String reasoningLevel, String provider,
+                          String actualModelId, String actualModelName, String modelTask) {
         metrics.record(ctx.callType(), "success", inputTokens, outputTokens,
-                durationMs, reasoningLevel, provider, actualModel, modelTask);
+                durationMs, reasoningLevel, provider, actualModelName, modelTask);
+        modelExecutionTrace.recordCall(ctx, modelTask, "success", provider,
+                actualModelId, actualModelName, reasoningLevel, inputTokens, outputTokens,
+                durationMs, finishReason);
         AiCallLog row = AiCallLog.builder()
-                .appId(ctx.appId()).userId(ctx.userId()).callType(ctx.callType())
+                .appId(ctx.appId()).jobId(ctx.jobId())
+                .userId(ctx.userId()).callType(ctx.callType())
                 .provider(provider).modelTask(modelTask)
-                .model(actualModel == null || actualModel.isBlank()
-                        ? metrics.model() : actualModel)
+                .model(actualModelName == null || actualModelName.isBlank()
+                        ? metrics.model() : actualModelName)
                 .maxOutputTokens(metrics.maxOutputTokens())
                 .inputTokens((int) inputTokens).outputTokens((int) outputTokens)
                 .totalTokens((int) (inputTokens + outputTokens))
@@ -83,16 +99,27 @@ public class AiCallListener {
     public void onFailure(AiCallContext ctx, Throwable error, long durationMs,
                           String reasoningLevel, String provider,
                           String actualModel, String modelTask) {
+        onFailure(ctx, error, durationMs, reasoningLevel, provider,
+                actualModel, actualModel, modelTask);
+    }
+
+    public void onFailure(AiCallContext ctx, Throwable error, long durationMs,
+                          String reasoningLevel, String provider,
+                          String actualModelId, String actualModelName, String modelTask) {
         String errorType = AiMetricsRecorder.classify(error);
         metrics.record(ctx.callType(), "error", 0, 0, durationMs, reasoningLevel,
-                provider, actualModel, modelTask);
+                provider, actualModelName, modelTask);
         metrics.recordError(ctx.callType(), errorType, reasoningLevel,
-                provider, actualModel, modelTask);
+                provider, actualModelName, modelTask);
+        modelExecutionTrace.recordCall(ctx, modelTask, "error", provider,
+                actualModelId, actualModelName, reasoningLevel, 0, 0,
+                durationMs, null);
         AiCallLog row = AiCallLog.builder()
-                .appId(ctx.appId()).userId(ctx.userId()).callType(ctx.callType())
+                .appId(ctx.appId()).jobId(ctx.jobId())
+                .userId(ctx.userId()).callType(ctx.callType())
                 .provider(provider).modelTask(modelTask)
-                .model(actualModel == null || actualModel.isBlank()
-                        ? metrics.model() : actualModel)
+                .model(actualModelName == null || actualModelName.isBlank()
+                        ? metrics.model() : actualModelName)
                 .maxOutputTokens(metrics.maxOutputTokens())
                 .durationMs(durationMs).status("error")
                 .errorMsg(truncate(error == null ? null : error.getMessage()))

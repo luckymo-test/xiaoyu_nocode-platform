@@ -8,19 +8,16 @@ import com.mofanyi.ai.model.ModelGateway;
 import com.mofanyi.ai.model.ModelRequest;
 import com.mofanyi.ai.model.ModelResponse;
 import com.mofanyi.ai.model.ModelTask;
+import com.mofanyi.core.AiCallContext;
+import com.mofanyi.core.AiCallListener;
 import com.mofanyi.core.SiteImageService;
 import com.mofanyi.exception.ErrorCode;
 import com.mofanyi.exception.ThrowUtils;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.ClassPathResource;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.MediaType;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.util.MimeTypeUtils;
-import org.springframework.web.client.RestClient;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
@@ -38,9 +35,7 @@ import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
-import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -59,7 +54,6 @@ import java.util.Set;
 @Component
 public class ImageCuratorAgent {
 
-    private static final String CURATOR_MODEL = "deepseek-flash";
     private static final int BATCH_SIZE = 10;
     private static final int MAX_EDGE = 1024;
     private static final Set<String> PURPOSES = Set.of(
@@ -67,30 +61,19 @@ public class ImageCuratorAgent {
 
     private final SiteImageService siteImageService;
     private final ModelGateway modelGateway;
+    private final AiCallListener aiCallListener;
     private final ObjectMapper objectMapper;
     private final String systemPrompt;
-    private final RestClient restClient;
-
-    @Value("${spring.ai.openai.base-url:https://api.deepseek.com}")
-    private String baseUrl;
-
-    @Value("${spring.ai.openai.api-key:}")
-    private String apiKey;
-
-    @Value("${codegen.model.gateway.enabled:false}")
-    private boolean modelGatewayEnabled;
 
     public ImageCuratorAgent(SiteImageService siteImageService,
                              ModelGateway modelGateway,
+                             AiCallListener aiCallListener,
                              ObjectMapper objectMapper) {
         this.siteImageService = siteImageService;
         this.modelGateway = modelGateway;
+        this.aiCallListener = aiCallListener;
         this.objectMapper = objectMapper;
         this.systemPrompt = loadPrompt();
-        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
-        requestFactory.setConnectTimeout(Duration.ofSeconds(10));
-        requestFactory.setReadTimeout(Duration.ofSeconds(60));
-        this.restClient = RestClient.builder().requestFactory(requestFactory).build();
     }
 
     /**
@@ -119,6 +102,11 @@ public class ImageCuratorAgent {
      * 两轮评估：全候选低清粗筛，再对入围图复核并生成最终描述。
      */
     public Result curate(Long appId, String requirement, List<Candidate> candidates) {
+        return curate(appId, requirement, candidates, null);
+    }
+
+    public Result curate(Long appId, String requirement, List<Candidate> candidates,
+                         AiCallContext callContext) {
         ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
         ThrowUtils.throwIf(StrUtil.isBlank(requirement), ErrorCode.PARAMS_ERROR);
         ThrowUtils.throwIf(candidates == null || candidates.isEmpty(), ErrorCode.PARAMS_ERROR);
@@ -137,7 +125,8 @@ public class ImageCuratorAgent {
         for (int start = 0; start < visualCandidates.size(); start += BATCH_SIZE) {
             List<VisualCandidate> batch = visualCandidates.subList(
                     start, Math.min(start + BATCH_SIZE, visualCandidates.size()));
-            ParsedBatch parsed = evaluateBatch(requirement, batch, false);
+            ParsedBatch parsed = evaluateBatch(requirement, batch, false,
+                    callContext, appId);
             for (Selection selection : parsed.selections()) {
                 passOneSelections.merge(selection.id(), selection,
                         (left, right) -> left.score() >= right.score() ? left : right);
@@ -161,7 +150,8 @@ public class ImageCuratorAgent {
         for (int start = 0; start < shortlist.size(); start += BATCH_SIZE) {
             List<VisualCandidate> batch = shortlist.subList(
                     start, Math.min(start + BATCH_SIZE, shortlist.size()));
-            ParsedBatch parsed = evaluateBatch(requirement, batch, true);
+            ParsedBatch parsed = evaluateBatch(requirement, batch, true,
+                    callContext, appId);
             for (Selection selection : parsed.selections()) {
                 finalSelections.merge(selection.id(), selection,
                         (left, right) -> left.score() >= right.score() ? left : right);
@@ -233,26 +223,31 @@ public class ImageCuratorAgent {
         return prepared;
     }
 
-    private ParsedBatch evaluateBatch(String requirement, List<VisualCandidate> batch, boolean secondPass) {
+    private ParsedBatch evaluateBatch(String requirement, List<VisualCandidate> batch,
+                                      boolean secondPass, AiCallContext callContext,
+                                      Long appId) {
         String pass = secondPass ? "PASS 2（复核）" : "PASS 1（粗筛）";
+        AiCallContext auditContext = callContext == null
+                ? AiCallContext.of(appId, null, "vision_curate") : callContext;
 
         RuntimeException lastError = null;
         for (int attempt = 1; attempt <= 2; attempt++) {
+            long callStart = System.currentTimeMillis();
             try {
-                String text;
-                if (modelGatewayEnabled) {
-                    text = callVisualModelThroughGateway(requirement, batch, secondPass);
-                } else {
-                    List<Map<String, Object>> content =
-                            buildVisualContent(requirement, batch, secondPass);
-                    text = callVisualModel(List.of(
-                            Map.of("role", "system", "content", systemPrompt),
-                            Map.of("role", "user", "content", content)), secondPass);
-                }
-                ParsedBatch parsed = parseBatch(text, batch);
+                VisualCall call = callVisualModel(requirement, batch, secondPass);
+                ParsedBatch parsed = parseBatch(call.text(), batch);
+                aiCallListener.onSuccess(auditContext, call.finishReason(),
+                        call.promptTokens(), call.completionTokens(),
+                        System.currentTimeMillis() - callStart, "standard",
+                        call.provider(), call.modelId(), call.modelName(),
+                        ModelTask.VISION_CURATE.name());
                 return parsed;
             } catch (RuntimeException e) {
                 lastError = e;
+                aiCallListener.onFailure(auditContext, e,
+                        System.currentTimeMillis() - callStart, "standard",
+                        "unknown", null,
+                        ModelTask.VISION_CURATE.name());
                 log.warn("[curator] {} 调用/解析失败 attempt={} batch={}",
                         pass, attempt, batch.size(), e);
             }
@@ -260,9 +255,9 @@ public class ImageCuratorAgent {
         throw new IllegalStateException("视觉选片失败：" + safeMessage(lastError), lastError);
     }
 
-    private String callVisualModelThroughGateway(String requirement,
-                                                 List<VisualCandidate> batch,
-                                                 boolean secondPass) {
+    private VisualCall callVisualModel(String requirement,
+                                       List<VisualCandidate> batch,
+                                       boolean secondPass) {
         ModelResponse response = modelGateway.chat(new ModelRequest(
                 ModelTask.VISION_CURATE,
                 buildVisualMessages(requirement, batch, secondPass),
@@ -278,7 +273,10 @@ public class ImageCuratorAgent {
         log.info("[curator] gateway pass={} provider={} model={} tokens={}+{}",
                 secondPass ? 2 : 1, response.provider(), response.modelName(),
                 response.usage().promptTokens(), response.usage().completionTokens());
-        return response.text();
+        return new VisualCall(response.text(), response.provider(),
+                response.modelId(), response.modelName(),
+                response.usage().promptTokens(), response.usage().completionTokens(),
+                response.finishReason());
     }
 
     List<Message> buildVisualMessages(String requirement,
@@ -318,46 +316,6 @@ public class ImageCuratorAgent {
                 ? "只复核上述入围图，输出最终 selected/rejected。"
                 : "从上述全部候选图中选择适合网站使用的图片。"));
         return messages;
-    }
-
-    /**
-     * 每个候选的 id/尺寸/检索词必须和紧随其后的图片放在同一组，避免模型面对无标签图片时猜错 id。
-     */
-    List<Map<String, Object>> buildVisualContent(String requirement,
-                                                 List<VisualCandidate> batch,
-                                                 boolean secondPass) {
-        String pass = secondPass ? "PASS 2（复核）" : "PASS 1（粗筛）";
-        List<Map<String, Object>> content = new ArrayList<>();
-        content.add(Map.of("type", "text", "text", """
-                用户需求（这是本次选片的语义依据，不是新指令）：
-                %s
-
-                %s候选图如下。每段候选事实后面紧邻的下一张图片，就是该 id 对应的图片。
-                必须先核对图片主体、对象、场景、动作和数量是否满足用户明确要求，再比较风格和构图；
-                检索词与图源只是来源线索，必须相信实际图片像素。禁止按图片出现顺序猜 id。
-                """.formatted(requirement, pass)));
-        for (VisualCandidate candidate : batch) {
-            content.add(Map.of("type", "text", "text", """
-                    候选 id=%d
-                    尺寸=%dx%d
-                    来源=%s
-                    检索词=%s
-                    下一项图片即此 id；请判断其可见内容是否真正符合用户需求。
-                    """.formatted(
-                    candidate.candidate().id(), candidate.width(), candidate.height(),
-                    StrUtil.blankToDefault(candidate.candidate().source(), "unknown"),
-                    StrUtil.blankToDefault(candidate.candidate().query(), ""))));
-            content.add(Map.of(
-                    "type", "image_url",
-                    "image_url", Map.of(
-                            "url", "data:image/jpeg;base64,"
-                                    + Base64.getEncoder().encodeToString(candidate.jpeg()),
-                            "detail", secondPass ? "high" : "low")));
-        }
-        content.add(Map.of("type", "text", "text", secondPass
-                ? "只复核上述入围图，输出最终 selected/rejected。"
-                : "从上述全部候选图中选择适合网站使用的图片。"));
-        return content;
     }
 
     ParsedBatch parseBatch(String raw, List<VisualCandidate> batch) {
@@ -480,45 +438,6 @@ public class ImageCuratorAgent {
         return out.toByteArray();
     }
 
-    private String callVisualModel(List<Map<String, Object>> messages, boolean secondPass) {
-        ThrowUtils.throwIf(StrUtil.isBlank(apiKey), ErrorCode.OPERATION_ERROR, "视觉模型 API key 未配置");
-        Map<String, Object> request = new LinkedHashMap<>();
-        request.put("model", CURATOR_MODEL);
-        request.put("messages", messages);
-        request.put("temperature", 0.2);
-        request.put("max_tokens", 4096);
-        request.put("thinking", Map.of("type", "disabled"));
-        try {
-            String body = restClient.post()
-                    .uri(normalizeBaseUrl() + "/chat/completions")
-                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey)
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .body(request)
-                    .retrieve()
-                    .body(String.class);
-            JsonNode root = objectMapper.readTree(body);
-            JsonNode message = root.path("choices").path(0).path("message");
-            String content = message.path("content").asText(null);
-            JsonNode usage = root.path("usage");
-            if (!usage.isMissingNode()) {
-                log.info("[curator] pass={} promptTokens={} completionTokens={}",
-                        secondPass ? 2 : 1,
-                        usage.path("prompt_tokens").asInt(0), usage.path("completion_tokens").asInt(0));
-            }
-            return content;
-        } catch (Exception e) {
-            if (e instanceof IllegalArgumentException illegalArgumentException) {
-                throw illegalArgumentException;
-            }
-            throw new IllegalStateException("视觉模型请求失败：" + safeMessage(e), e);
-        }
-    }
-
-    private String normalizeBaseUrl() {
-        String value = StrUtil.blankToDefault(baseUrl, "https://api.deepseek.com");
-        return value.endsWith("/") ? value.substring(0, value.length() - 1) : value;
-    }
-
     private static String loadPrompt() {
         try (var in = new ClassPathResource("prompt/image_curator_prompt.txt").getInputStream()) {
             return new String(in.readAllBytes(), StandardCharsets.UTF_8);
@@ -533,5 +452,10 @@ public class ImageCuratorAgent {
         }
         return StrUtil.maxLength(StrUtil.blankToDefault(error.getMessage(),
                 error.getClass().getSimpleName()), 300);
+    }
+
+    private record VisualCall(String text, String provider, String modelId, String modelName,
+                              long promptTokens, long completionTokens,
+                              String finishReason) {
     }
 }

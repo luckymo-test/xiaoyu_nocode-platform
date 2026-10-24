@@ -5,9 +5,12 @@ import com.mofanyi.exception.ThrowUtils;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.TreeMap;
 
 @Component
 public class ModelRegistry {
@@ -115,6 +118,39 @@ public class ModelRegistry {
         }
         capabilities.addAll(inferredCapabilities(task));
         return Set.copyOf(capabilities);
+    }
+
+    /**
+     * 可写入 Revision Manifest 的路由配置快照；version 是配置内容指纹，不包含密钥或 URL。
+     */
+    public Map<String, Object> configurationSnapshot() {
+        Map<String, Object> snapshot = new LinkedHashMap<>();
+        Map<String, Object> definitions = new TreeMap<>();
+        for (Map.Entry<String, ModelProperties.Definition> entry
+                : properties.getDefinitions().entrySet()) {
+            ModelProperties.Definition definition = entry.getValue();
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("provider", definition.getProvider());
+            item.put("modelName", definition.getModelName());
+            item.put("contextWindow", definition.getContextWindow());
+            item.put("maxOutputTokens", definition.getMaxOutputTokens());
+            item.put("capabilities", definition.getSupports().stream()
+                    .map(Enum::name).sorted().toList());
+            item.put("reasoningStyle", definition.getReasoningStyle());
+            item.put("enabled", definition.isEnabled());
+            definitions.put(entry.getKey(), item);
+        }
+        Map<String, String> routes = new TreeMap<>(properties.getRoutes());
+        Map<String, List<String>> fallbacks = new TreeMap<>(properties.getFallbacks());
+        snapshot.put("routingEnabled", properties.getRouting().isEnabled());
+        snapshot.put("fallbackEnabled", properties.getFallback().isEnabled());
+        snapshot.put("defaultModel", properties.getDefaultModel());
+        snapshot.put("definitions", definitions);
+        snapshot.put("routes", routes);
+        snapshot.put("fallbacks", fallbacks);
+        snapshot.put("version", ModelExecutionTrace.version(
+                snapshot.toString()));
+        return snapshot;
     }
 
     private static Set<ModelCapability> inferredCapabilities(ModelTask task) {

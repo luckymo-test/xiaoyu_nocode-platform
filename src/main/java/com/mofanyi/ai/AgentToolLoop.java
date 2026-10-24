@@ -7,6 +7,8 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.mofanyi.ai.model.ModelCapability;
 import com.mofanyi.ai.model.ModelChunk;
 import com.mofanyi.ai.model.ModelGateway;
+import com.mofanyi.ai.model.ModelExecutionTrace;
+import com.mofanyi.ai.model.ModelProperties;
 import com.mofanyi.ai.model.ModelRequest;
 import com.mofanyi.ai.model.ModelTask;
 import com.mofanyi.ai.reasoning.ReasoningLevel;
@@ -33,16 +35,7 @@ import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
-import org.springframework.ai.chat.metadata.ChatGenerationMetadata;
-import org.springframework.ai.chat.metadata.ChatResponseMetadata;
-import org.springframework.ai.chat.metadata.Usage;
-import org.springframework.ai.chat.model.ChatModel;
-import org.springframework.ai.chat.model.ChatResponse;
-import org.springframework.ai.chat.model.Generation;
-import org.springframework.ai.chat.prompt.Prompt;
-import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.tool.ToolCallback;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -53,7 +46,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.Consumer;
 
 /**
  * 生成、修复、修改共用的唯一工具循环实现。
@@ -69,8 +61,9 @@ public class AgentToolLoop {
     private static final int SLIM_THRESHOLD_CHARS = 300;
     private static final long MAX_LOOP_MILLIS = 600_000L;
 
-    private final ChatModel chatModel;
     private final ModelGateway modelGateway;
+    private final ModelProperties modelProperties;
+    private final ModelExecutionTrace modelExecutionTrace;
     private final WriteFileTool writeFileTool;
     private final ReadFileTool readFileTool;
     private final SearchImageTool searchImageTool;
@@ -88,11 +81,9 @@ public class AgentToolLoop {
     @Value("${codegen.agent.context-slim.enabled:false}")
     private boolean contextSlimEnabled;
 
-    @Value("${codegen.model.gateway.enabled:false}")
-    private boolean modelGatewayEnabled;
-
-    public AgentToolLoop(@Qualifier("openAiChatModel") ChatModel chatModel,
-                         ModelGateway modelGateway,
+    public AgentToolLoop(ModelGateway modelGateway,
+                         ModelProperties modelProperties,
+                         ModelExecutionTrace modelExecutionTrace,
                          WriteFileTool writeFileTool,
                          ReadFileTool readFileTool,
                          SearchImageTool searchImageTool,
@@ -103,8 +94,9 @@ public class AgentToolLoop {
                          GenerationTaskRegistry taskRegistry,
                          AiCallListener aiCallListener,
                          ReasoningProfileRegistry reasoningProfiles) {
-        this.chatModel = chatModel;
         this.modelGateway = modelGateway;
+        this.modelProperties = modelProperties;
+        this.modelExecutionTrace = modelExecutionTrace;
         this.writeFileTool = writeFileTool;
         this.readFileTool = readFileTool;
         this.searchImageTool = searchImageTool;
@@ -164,6 +156,8 @@ public class AgentToolLoop {
         callbacks.add(diagramTool.build(request.appId()));
         callbacks.add(finishTool.build(request.finished(), request.description()));
         List<ToolCallback> toolCallbacks = List.copyOf(callbacks);
+        modelExecutionTrace.recordProfile(request.ctx().jobId(), level.code(), profile);
+        modelExecutionTrace.recordTools(request.ctx().jobId(), toolCallbacks);
 
         log.info("[agent] reasoning_level={} thinking={} effort={} maxSteps={} maxLoopTokens={} model={}",
                 level.code(), profile.thinkingEnabled() ? "on" : "off",
@@ -298,13 +292,6 @@ public class AgentToolLoop {
                                 ReasoningProfile profile,
                                 List<ToolCallback> toolCallbacks,
                                 boolean internalToolExecution) {
-        if (!modelGatewayEnabled) {
-            return fromChatResponse(streamAndAggregate(
-                    new Prompt(request.messages(),
-                            options(profile, toolCallbacks, internalToolExecution)),
-                    reasoningSink(request.listener())));
-        }
-
         ModelTask task = modelTask(request.ctx());
         ModelRequest modelRequest = new ModelRequest(
                 task,
@@ -316,7 +303,7 @@ public class AgentToolLoop {
                 profile.thinkingEnabled(),
                 profile.effort(),
                 internalToolExecution,
-                profile.model(),
+                modelProperties.getRouting().isEnabled() ? null : profile.model(),
                 request.ctx());
         List<ModelChunk> chunks = modelGateway.stream(modelRequest)
                 .doOnNext(chunk -> {
@@ -366,61 +353,16 @@ public class AgentToolLoop {
                 finishReason, promptTokens, completionTokens, provider, modelId, modelName);
     }
 
-    private ModelTurn fromChatResponse(ChatResponse response) {
-        if (response == null || response.getResult() == null
-                || response.getResult().getOutput() == null) {
-            throw new IllegalStateException("ChatModel 未返回有效响应");
-        }
-        AssistantMessage output = response.getResult().getOutput();
-        String reasoning = "";
-        if (output.getMetadata() != null) {
-            Object value = output.getMetadata().get("reasoningContent");
-            reasoning = value == null ? "" : String.valueOf(value);
-        }
-        Usage usage = response.getMetadata() == null
-                ? null : response.getMetadata().getUsage();
-        long promptTokens = usage == null || usage.getPromptTokens() == null
-                ? 0 : usage.getPromptTokens();
-        long completionTokens = usage == null || usage.getCompletionTokens() == null
-                ? 0 : usage.getCompletionTokens();
-        return new ModelTurn(
-                output.getText() == null ? "" : output.getText(),
-                reasoning,
-                output.getToolCalls(),
-                finishReasonOf(response),
-                promptTokens,
-                completionTokens,
-                "legacy-chat-model",
-                output.getMetadata() == null ? null
-                        : String.valueOf(output.getMetadata().getOrDefault("model", "")),
-                output.getMetadata() == null ? null
-                        : String.valueOf(output.getMetadata().getOrDefault("model", "")));
-    }
-
     private static ModelTask modelTask(AiCallContext context) {
         String callType = context == null ? null : context.callType();
         if ("modify".equalsIgnoreCase(callType)) {
             return ModelTask.MODIFY;
         }
-        if ("fix".equalsIgnoreCase(callType)) {
+        if (callType != null && (callType.toLowerCase().contains("fix")
+                || callType.toLowerCase().contains("repair"))) {
             return ModelTask.REPAIR;
         }
         return ModelTask.GENERATE;
-    }
-
-    private OpenAiChatOptions options(ReasoningProfile profile, List<ToolCallback> toolCallbacks,
-                                      boolean internalToolExecution) {
-        OpenAiChatOptions.Builder builder = OpenAiChatOptions.builder()
-                .model(profile.model())
-                .maxTokens(profile.maxOutputTokens())
-                .toolCallbacks(toolCallbacks)
-                .internalToolExecutionEnabled(internalToolExecution);
-        if (profile.thinkingEnabled()) {
-            builder.reasoningEffort(profile.effort());
-        } else {
-            builder.extraBody(Map.of("thinking", Map.of("type", "disabled")));
-        }
-        return builder.build();
     }
 
     private void logCallResult(String mode, int round, TokenUsageAccumulator usage,
@@ -430,7 +372,7 @@ public class AgentToolLoop {
         long inDelta = usageValue(usage, true) - beforeIn;
         long outDelta = usageValue(usage, false) - beforeOut;
         aiCallListener.onSuccess(ctx, turn.finishReason(), inDelta, outDelta,
-                callMs, level.code(), turn.provider(), turn.modelName(),
+                callMs, level.code(), turn.provider(), turn.modelId(), turn.modelName(),
                 modelTask(ctx).name());
         log.info("[agent] round={} 模式={} provider={} modelId={} model={} 本轮prompt={} 本轮completion={} total={} 调用耗时={}ms",
                 round, mode, turn.provider(), turn.modelId(), turn.modelName(),
@@ -456,61 +398,6 @@ public class AgentToolLoop {
         long total = promptTokens + completionTokens;
         ThrowUtils.throwIf(total > limitTokens, ErrorCode.OPERATION_ERROR,
                 "生成超出 token 预算（已 " + total + "，上限 " + limitTokens + "），已终止");
-    }
-
-    /**
-     * 流式调用并聚合文本、tool calls、reasoning 与 usage。
-     */
-    ChatResponse streamAndAggregate(Prompt prompt, Consumer<String> reasoningSink) {
-        StringBuilder text = new StringBuilder();
-        StringBuilder reasoning = new StringBuilder();
-        AtomicReference<ChatResponseMetadata> metaRef = new AtomicReference<>();
-        AtomicReference<ChatGenerationMetadata> genMetaRef = new AtomicReference<>();
-        AtomicReference<List<AssistantMessage.ToolCall>> toolCallsRef = new AtomicReference<>(List.of());
-        long start = System.nanoTime();
-        chatModel.stream(prompt)
-                .doOnNext(chunk -> {
-                    Generation generation = chunk.getResult();
-                    if (generation != null) {
-                        AssistantMessage output = generation.getOutput();
-                        if (output != null) {
-                            if (!output.hasToolCalls() && output.getText() != null) {
-                                text.append(output.getText());
-                            }
-                            if (output.getMetadata() != null) {
-                                Object value = output.getMetadata().get("reasoningContent");
-                                if (value != null) {
-                                    String delta = String.valueOf(value);
-                                    reasoning.append(delta);
-                                    if (reasoningSink != null && !delta.isEmpty()) {
-                                        reasoningSink.accept(delta);
-                                    }
-                                }
-                            }
-                            if (output.hasToolCalls()) {
-                                toolCallsRef.set(output.getToolCalls());
-                            }
-                            genMetaRef.set(generation.getMetadata());
-                        }
-                    }
-                    if (chunk.getMetadata() != null) {
-                        metaRef.set(chunk.getMetadata());
-                    }
-                })
-                .collectList()
-                .block();
-        log.info("[agent] 单次流式调用完成：reasoning={}字符 text={}字符 耗时={}ms",
-                reasoning.length(), text.length(), (System.nanoTime() - start) / 1_000_000);
-        AssistantMessage.Builder messageBuilder = AssistantMessage.builder()
-                .content(text.toString())
-                .toolCalls(toolCallsRef.get());
-        if (!reasoning.isEmpty()) {
-            messageBuilder.properties(Map.of("reasoningContent", reasoning.toString()));
-        }
-        return ChatResponse.builder()
-                .generations(List.of(new Generation(messageBuilder.build(), genMetaRef.get())))
-                .metadata(metaRef.get() == null ? ChatResponseMetadata.builder().build() : metaRef.get())
-                .build();
     }
 
     int slimHistory(List<Message> messages, int keepFromIndex) {
@@ -593,27 +480,11 @@ public class AgentToolLoop {
         }
     }
 
-    private static String finishReasonOf(ChatResponse response) {
-        try {
-            if (response == null || response.getResult() == null
-                    || response.getResult().getMetadata() == null) {
-                return null;
-            }
-            return response.getResult().getMetadata().getFinishReason();
-        } catch (RuntimeException e) {
-            return null;
-        }
-    }
-
     private static void setDescription(AtomicReference<String> description, ModelTurn turn) {
         if (!description.get().isBlank() || turn == null || turn.text().isBlank()) {
             return;
         }
         description.set(turn.text());
-    }
-
-    private static Consumer<String> reasoningSink(AgentProgressListener listener) {
-        return listener == null ? null : listener::onReasoning;
     }
 
     private static void accumulateUsage(TokenUsageAccumulator usage, ModelTurn turn) {

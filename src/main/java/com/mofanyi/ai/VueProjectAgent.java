@@ -148,13 +148,15 @@ public class VueProjectAgent {
         }
         // 素材先行（plan-refactor 6.6）：页面构建**之前**把图片素材备好，并把清单作为事实注入。
         // 取代原先"页面先生成、事后用正则补图"（ImageAutoFiller 已删除）——那次序导致页面围绕空占位设计、补图靠猜。
-        List<ImageMaterialPlanner.Material> materials = imageMaterialPlanner.plan(type, appId, userMessage);
+        List<ImageMaterialPlanner.Material> materials =
+                imageMaterialPlanner.plan(type, appId, userMessage, ctx);
         String materialSection = imageMaterialPlanner.toPromptSection(materials);
         if (StrUtil.isNotBlank(materialSection)) {
             messages.add(new SystemMessage(materialSection));
         }
         // 注入对话记忆作为前置上下文（优先 Redis 热窗口，miss 时从 MySQL 冷启动回灌）
-        messages.addAll(agentMemoryService.loadContext(type, appId, userMessage, specSection));
+        messages.addAll(agentMemoryService.loadContext(
+                type, appId, userMessage, specSection, ctx));
         messages.add(new UserMessage(userMessage));
 
         // [promptTokens, completionTokens] 累加器，工具循环各轮模型调用后写入

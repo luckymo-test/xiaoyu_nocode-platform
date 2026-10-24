@@ -8,10 +8,15 @@ package com.mofanyi.core;
  * @param appId    应用 id
  * @param userId   用户 id（可为 null，如修复构建时无请求上下文）
  * @param callType 调用类型：html / multi_file / vue / modify / fix
+ * @param jobId    生成 Job id（可为 null，如非 Job 的构建修复）
  */
-public record AiCallContext(Long appId, Long userId, String callType) {
+public record AiCallContext(Long appId, Long userId, String callType, Long jobId) {
 
     public static AiCallContext of(Long appId, Long userId, String callType) {
-        return new AiCallContext(appId, userId, callType);
+        return new AiCallContext(appId, userId, callType, null);
+    }
+
+    public static AiCallContext ofJob(Long appId, Long userId, String callType, Long jobId) {
+        return new AiCallContext(appId, userId, callType, jobId);
     }
 }

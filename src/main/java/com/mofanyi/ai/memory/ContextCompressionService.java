@@ -7,17 +7,14 @@ import com.mofanyi.ai.model.ModelGateway;
 import com.mofanyi.ai.model.ModelRequest;
 import com.mofanyi.ai.model.ModelResponse;
 import com.mofanyi.ai.model.ModelTask;
+import com.mofanyi.core.AiCallContext;
+import com.mofanyi.core.AiCallListener;
 import com.mofanyi.core.CodeFileWriteService;
 import com.mofanyi.model.enums.CodeGenTypeEnum;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
-import org.springframework.ai.chat.model.ChatModel;
-import org.springframework.ai.chat.model.ChatResponse;
-import org.springframework.ai.chat.prompt.Prompt;
-import org.springframework.ai.openai.OpenAiChatOptions;
-import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
@@ -48,8 +45,8 @@ public class ContextCompressionService {
     private static final int MAX_TRANSCRIPT_CHARS = 24_000;
     private static final int MAX_MESSAGE_CHARS = 2_000;
 
-    private final ChatModel chatModel;
     private final ModelGateway modelGateway;
+    private final AiCallListener aiCallListener;
     private final CodeFileWriteService codeFileWriteService;
     private final ObjectMapper objectMapper;
 
@@ -65,18 +62,12 @@ public class ContextCompressionService {
     @Value("${codegen.memory.compression.max-output-tokens:1500}")
     private int maxOutputTokens;
 
-    @Value("${codegen.memory.compression.model:deepseek-flash}")
-    private String compressionModel;
-
-    @Value("${codegen.model.gateway.enabled:false}")
-    private boolean modelGatewayEnabled;
-
-    public ContextCompressionService(@Qualifier("openAiChatModel") ChatModel chatModel,
-                                     ModelGateway modelGateway,
+    public ContextCompressionService(ModelGateway modelGateway,
+                                     AiCallListener aiCallListener,
                                      CodeFileWriteService codeFileWriteService,
                                      ObjectMapper objectMapper) {
-        this.chatModel = chatModel;
         this.modelGateway = modelGateway;
+        this.aiCallListener = aiCallListener;
         this.codeFileWriteService = codeFileWriteService;
         this.objectMapper = objectMapper;
     }
@@ -85,6 +76,11 @@ public class ContextCompressionService {
      * 超过阈值时返回「旧历史摘要 SystemMessage + 最近原文」，失败时原样返回。
      */
     public List<Message> compressIfNeeded(CodeGenTypeEnum type, Long appId, List<Message> messages) {
+        return compressIfNeeded(type, appId, messages, null);
+    }
+
+    public List<Message> compressIfNeeded(CodeGenTypeEnum type, Long appId, List<Message> messages,
+                                          AiCallContext callContext) {
         if (!enabled || type == null || appId == null || appId <= 0
                 || messages == null || messages.size() < 3
                 || totalTokens(messages) < minTokens) {
@@ -109,10 +105,10 @@ public class ContextCompressionService {
                 List<Message> delta = messages.subList(cache.coveredCount(), cut);
                 summary = delta.isEmpty()
                         ? cache.summary()
-                        : callCompression(delta, cache.summary());
+                        : callCompression(delta, cache.summary(), callContext, appId);
             } else {
                 coveredCount = cut;
-                summary = callCompression(oldMessages, null);
+                summary = callCompression(oldMessages, null, callContext, appId);
             }
             validateSummary(summary);
             writeCache(cachePath, appId, type, coveredCount,
@@ -133,41 +129,47 @@ public class ContextCompressionService {
         }
     }
 
-    private JsonNode callCompression(List<Message> messages, JsonNode previousSummary) {
+    private JsonNode callCompression(List<Message> messages, JsonNode previousSummary,
+                                     AiCallContext callContext, Long appId) {
         String user = buildCompressionInput(messages, previousSummary);
+        AiCallContext auditContext = callContext == null
+                ? AiCallContext.of(appId, null, "compress") : callContext;
         RuntimeException lastError = null;
         for (int attempt = 1; attempt <= 2; attempt++) {
+            long callStart = System.currentTimeMillis();
+            String provider = null;
+            String actualModelId = null;
+            String actualModelName = null;
+            long inputTokens = 0;
+            long outputTokens = 0;
+            String finishReason = null;
             try {
                 List<Message> promptMessages = List.of(
                         new SystemMessage(compressionPrompt()),
                         new UserMessage(user));
-                String text;
-                if (modelGatewayEnabled) {
-                    ModelResponse response = modelGateway.chat(ModelRequest.textTask(
-                            ModelTask.COMPRESS, promptMessages, 0.1, maxOutputTokens));
-                    text = response == null ? null : response.text();
-                } else {
-                    ChatResponse response = chatModel.call(new Prompt(promptMessages, options()));
-                    text = response == null || response.getResult() == null
-                            ? null : response.getResult().getOutput().getText();
-                }
-                return objectMapper.readTree(extractJson(text));
+                ModelResponse response = modelGateway.chat(ModelRequest.textTask(
+                        ModelTask.COMPRESS, promptMessages, 0.1, maxOutputTokens));
+                provider = response.provider();
+                actualModelId = response.modelId();
+                actualModelName = response.modelName();
+                inputTokens = response.usage().promptTokens();
+                outputTokens = response.usage().completionTokens();
+                finishReason = response.finishReason();
+                JsonNode parsed = objectMapper.readTree(extractJson(response.text()));
+                aiCallListener.onSuccess(auditContext, finishReason, inputTokens, outputTokens,
+                        System.currentTimeMillis() - callStart, "standard",
+                        provider, actualModelId, actualModelName, ModelTask.COMPRESS.name());
+                return parsed;
             } catch (Exception e) {
                 lastError = e instanceof RuntimeException runtime
                         ? runtime : new IllegalStateException(e);
+                aiCallListener.onFailure(auditContext, lastError,
+                        System.currentTimeMillis() - callStart, "standard",
+                        provider, actualModelId, actualModelName, ModelTask.COMPRESS.name());
                 log.warn("[memory] 上下文摘要模型调用/解析失败，attempt={}", attempt, e);
             }
         }
         throw new IllegalStateException("上下文摘要生成失败", lastError);
-    }
-
-    private OpenAiChatOptions options() {
-        return OpenAiChatOptions.builder()
-                .model(compressionModel)
-                .temperature(0.1)
-                .maxTokens(maxOutputTokens)
-                .extraBody(Map.of("thinking", Map.of("type", "disabled")))
-                .build();
     }
 
     static int recentRoundStart(List<Message> messages, int keepRounds) {

@@ -263,6 +263,7 @@ class GenerationJobPersistenceProbeTest {
 
         AiCallLog callLog = AiCallLog.builder()
                 .appId(job.getAppId())
+                .jobId(job.getId())
                 .userId(1L)
                 .callType("probe")
                 .provider("deepseek")
@@ -278,6 +279,7 @@ class GenerationJobPersistenceProbeTest {
                 .createTime(now)
                 .build();
         assertEquals(1, aiCallLogMapper.insertSelective(callLog));
+        assertEquals(job.getId(), aiCallLogMapper.selectOneById(callLog.getId()).getJobId());
 
         assertEquals(workspace.getOwnerId(),
                 workspaceMapper.selectOneById(workspace.getId()).getOwnerId());

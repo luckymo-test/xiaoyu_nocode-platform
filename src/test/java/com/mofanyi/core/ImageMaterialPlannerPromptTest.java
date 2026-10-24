@@ -3,16 +3,23 @@ package com.mofanyi.core;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mofanyi.ai.ImageCuratorAgent;
 import com.mofanyi.ai.model.ModelGateway;
+import com.mofanyi.ai.model.ModelResponse;
+import com.mofanyi.ai.model.ModelTask;
+import com.mofanyi.ai.model.ModelUsage;
 import com.mofanyi.ai.task.GenerationTaskRegistry;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.springframework.ai.chat.model.ChatModel;
 
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 class ImageMaterialPlannerPromptTest {
 
@@ -21,8 +28,8 @@ class ImageMaterialPlannerPromptTest {
     void materialSectionCarriesDataBoundary() {
         ImageMaterialPlanner planner = new ImageMaterialPlanner(
                 mock(SiteImageService.class),
-                mock(ChatModel.class),
                 mock(ModelGateway.class),
+                mock(AiCallListener.class),
                 List.of(),
                 mock(ImageCuratorAgent.class),
                 mock(GenerationTaskRegistry.class),
@@ -119,6 +126,31 @@ class ImageMaterialPlannerPromptTest {
                 merged.stream().map(ImageSource.ImageCandidate::url).toList());
     }
 
+    @Test
+    @DisplayName("查询规划成功时写入统一 AI 调用审计")
+    void queryPlanWritesUnifiedCallAudit() {
+        ModelGateway gateway = mock(ModelGateway.class);
+        AiCallListener listener = mock(AiCallListener.class);
+        when(gateway.chat(any())).thenReturn(new ModelResponse(
+                "{\"queries\":[\"cosplay portrait photography\"]}",
+                "", java.util.List.of(), "stop", new ModelUsage(20, 8),
+                "deepseek", "deepseek-flash", "deepseek-flash"));
+        ImageMaterialPlanner planner = new ImageMaterialPlanner(
+                mock(SiteImageService.class), gateway, listener, List.of(),
+                mock(ImageCuratorAgent.class), mock(GenerationTaskRegistry.class),
+                mock(CodeFileWriteService.class), new ObjectMapper());
+        AiCallContext context = AiCallContext.ofJob(7L, 3L, "html", 99L);
+
+        List<String> queries = planner.planQueriesWithModel(
+                "摄影照片墙，包含 cosplay", context, 7L);
+
+        assertEquals(List.of("cosplay portrait photography"), queries);
+        verify(listener).onSuccess(eq(context), eq("stop"), eq(20L), eq(8L),
+                anyLong(), eq("standard"), eq("deepseek"),
+                eq("deepseek-flash"), eq("deepseek-flash"),
+                eq(ModelTask.QUERY_PLAN.name()));
+    }
+
     private static List<ImageSource.ImageCandidate> candidates(String prefix, int count) {
         return java.util.stream.IntStream.range(0, count)
                 .mapToObj(index -> new ImageSource.ImageCandidate(
@@ -129,8 +161,8 @@ class ImageMaterialPlannerPromptTest {
     private static ImageMaterialPlanner planner() {
         return new ImageMaterialPlanner(
                 mock(SiteImageService.class),
-                mock(ChatModel.class),
                 mock(ModelGateway.class),
+                mock(AiCallListener.class),
                 List.of(),
                 mock(ImageCuratorAgent.class),
                 mock(GenerationTaskRegistry.class),

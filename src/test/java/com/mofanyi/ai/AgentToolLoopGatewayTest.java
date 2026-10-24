@@ -2,6 +2,9 @@ package com.mofanyi.ai;
 
 import com.mofanyi.ai.model.ModelChunk;
 import com.mofanyi.ai.model.ModelGateway;
+import com.mofanyi.ai.model.ModelExecutionTrace;
+import com.mofanyi.ai.model.ModelProperties;
+import com.mofanyi.ai.model.ModelRequest;
 import com.mofanyi.ai.model.ModelUsage;
 import com.mofanyi.ai.reasoning.ReasoningLevel;
 import com.mofanyi.ai.reasoning.ReasoningProfile;
@@ -23,9 +26,9 @@ import com.mofanyi.model.enums.CodeGenTypeEnum;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.UserMessage;
-import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -38,6 +41,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -45,13 +49,12 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class AgentToolLoopGatewayTest {
 
-    private ChatModel chatModel;
     private ModelGateway modelGateway;
+    private ModelProperties modelProperties;
     private ReasoningProfileRegistry profiles;
     private AiCallListener callListener;
     private FinishTool finishTool;
@@ -60,8 +63,8 @@ class AgentToolLoopGatewayTest {
 
     @BeforeEach
     void setUp() {
-        chatModel = mock(ChatModel.class);
         modelGateway = mock(ModelGateway.class);
+        modelProperties = new ModelProperties();
         profiles = mock(ReasoningProfileRegistry.class);
         callListener = mock(AiCallListener.class);
         finishTool = mock(FinishTool.class);
@@ -77,8 +80,9 @@ class AgentToolLoopGatewayTest {
         when(fetchWeb.isEnabled()).thenReturn(false);
 
         loop = new AgentToolLoop(
-                chatModel,
                 modelGateway,
+                modelProperties,
+                new ModelExecutionTrace(),
                 toolWithCallback(mock(WriteFileTool.class), "writeFile"),
                 toolWithCallback(mock(ReadFileTool.class), "readFile"),
                 toolWithCallback(mock(SearchImageTool.class), "searchImage"),
@@ -89,7 +93,6 @@ class AgentToolLoopGatewayTest {
                 mock(GenerationTaskRegistry.class),
                 callListener,
                 profiles);
-        ReflectionTestUtils.setField(loop, "modelGatewayEnabled", true);
     }
 
     @Test
@@ -113,9 +116,9 @@ class AgentToolLoopGatewayTest {
         assertEquals(2, usage.completionTokens());
         verify(progress).onReasoning("think");
         verify(callListener).onSuccess(any(), eq("stop"), eq(10L), eq(2L), anyLong(),
-                eq("standard"), eq("deepseek"), eq("deepseek-flash"), eq("GENERATE"));
+                eq("standard"), eq("deepseek"), eq("deepseek-flash"),
+                eq("deepseek-flash"), eq("GENERATE"));
         verify(modelGateway).stream(any());
-        verifyNoInteractions(chatModel);
     }
 
     @Test
@@ -145,7 +148,24 @@ class AgentToolLoopGatewayTest {
         assertEquals("completed", description.get());
         assertEquals(3, request.messages().size());
         verify(finishCallback).call(anyString());
-        verifyNoInteractions(chatModel);
+    }
+
+    @Test
+    @DisplayName("任务路由开启时不把推理档位中的旧模型名当作强制覆盖")
+    void taskRoutingDoesNotUseLegacyPreferredModel() {
+        modelProperties.getRouting().setEnabled(true);
+        when(modelGateway.stream(any())).thenReturn(Flux.just(
+                new ModelChunk("done", "", List.of(), "stop",
+                        new ModelUsage(1, 1), "deepseek",
+                        "deepseek-flash", "deepseek-flash")));
+
+        loop.run(request(new AtomicReference<>(""), new AtomicBoolean(),
+                new TokenUsageAccumulator(), null));
+
+        ArgumentCaptor<ModelRequest> requestCaptor =
+                ArgumentCaptor.forClass(ModelRequest.class);
+        verify(modelGateway).stream(requestCaptor.capture());
+        assertNull(requestCaptor.getValue().preferredModelId());
     }
 
     private AgentToolLoop.ToolLoopRequest request(

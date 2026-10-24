@@ -76,8 +76,6 @@ management:
 # 代码生成文件临时目录与部署配置
 codegen:
   model:
-    gateway:
-      enabled: ${CODEGEN_MODEL_GATEWAY_ENABLED:false}
     routing:
       enabled: ${CODEGEN_MODEL_ROUTING_ENABLED:false}
     fallback:
@@ -192,7 +190,6 @@ codegen:
       min-tokens: ${CODEGEN_CONTEXT_COMPRESSION_MIN_TOKENS:8000}
       keep-recent-rounds: ${CODEGEN_CONTEXT_COMPRESSION_KEEP_ROUNDS:4}
       max-output-tokens: ${CODEGEN_CONTEXT_COMPRESSION_MAX_OUTPUT_TOKENS:1500}
-      model: deepseek-flash
   web-research:
     # 默认关闭；开启后 searchWeb/fetchWeb 才会出现在 Agent 工具列表中
     enabled: ${CODEGEN_WEB_RESEARCH_ENABLED:false}

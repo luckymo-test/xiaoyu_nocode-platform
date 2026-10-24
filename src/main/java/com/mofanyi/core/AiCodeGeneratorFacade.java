@@ -128,9 +128,10 @@ public class AiCodeGeneratorFacade {
             task.bind(Thread.currentThread());
             appService.updateGenerateStatus(appId, AppGenerateStatusEnum.GENERATING.getValue());
             VueProjectAgent.GenerateResult result = vueProjectAgent.generate(
-                    type, appId, userMessage, callContext(appId, callTypeOf(type)), null, reasoningLevel);
+                    type, appId, userMessage, callContext(appId, callTypeOf(type), null),
+                    null, reasoningLevel);
             appService.updateGenerateStatus(appId, AppGenerateStatusEnum.DONE.getValue());
-            afterGenerate(type, appId);
+            afterGenerate(type, appId, null);
             AiCodeGenResultVO vo = readResult(type, appId);
             applyUsage(vo, result);
             return vo;
@@ -147,13 +148,13 @@ public class AiCodeGeneratorFacade {
      * html / multi_file 交付前要做渲染验证（plan-agent-pipeline P0-4）；vue 用构建产物预览，只失效旧 dist。
      * 抽成一个方法，正是为了让"三条生成路径"共用同一套收尾。
      */
-    private void afterGenerate(CodeGenTypeEnum type, Long appId) {
+    private void afterGenerate(CodeGenTypeEnum type, Long appId, Long jobId) {
         if (type == CodeGenTypeEnum.VUE) {
             // 源码更新后失效旧构建产物，下次预览/部署重新构建
             codeFileWriteService.deleteVueDist(appId);
             return;
         }
-        verifyAndScheduleFix(type, appId);
+        verifyAndScheduleFix(type, appId, jobId);
     }
 
     /**
@@ -161,11 +162,17 @@ public class AiCodeGeneratorFacade {
      * 逐文件进度（agent_progress）、思考增量（reasoning）与最终结果 VO（done）通过回调返回。
      */
     public void streamGenerate(CodeGenTypeEnum type, String userMessage, Long appId, StreamCallback callback) {
-        streamGenerate(type, userMessage, appId, callback, reasoningProfiles.defaultReasoningLevel());
+        streamGenerate(type, userMessage, appId, callback,
+                reasoningProfiles.defaultReasoningLevel(), null);
     }
 
     public void streamGenerate(CodeGenTypeEnum type, String userMessage, Long appId, StreamCallback callback,
                                ReasoningLevel reasoningLevel) {
+        streamGenerate(type, userMessage, appId, callback, reasoningLevel, null);
+    }
+
+    public void streamGenerate(CodeGenTypeEnum type, String userMessage, Long appId, StreamCallback callback,
+                               ReasoningLevel reasoningLevel, Long jobId) {
         ThrowUtils.throwIf(type == null, ErrorCode.PARAMS_ERROR);
         checkGenerateParams(userMessage, appId);
         ThrowUtils.throwIf(callback == null, ErrorCode.PARAMS_ERROR);
@@ -176,7 +183,7 @@ public class AiCodeGeneratorFacade {
             task.bind(Thread.currentThread());
             try {
                 VueProjectAgent.GenerateResult result = vueProjectAgent.generate(type, appId, userMessage,
-                        callContext(appId, callTypeOf(type)),
+                        callContext(appId, callTypeOf(type), jobId),
                         new VueProjectAgent.VueProgressListener() {
                             @Override
                             public void onFileWritten(String path, int size, String content) {
@@ -194,7 +201,7 @@ public class AiCodeGeneratorFacade {
                     return;
                 }
                 appService.updateGenerateStatus(appId, AppGenerateStatusEnum.DONE.getValue());
-                afterGenerate(type, appId);
+                afterGenerate(type, appId, jobId);
                 AiCodeGenResultVO vo = readResult(type, appId);
                 applyUsage(vo, result);
                 callback.onDone(vo);
@@ -233,6 +240,10 @@ public class AiCodeGeneratorFacade {
      * 构造 AI 调用监控上下文（解析应用归属用户；失败不影响主流程）
      */
     private AiCallContext callContext(Long appId, String callType) {
+        return callContext(appId, callType, null);
+    }
+
+    private AiCallContext callContext(Long appId, String callType, Long jobId) {
         Long userId = null;
         try {
             var app = appService.getById(appId);
@@ -242,7 +253,7 @@ public class AiCodeGeneratorFacade {
         } catch (RuntimeException e) {
             log.warn("解析应用归属用户失败，appId={}", appId, e);
         }
-        return AiCallContext.of(appId, userId, callType);
+        return AiCallContext.ofJob(appId, userId, callType, jobId);
     }
 
     private String callTypeOf(CodeGenTypeEnum type) {
@@ -384,7 +395,7 @@ public class AiCodeGeneratorFacade {
      *
      * <p>验证/修复失败都不影响生成结果返回，只记日志与落盘报告。
      */
-    private void verifyAndScheduleFix(CodeGenTypeEnum type, Long appId) {
+    private void verifyAndScheduleFix(CodeGenTypeEnum type, Long appId, Long jobId) {
         if (!renderVerifyEnabled || type == null || type == CodeGenTypeEnum.VUE) {
             return;
         }
@@ -399,7 +410,7 @@ public class AiCodeGeneratorFacade {
             // 问题清单进日志：修复前的问题不再只存在于喂给模型的上下文里（可追溯）
             log.info("[verify] appId={} {}，转异步修复。问题清单：\n{}", appId, report.summary(), issueText);
             renderFixStatus.put(appId, "fixing");
-            renderFixExecutor.execute(() -> runRenderFix(type, appId, issueText));
+            renderFixExecutor.execute(() -> runRenderFix(type, appId, issueText, jobId));
         } catch (RuntimeException e) {
             log.warn("[verify] 渲染验证异常，已忽略（不影响生成结果），appId={}", appId, e);
             renderFixStatus.put(appId, "error");
@@ -412,7 +423,7 @@ public class AiCodeGeneratorFacade {
      * <p>用生成任务注册表做互斥：若用户已发起新一轮生成，则**跳过**修复，避免两处同时写同一工程目录
      * （P0-2 的互斥规则同样适用于这里）。修复期间该 appId 也会被互斥占用，用户的"停止生成"同样能取消它。
      */
-    private void runRenderFix(CodeGenTypeEnum type, Long appId, String issueText) {
+    private void runRenderFix(CodeGenTypeEnum type, Long appId, String issueText, Long jobId) {
         GenerationTask task = acquireRenderFixTask(appId);
         if (task == null) {
             log.info("[verify] appId={} 已有任务在跑，跳过渲染修复", appId);
@@ -421,7 +432,8 @@ public class AiCodeGeneratorFacade {
         }
         try {
             task.bind(Thread.currentThread());
-            siteRepairAgent.fixRenderIssues(type, appId, issueText, callContext(appId, "render_fix"), null,
+            siteRepairAgent.fixRenderIssues(type, appId, issueText,
+                    callContext(appId, "render_fix", jobId), null,
                     reasoningProfiles.defaultReasoningLevel());
             RenderVerifier.RenderReport after = renderVerifier.verify(type, appId, "after");
             renderVerifier.persistReport(type, appId, after, "after");

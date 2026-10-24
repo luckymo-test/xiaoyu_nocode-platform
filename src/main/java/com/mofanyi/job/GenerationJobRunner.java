@@ -3,6 +3,7 @@ package com.mofanyi.job;
 import cn.hutool.core.util.StrUtil;
 import com.mofanyi.ai.reasoning.ReasoningLevel;
 import com.mofanyi.ai.reasoning.ReasoningProfileRegistry;
+import com.mofanyi.ai.model.ModelExecutionTrace;
 import com.mofanyi.ai.task.GenerationCancelledException;
 import com.mofanyi.core.AiCodeGeneratorFacade;
 import com.mofanyi.core.GeneratedResultContentFormatter;
@@ -66,6 +67,7 @@ public class GenerationJobRunner {
     private final TemplateContext templateContext;
     private final SkillRegistry skillRegistry;
     private final SkillContext skillContext;
+    private final ModelExecutionTrace modelExecutionTrace;
     private final ScheduledExecutorService heartbeatExecutor;
 
     @Value("${codegen.jobs.worker-id:${HOSTNAME:local-worker}}")
@@ -87,6 +89,7 @@ public class GenerationJobRunner {
                                TemplateContext templateContext,
                                SkillRegistry skillRegistry,
                                SkillContext skillContext,
+                               ModelExecutionTrace modelExecutionTrace,
                                @Qualifier("jobHeartbeatExecutor")
                                ScheduledExecutorService heartbeatExecutor) {
         this.jobService = jobService;
@@ -105,6 +108,7 @@ public class GenerationJobRunner {
         this.templateContext = templateContext;
         this.skillRegistry = skillRegistry;
         this.skillContext = skillContext;
+        this.modelExecutionTrace = modelExecutionTrace;
         this.heartbeatExecutor = heartbeatExecutor;
     }
 
@@ -146,7 +150,7 @@ public class GenerationJobRunner {
                                 callbackFinished.set(true);
                                 finished.countDown();
                             }),
-                    reasoningLevel);
+                    reasoningLevel, job.getId());
 
             if (!finished.await(MAX_EXECUTION_MINUTES, TimeUnit.MINUTES)) {
                 generatorFacade.stopGenerate(job.getAppId());
@@ -264,6 +268,7 @@ public class GenerationJobRunner {
             saveAssistantMessageQuietly(job, null, "用户取消生成");
             jobService.finish(job, GenerationJobStatusEnum.CANCELLED.getValue(),
                     "CANCELLED", "CANCELLED", "用户取消生成");
+            modelExecutionTrace.clear(job.getId());
             return;
         }
         String message = StrUtil.blankToDefault(error.getMessage(), "生成失败");
@@ -293,6 +298,7 @@ public class GenerationJobRunner {
         metrics.failed();
         jobService.finish(job, GenerationJobStatusEnum.FAILED.getValue(),
                 "FAILED", errorType, errorMessage);
+        modelExecutionTrace.clear(job.getId());
     }
 
     private void renewQuietly(GenerationJob job) {

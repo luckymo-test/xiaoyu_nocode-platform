@@ -35,7 +35,6 @@ class DefaultModelGatewayTest {
     @BeforeEach
     void setUp() {
         properties = new ModelProperties();
-        properties.getGateway().setEnabled(true);
         properties.getRouting().setEnabled(true);
         properties.setDefaultModel("primary");
         properties.setDefinitions(new LinkedHashMap<>(Map.of(
@@ -64,6 +63,25 @@ class DefaultModelGatewayTest {
 
         assertEquals("provider-b", response.provider());
         verify(primary).chat(any(), any());
+        verify(secondary).chat(any(), any());
+    }
+
+    @Test
+    @DisplayName("未开任务路由时默认模型仍可使用 fallback")
+    void defaultModelAlsoUsesFallbackChain() {
+        properties.getRouting().setEnabled(false);
+        properties.getFallback().setEnabled(true);
+        ModelAdapter primary = adapter("provider-a");
+        ModelAdapter secondary = adapter("provider-b");
+        when(primary.chat(any(), any())).thenThrow(new IllegalStateException("provider a down"));
+        when(secondary.chat(any(), any())).thenReturn(new ModelResponse(
+                "ok", "", List.of(), "stop", new ModelUsage(1, 1),
+                "provider-b", "secondary", "secondary-model"));
+        DefaultModelGateway gateway = gateway(List.of(primary, secondary));
+
+        ModelResponse response = gateway.chat(request());
+
+        assertEquals("provider-b", response.provider());
         verify(secondary).chat(any(), any());
     }
 

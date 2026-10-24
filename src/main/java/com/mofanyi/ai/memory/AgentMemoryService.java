@@ -1,6 +1,7 @@
 package com.mofanyi.ai.memory;
 
 import cn.hutool.core.util.StrUtil;
+import com.mofanyi.core.AiCallContext;
 import com.mofanyi.entity.ChatHistory;
 import com.mofanyi.model.enums.ChatMessageTypeEnum;
 import com.mofanyi.model.enums.CodeGenTypeEnum;
@@ -99,10 +100,16 @@ public class AgentMemoryService {
      */
     public List<Message> loadContext(CodeGenTypeEnum type, long appId, String currentUserText,
                                      String specSection) {
+        return loadContext(type, appId, currentUserText, specSection, null);
+    }
+
+    public List<Message> loadContext(CodeGenTypeEnum type, long appId, String currentUserText,
+                                     String specSection, AiCallContext callContext) {
         List<Message> messages = loadRawContext(appId, currentUserText);
         messages = dropStateDuplicatedBySpec(messages, specSection);
         if (contextCompressionService != null) {
-            messages = contextCompressionService.compressIfNeeded(type, appId, messages);
+            messages = contextCompressionService.compressIfNeeded(
+                    type, appId, messages, callContext);
         }
         return trimToTokenBudget(messages, contextTokenBudget);
     }

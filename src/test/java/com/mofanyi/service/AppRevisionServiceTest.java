@@ -1,7 +1,14 @@
 package com.mofanyi.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.mofanyi.artifact.ArtifactStore;
+import com.mofanyi.ai.CodeGenPromptRegistry;
+import com.mofanyi.ai.model.ModelExecutionTrace;
+import com.mofanyi.ai.model.ModelProperties;
+import com.mofanyi.ai.model.ModelRegistry;
+import com.mofanyi.core.AiCallContext;
+import com.mofanyi.ai.reasoning.ReasoningProfile;
 import com.mofanyi.core.CodeFileWriteService;
 import com.mofanyi.entity.App;
 import com.mofanyi.entity.AppRevision;
@@ -45,9 +52,12 @@ class AppRevisionServiceTest {
         files.setTmpRoot(tempDir.toString());
         ProjectWorkspaceContext context = new ProjectWorkspaceContext();
         WorkspaceManager workspaceManager = new WorkspaceManager(files, context, revisionMapper);
+        ModelExecutionTrace trace = new ModelExecutionTrace();
         AppRevisionService service = new AppRevisionService(
                 revisionMapper, artifactMapper, appMapper, workspaceManager,
-                new ArtifactStore(), files, new ObjectMapper(), jobService);
+                new ArtifactStore(), files, new ObjectMapper(), jobService,
+                new ModelRegistry(new ModelProperties()), trace,
+                new CodeGenPromptRegistry("html", "multi", "vue", "vue-fix", "modify", "render-fix"));
 
         App app = new App();
         app.setId(7L);
@@ -82,12 +92,24 @@ class AppRevisionServiceTest {
                 .baseRevisionId(44L)
                 .fencingToken(1L)
                 .build();
+        trace.recordProfile(99L, "standard",
+                new ReasoningProfile(true, "high", 20, 800_000, 2, 65_536, "deepseek-flash"));
+        trace.recordCall(AiCallContext.ofJob(7L, 3L, "html", 99L),
+                "GENERATE", "success", "deepseek", "deepseek-flash",
+                "deepseek-flash", "standard", 120, 30, 800, "stop");
 
         AppRevision revision = service.publishJob(
                 job, new WorkspaceManager.WorkspaceHandle(7L, workspace), "ok");
 
         assertEquals(55L, revision.getId());
         assertNotNull(revision.getManifest());
+        JsonNode manifest = new ObjectMapper().readTree(revision.getManifest());
+        assertEquals("deepseek-flash",
+                manifest.path("modelExecution").path("calls").path(0).path("modelName").asText());
+        assertEquals("high", manifest.path("modelExecution")
+                .path("reasoningProfiles").path("standard").path("effort").asText());
+        assertTrue(manifest.path("promptVersions").has("html"));
+        assertTrue(manifest.path("modelExecution").path("routing").has("version"));
         assertTrue(revision.getSourceUri().startsWith("file:"));
         assertTrue(Files.isDirectory(Path.of(URI.create(revision.getSourceUri()))));
         Path live = Path.of(files.getLiveProjectDir(

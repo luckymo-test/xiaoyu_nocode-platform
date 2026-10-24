@@ -40,6 +40,12 @@ public class AiCallLog implements Serializable {
     private Long appId;
 
     /**
+     * 生成 Job id；非 Job 调用为空
+     */
+    @Column("jobId")
+    private Long jobId;
+
+    /**
      * 用户 id
      */
     @Column("userId")
