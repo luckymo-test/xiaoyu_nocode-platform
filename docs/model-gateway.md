@@ -41,6 +41,8 @@ Flux<ModelChunk> stream(ModelRequest request);
 - `AgentToolLoop`：框架内置工具和自管工具两种模式都可通过 Gateway 调用；
 - `ImageCuratorAgent`：每个候选事实与对应 JPEG 放在同一条多模态 user 消息中，
   通过 `VISION_CURATE` 路由，不再直接 POST `/chat/completions`；
+- Web Research：`WebResearchTransport` 隔离供应商 endpoint 和 API Key，
+  缓存、限流、URL 校验及响应清洗仍由 `WebResearchClient` 统一处理；
 - 生成循环的 token 预算、取消检查、工具顺序、reasoning 聚合和调用打点仍由
   `AgentToolLoop` 维护，Gateway 只负责模型路由和协议转换；
 - 以上调用都保留旧 ChatModel 分支用于灰度回滚。
@@ -52,6 +54,13 @@ Flux<ModelChunk> stream(ModelRequest request);
 - `AgentToolLoop` 成功调用记录 Gateway 返回的实际 provider/model；
 - 失败调用记录任务类型和尝试使用的模型，供应商未知时明确记录 `unknown`；
 - Flyway `V13__ai_call_model_audit.sql` 已在 MySQL 5.7 和 8.4 实测通过。
+
+### 路由韧性
+
+- 每个模型独立熔断：连续失败达到阈值后进入冷却期，期间直接尝试 fallback；
+- 每个模型独立并发配额，避免单模型耗尽全部生成线程；
+- fallback 在流式输出开始前生效，禁止在已输出半段内容后混入另一供应商输出；
+- 第二供应商已通过独立 `ModelAdapter` 契约测试，验证主供应商异常后自动降级。
 
 ## 二、配置
 
@@ -114,6 +123,8 @@ gateway=false
 - 统一响应映射文本、reasoning、finish reason 和 usage；
 - 压缩、查询规划和 AgentToolLoop 在开关开启时不再直接调用旧 ChatModel。
 - 调用明细与 Prometheus 使用实际 provider/model/task，不再只依赖全局默认模型。
+- 第二 adapter 可在主供应商异常时接管；连续失败会触发模型级熔断；
+- 模型并发达到配置上限时拒绝继续占用该模型。
 
 真实模型回归已执行：
 
@@ -128,9 +139,9 @@ gateway=false
 
 以下仍直接依赖旧路径，因此 Phase C 未完成：
 
-- `WebResearchClient` 仍直接使用 DeepSeek Search/Fetch endpoint；
-- 尚无模型级熔断、限流和真实第二供应商契约测试；
+- 旧 ChatModel 分支仍暂时保留 `OpenAiChatOptions` 和直接 OpenAI-compatible 参数，
+  用于 Feature Flag 回退；稳定后才能删除；
 - 尚无 Generation/Revision 级模型与路由版本快照。
 
-下一小步应收敛 Web Research 供应商边界，移除业务层旧 OpenAI Options 分支，
-并增加模型级熔断、限流和第二供应商契约测试。
+下一小步应完成 Gateway 灰度后再移除旧 OpenAI Options 分支，
+并把模型、路由版本、Prompt/Profile/Tool Schema 版本写入 Revision Manifest。

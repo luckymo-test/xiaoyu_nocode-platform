@@ -289,7 +289,8 @@ ThrowUtils.throwIf(loginUser == null || loginUser.getId() == null,
   自定义 Session/AOP 路径，稳定后再删除旧 AOP。
 - 模型调用仍包含 OpenAI/DeepSeek 参数；目标为 ModelGateway + Adapter。
 - ModelGateway 已覆盖生成循环、压缩、查询规划、视觉选片和真实 provider/model 明细；
-  Web Research 供应商边界与旧 Options 分支清理仍在迁移中。
+  Web Research 已有独立 Transport，Gateway 已具备熔断、并发配额和 fallback；
+  旧 Options 分支和 Revision 模型快照仍在迁移中。
 - 渲染修复状态仍有 JVM 内存 Map；目标是持久化 JobEvent/状态。
 - 部分生成类型分支仍在 Facade 或构建服务中；目标是 StackProfile。
 
