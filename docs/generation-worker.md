@@ -1,7 +1,7 @@
 # Java Generation Worker 运行手册
 
-> 日期：2026-10-24  
-> 状态：Phase C.5 已完成  
+> 日期：2026-10-24
+> 状态：Phase C.5 已完成
 > 制品：与 Control API 共用同一个 Spring Boot JAR，通过运行模式和 Profile 装配
 
 ## 一、运行模式
