@@ -208,8 +208,8 @@ ThrowUtils.throwIf(loginUser == null || loginUser.getId() == null,
 
 **NOTE**
 
-- 当前 AgentToolLoop、ImageMaterialPlanner、ContextCompression 和 ImageCurator 仍包含
-  OpenAI/DeepSeek 特定实现；新代码不得继续增加硬编码模型名和 `/chat/completions` 调用。
+- OpenAI/DeepSeek 特定参数只允许存在于 Model Adapter；Agent、记忆、素材业务和工具
+  不得恢复硬编码模型名、直接 ChatModel 调用或 `/chat/completions` 拼接。
 
 ## 八、前端与 API
 
@@ -287,10 +287,10 @@ ThrowUtils.throwIf(loginUser == null || loginUser.getId() == null,
 - Selenium/npm 仍在 API 主机执行；目标为 Playwright/Sandbox Worker。
 - Spring Security FilterChain、CSRF 与 CORS allowlist 已实现灰度；默认仍保留
   自定义 Session/AOP 路径，稳定后再删除旧 AOP。
-- 模型调用仍包含 OpenAI/DeepSeek 参数；目标为 ModelGateway + Adapter。
-- ModelGateway 已覆盖生成循环、压缩、查询规划、视觉选片和真实 provider/model 明细；
-  Web Research 已有独立 Transport，Gateway 已具备熔断、并发配额和 fallback；
-  旧 Options 分支和 Revision 模型快照仍在迁移中。
+- ModelGateway 已成为唯一模型执行入口，生成循环、压缩、查询规划、视觉选片和
+  Web Research 都记录实际 provider/model；Revision Manifest 已包含 Prompt/Profile/
+  Tool Schema、路由版本和实际调用快照。
+- 模型供应商协议参数只能出现在 Adapter 中；业务层不得恢复直接 ChatModel/Options 分支。
 - 渲染修复状态仍有 JVM 内存 Map；目标是持久化 JobEvent/状态。
 - 部分生成类型分支仍在 Facade 或构建服务中；目标是 StackProfile。
 

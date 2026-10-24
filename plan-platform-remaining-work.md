@@ -1,7 +1,7 @@
 # 计划书：零代码生成平台后续改造
 
 > 日期：2026-10-23
-> 状态：Phase A、Phase B 已完成；Phase C 主要完成、灰度期进行中；Phase D～G 待实施
+> 状态：Phase A、Phase B、Phase C 已完成；Phase C.5～G 待实施
 > 来源：[plan-platform-rearchitecture.md](plan-platform-rearchitecture.md)
 > 定位：本文件是后续执行和验收的唯一入口；旧计划保留当前架构与实施记录。
 
@@ -113,7 +113,7 @@ runtime/
 - 删除未使用的 `spring-ai-alibaba-agent-framework` 依赖；
 - 用 Maven dependency analysis 检查未声明/未使用依赖；
 - 固定 Spring AI、Spring Boot、MyBatis-Flex、COS SDK 版本；
-- 建立 MySQL 8 测试库，执行当时已有的全部 Flyway（当前为 V1～V13）；
+- 建立 MySQL 8 测试库，执行当时已有的全部 Flyway（当前已扩展到 V1～V14）；
 - 检查 MySQL 5.7 专有行为：生成列、唯一索引中的 NULL、日期函数、排序规则和大小写；
 - 评估是否将 longtext JSON 字段逐步迁移为原生 JSON；
 - 记录 MySQL 5.7 → 8 的回滚窗口和备份方案。
@@ -182,9 +182,10 @@ codegen.security.csrf.enabled=false
 
 #### Phase C：ModelGateway、模型能力与多供应商适配（5～8 天）
 
-状态：主要迁移完成，灰度期进行中。已完成模型能力目录、任务路由、上下文预检、
-OpenAI-compatible Adapter、生成/压缩/查询规划/视觉选片迁移及模型韧性；
-实施边界与剩余项见
+状态：已完成（2026-10-24）。模型能力目录、任务路由、上下文预检、
+OpenAI-compatible Adapter、生成/压缩/查询规划/视觉选片迁移、模型韧性、
+统一调用审计和 Revision 模型快照均已完成；业务层旧 OpenAI Options 分支已移除。
+最终实施边界见
 [docs/model-gateway.md](docs/model-gateway.md)。
 
 目标：让平台从“可修改 DeepSeek/OpenAI-compatible 模型名”升级为“可按任务选择模型、
@@ -344,14 +345,15 @@ GeminiAdapter         后续
 - provider 错误归一化为 retryable / terminal，并支持有限 fallback；
 - 增加 circuit breaker 和模型级限流，避免单一供应商故障拖垮全部 Job。
 
-Feature Flag：
+迁移后的配置开关：
 
 ```text
-codegen.model.registry.enabled=false
-codegen.model.gateway.enabled=false
 codegen.model.routing.enabled=false
 codegen.model.fallback.enabled=false
 ```
+
+`ModelRegistry` 和 `ModelGateway` 已成为必选执行路径，不再保留关闭后直连 ChatModel 的
+回退分支；单 JVM 熔断/并发状态跨实例共享留到 Phase C.5。
 
 ##### C.4 指标与审计
 
@@ -374,6 +376,16 @@ codegen.model.fallback.enabled=false
 - 同一 Prompt 在 Gateway 开关前后输出结构、工具顺序和取消语义不退化；
 - DeepSeek reasoning/tool continuation 回归通过；
 - 第二供应商契约测试通过，但不要求第一版覆盖所有原生供应商。
+
+验收结果：
+
+- 127 个默认后端测试通过，17 个外部探针按约定跳过；
+- MySQL 5.7 与 8.4 均从空库执行 V1～V14，并通过 Job、ChatHistory、Artifact 与
+  `ai_call_log.jobId` 持久化探针；
+- 压缩、查询规划和视觉选片都通过 `AiCallListener` 写 Prometheus 与 `ai_call_log`；
+- Revision Manifest 已记录路由版本、Prompt 指纹、reasoning Profile、Tool Schema 版本和实际调用；
+- 真实压缩、六主题查询规划、视觉选片和 Gateway + 自管工具循环生成均通过；
+- 业务代码除 OpenAI-compatible Adapter 外不再 import `OpenAiChatOptions`。
 
 #### Phase C.5：Java Generation Worker 独立进程（3～5 天）
 

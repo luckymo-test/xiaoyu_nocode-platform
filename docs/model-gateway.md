@@ -1,86 +1,78 @@
 # ModelGateway 改造记录
 
 > 日期：2026-10-24  
-> 状态：Phase C 进行中  
-> 默认：Gateway、任务路由和 fallback 均关闭，现有调用路径不变
+> 状态：Phase C 已完成
+> 默认：ModelGateway 为唯一模型执行入口；任务路由和 fallback 仍由配置灰度控制
 
-## 一、已完成
+## 一、最终边界
 
-### 模型能力目录
+平台业务只描述模型任务和平台语义：
 
-新增：
+- 任务：生成、修复、修改、视觉选片、查询规划、压缩、研究；
+- 输入：messages、tools、温度、输出上限、reasoning 偏好、能力要求；
+- 输出：文本、reasoning、tool calls、usage、finish reason、实际 provider/model。
 
-- `ModelTask`：生成、修复、修改、视觉选片、查询规划、压缩、研究；
-- `ModelCapability`：tools、vision、streaming、structured-output、reasoning；
-- `ModelDescriptor` / `ModelProperties` / `ModelRegistry`；
-- 上下文窗口和最大输出预检；
-- 按任务路由、模型禁用、能力不匹配和 fallback 候选筛选。
+OpenAI/DeepSeek 的 `OpenAiChatOptions`、thinking extra body 和工具执行参数只存在于
+`OpenAiCompatibleModelAdapter`。Agent、记忆、素材和研究业务不再直接依赖聊天供应商协议，
+也不会直接拼接 `/chat/completions`。
 
-### 统一网关
+## 二、已完成能力
 
-新增 `ModelGateway`：
+### 模型目录与路由
 
-```java
-ModelResponse chat(ModelRequest request);
-Flux<ModelChunk> stream(ModelRequest request);
-```
+- `ModelTask` 覆盖 `GENERATE / REPAIR / MODIFY / VISION_CURATE / QUERY_PLAN /
+  COMPRESS / RESEARCH`；
+- `ModelDescriptor` 描述 provider、模型名、上下文窗口、最大输出和能力；
+- `ModelRegistry` 在调用前校验 tools、vision、streaming、structured-output、
+  reasoning 与上下文预算；
+- 任务路由开启时按任务选择模型，不在生成循环中把推理档位的旧模型名当成强制覆盖；
+- 路由关闭时使用 `default-model`，但仍执行能力与上下文预检。
 
-平台请求只描述 task、messages、tools、temperature、输出上限、reasoning 偏好和能力要求。
-实际 provider/model 由路由器决定，并在统一响应中返回。
+### 统一执行与韧性
 
-`OpenAiCompatibleModelAdapter` 负责当前 DeepSeek/OpenAI-compatible 协议细节：
+- `AgentToolLoop` 的框架工具和自管工具两种模式都通过 `ModelGateway`；
+- 压缩、查询规划和视觉选片全部通过统一 Gateway；
+- Web Research 使用独立 `WebResearchTransport`，供应商 endpoint 和密钥不进入业务层；
+- 每个模型有独立熔断和并发配额；
+- fallback 在流式输出开始前生效，禁止把两个供应商的半截输出拼在一起；
+- fallback 对任务路由、显式首选模型和默认模型三条路径都生效；
+- 熔断和并发状态当前为单 JVM 生效，多实例共享状态留到 Generation Worker 阶段。
 
-- `OpenAiChatOptions` 和 DeepSeek `thinking` extra body 不再进入网关调用方；
-- tools、reasoning effort、token 上限和内部工具执行开关只在 Adapter 内组装；
-- 文本、reasoning、tool calls、finish reason、usage 统一映射。
+### 调用审计与 Revision 快照
 
-### 已迁移调用
+- `AiCallContext` 携带 `appId / userId / callType / jobId`；
+- `ai_call_log` V14 增加 `jobId` 和 `(jobId, createTime)` 索引；
+- `AiCallListener` 统一记录实际 provider、模型 id/name、任务、reasoning level、
+  token、耗时、finish reason 和状态；
+- Prometheus 只使用低基数标签，不记录 Prompt 正文、模型原始响应或用户敏感内容；
+- `ModelExecutionTrace` 在进程内保留同一 Job 的调用副本，避免 Revision 发布与异步落库竞态；
+- Revision Manifest 写入：
+  - 路由配置、默认模型和 fallback 配置指纹；
+  - 每个任务的推理档位；
+  - 工具 Schema 单项指纹和组合版本；
+  - 生成、Vue 修复、修改、渲染修复 Prompt 的内容指纹；
+  - 本 Job 的实际模型调用快照。
+- Revision 发布完成或 Job 终止后清理进程内快照，避免长期驻留。
 
-- 上下文压缩：`ContextCompressionService` 在 Gateway 开启时通过 `COMPRESS` 任务调用；
-- 图库查询规划：`ImageMaterialPlanner` 在 Gateway 开启时通过 `QUERY_PLAN` 任务调用；
-- `AgentToolLoop`：框架内置工具和自管工具两种模式都可通过 Gateway 调用；
-- `ImageCuratorAgent`：每个候选事实与对应 JPEG 放在同一条多模态 user 消息中，
-  通过 `VISION_CURATE` 路由，不再直接 POST `/chat/completions`；
-- Web Research：`WebResearchTransport` 隔离供应商 endpoint 和 API Key，
-  缓存、限流、URL 校验及响应清洗仍由 `WebResearchClient` 统一处理；
-- 生成循环的 token 预算、取消检查、工具顺序、reasoning 聚合和调用打点仍由
-  `AgentToolLoop` 维护，Gateway 只负责模型路由和协议转换；
-- 以上调用都保留旧 ChatModel 分支用于灰度回滚。
-
-### 实际模型审计
-
-- `ai_call_log` 新增 `provider` 和 `modelTask`，现有 `model` 改存实际模型名；
-- Prometheus 指标新增低基数 `provider`、`model`、`model_task` 标签；
-- `AgentToolLoop` 成功调用记录 Gateway 返回的实际 provider/model；
-- 压缩、查询规划和视觉选片已返回实际 provider/model，但尚未统一写入
-  `AiCallListener/ai_call_log`；
-- 失败调用记录任务类型和尝试使用的模型，供应商未知时明确记录 `unknown`；
-- Flyway `V13__ai_call_model_audit.sql` 已在 MySQL 5.7 和 8.4 实测通过。
-
-### 路由韧性
-
-- 每个模型独立熔断：连续失败达到阈值后进入冷却期，期间直接尝试 fallback；
-- 每个模型独立并发配额，避免单模型耗尽全部生成线程；
-- 熔断和并发配额当前按单 JVM 进程生效，多实例共享状态留待 Worker 阶段处理；
-- fallback 在流式输出开始前生效，禁止在已输出半段内容后混入另一供应商输出；
-- 第二供应商已通过独立 `ModelAdapter` 契约测试，验证主供应商异常后自动降级。
-
-## 二、配置
+## 三、配置
 
 ```yaml
 codegen:
   model:
-    gateway:
-      enabled: false
     routing:
       enabled: false
     fallback:
       enabled: false
+    resilience:
+      enabled: true
+      failure-threshold: 3
+      open-duration-ms: 30000
+      max-concurrent-calls: 8
     default-model: deepseek-flash
     definitions:
       deepseek-flash:
         provider: deepseek
-        model-name: deepseek-flash
+        model-name: ${CODEGEN_DEEPSEEK_MODEL:deepseek-flash}
         context-window: 128000
         max-output-tokens: 65536
         supports: [tools, vision, streaming, structured-output, reasoning]
@@ -94,58 +86,62 @@ codegen:
       query-plan: deepseek-flash
       compress: deepseek-flash
       research: deepseek-flash
+    fallbacks:
+      deepseek-flash: []
 ```
 
 环境变量：
 
 ```text
-CODEGEN_MODEL_GATEWAY_ENABLED
 CODEGEN_MODEL_ROUTING_ENABLED
 CODEGEN_MODEL_FALLBACK_ENABLED
+CODEGEN_MODEL_RESILIENCE_ENABLED
+CODEGEN_MODEL_FAILURE_THRESHOLD
+CODEGEN_MODEL_OPEN_DURATION_MS
+CODEGEN_MODEL_MAX_CONCURRENT_CALLS
 CODEGEN_DEEPSEEK_MODEL
 ```
 
-推荐顺序：
+推荐灰度顺序：
 
 ```text
-gateway=false
-→ gateway=true, routing=false，验证默认模型路径
-→ routing=true，验证任务路由和能力预检
-→ fallback=true，验证单一供应商故障
+routing=false，验证默认模型与能力预检
+→ routing=true，验证任务路由
+→ fallback=true，注入单供应商故障并验证切换
 ```
 
-## 三、验证
+## 四、验证结果
 
-自动化测试覆盖：
+自动化验证：
 
-- YAML 风格配置绑定；
-- 视觉任务只能路由到具备 vision 的模型；
-- 上下文窗口不足时调用前失败；
-- fallback 只追加满足能力的候选；
-- DeepSeek/OpenAI-compatible 参数在 Adapter 内组装；
-- 统一响应映射文本、reasoning、finish reason 和 usage；
-- 压缩、查询规划和 AgentToolLoop 在开关开启时不再直接调用旧 ChatModel。
-- 生成循环的调用明细与 Prometheus 使用实际 provider/model/task，不再只依赖全局默认模型。
-- 第二 adapter 可在主供应商异常时接管；连续失败会触发模型级熔断；
-- 模型并发达到配置上限时拒绝继续占用该模型。
+- 127 个默认后端测试通过，17 个真实外部探针按约定跳过；
+- 视觉任务不会路由到不支持 vision 的模型；
+- 工具任务不会路由到不支持 tools 的模型；
+- 上下文不足时在调用前失败；
+- fallback 只追加满足能力要求的候选；
+- 未开任务路由时，默认模型仍可 fallback；
+- 业务代码除 Adapter 外不再 import `OpenAiChatOptions`；
+- 压缩、查询规划、视觉选片和生成循环都验证写入统一调用审计；
+- Revision Manifest 验证包含 Prompt 指纹、Profile、工具版本、路由版本和实际调用。
 
-真实模型回归已执行：
+真实模型与基础设施探针：
 
-- Gateway 模式下上下文压缩生成合法结构化摘要；
-- Gateway 模式下六主题查询规划分别生成自然、城市、人文、动物、cosplay、电影 query；
-- Gateway + 自管工具循环完成真实 HTML/CSS 生成，实际调用 `writeFile/readFile/finish`，
-  总 token 为 prompt 209724 / completion 51727，三档视口渲染验证通过。
-- Gateway 视觉选片在 10 张真实候选图上完成两轮筛选，最终选中 5 张，
-  两轮实际 provider/model 均为 deepseek/deepseek-flash。
+- MySQL 5.7 与 8.4 均从空库执行 V1～V14，并运行 Job、ChatHistory 和
+  `ai_call_log.jobId` 持久化探针；
+- 上下文压缩生成合法结构化摘要；
+- 六主题查询规划生成自然、城市、人文、动物、cosplay、电影六个独立 query；
+- 视觉选片真实处理 80 个候选，两轮筛选后由模型自主选中 53 张；
+- 真实生成在 Gateway + 自管工具循环下执行
+  `writeFile / writeFile / readFile / finish`，prompt 75343、completion 24740，
+  三档视口渲染验证完成。
 
-## 四、尚未完成
+## 五、Phase C 后的债务
 
-以下仍直接依赖旧路径，因此 Phase C 未完成：
+以下不属于 Phase C 未完成项：
 
-- 旧 ChatModel 分支仍暂时保留 `OpenAiChatOptions` 和直接 OpenAI-compatible 参数，
-  用于 Feature Flag 回退；稳定后才能删除；
-- 压缩、查询规划和视觉选片尚未统一写入 `AiCallListener`；
-- 尚无 Generation/Revision 级模型与路由版本快照。
-
-下一小步应完成 Gateway 灰度后再移除旧 OpenAI Options 分支，
-并把模型、路由版本、Prompt/Profile/Tool Schema 版本写入 Revision Manifest。
+- 熔断和并发配额尚未跨 JVM 共享，随 Java Generation Worker 阶段迁移到 Redis；
+- `ModelExecutionTrace` 是当前嵌入式 Runner 的进程内加速副本，数据库 `ai_call_log`
+  仍是最终明细来源；
+- 原生 Anthropic/Gemini 协议只保留 Adapter 扩展点，当前生产实现仍是
+  DeepSeek/OpenAI-compatible；
+- 真实模型成本与质量基线由 Phase G 评估集持续量化。

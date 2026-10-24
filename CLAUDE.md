@@ -22,9 +22,9 @@ AI 应用生成平台。用户通过一句话创建网站或前端工程，平�
 - 浏览器和 npm 当前仍在本机执行；独立 Playwright/Sandbox Worker 仍在后续计划中。
 - Spring Security、CSRF 与 CORS allowlist 已实现灰度层，默认开关关闭；
   上线顺序见 [docs/security-migration.md](docs/security-migration.md)。
-- ModelRegistry / ModelGateway 已覆盖生成循环、压缩、查询规划和视觉选片，
-  Web Research 已有独立供应商 Transport，并具备熔断、并发配额和 fallback；
-  旧 Options 分支与 Revision 模型快照仍在迁移中，
+- ModelRegistry / ModelGateway 已成为唯一模型执行入口，覆盖生成、修复、修改、压缩、
+  查询规划、视觉选片和研究；业务层旧 OpenAI Options 分支已移除；
+  Revision Manifest 记录 Prompt/Profile/Tool Schema、路由版本和实际模型调用，
   见 [docs/model-gateway.md](docs/model-gateway.md)。
 
 ## 必读文档
