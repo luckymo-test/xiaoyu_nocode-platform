@@ -14,6 +14,10 @@ import {
   resolveBindAddress,
   resolveProxyServer
 } from "./security.mjs";
+import {
+  autoClaimUnsupported,
+  claimablePendingIds
+} from "./redis-claim.mjs";
 
 const PORT = Number(process.env.BROWSER_WORKER_PORT || 8090);
 const BIND_ADDRESS = resolveBindAddress(
@@ -572,15 +576,41 @@ async function startRedisConsumer() {
     `[playwright-worker] redis stream=${REDIS_STREAM} group=${REDIS_GROUP} consumer=${REDIS_CONSUMER}`
   );
   let nextPendingClaimAt = 0;
+  let pendingClaimMode = "auto";
   while (redisClient?.isOpen) {
     try {
       if (Date.now() >= nextPendingClaimAt) {
         nextPendingClaimAt = Date.now() + 30000;
-        const claimed = await redisClient.sendCommand([
-          "XAUTOCLAIM", REDIS_STREAM, REDIS_GROUP, REDIS_CONSUMER,
-          "60000", "0-0", "COUNT", "10"
-        ]);
-        await processRedisMessages(claimed?.[1] || []);
+        if (pendingClaimMode === "auto") {
+          try {
+            const claimed = await redisClient.sendCommand([
+              "XAUTOCLAIM", REDIS_STREAM, REDIS_GROUP, REDIS_CONSUMER,
+              "60000", "0-0", "COUNT", "10"
+            ]);
+            await processRedisMessages(claimed?.[1] || []);
+          } catch (error) {
+            if (!autoClaimUnsupported(error)) {
+              throw error;
+            }
+            pendingClaimMode = "legacy";
+            console.log(
+              "[playwright-worker] XAUTOCLAIM unsupported; using XPENDING + XCLAIM"
+            );
+          }
+        }
+        if (pendingClaimMode === "legacy") {
+          const pending = await redisClient.sendCommand([
+            "XPENDING", REDIS_STREAM, REDIS_GROUP, "-", "+", "10"
+          ]);
+          const ids = claimablePendingIds(pending, 60000, 10);
+          if (ids.length > 0) {
+            const claimed = await redisClient.sendCommand([
+              "XCLAIM", REDIS_STREAM, REDIS_GROUP, REDIS_CONSUMER,
+              "60000", ...ids
+            ]);
+            await processRedisMessages(claimed || []);
+          }
+        }
       }
       const response = await redisClient.sendCommand([
         "XREADGROUP", "GROUP", REDIS_GROUP, REDIS_CONSUMER,

@@ -571,6 +571,7 @@ codegen.browser.playwright.read-timeout-ms=120000
 - Playwright 真实问题页在 desktop/tablet/mobile 三档均检出图裂和横向溢出；
 - Java Adapter 真实调用 Node Worker 成功，返回截图和 trace；
 - Redis Streams 端到端探针通过：Java 入队、Node 消费、结果键回写、Java 解析；
+- Redis 5 不支持 `XAUTOCLAIM` 时自动降级为 `XPENDING + XCLAIM`，真实任务消费通过；
 - Worker 不可用时返回 unusable report，不阻塞生成发布；
 - API 边界测试确认不装配 `BrowserVerifierPort`；
 - 普通静态 HTML 与 MultiFile 使用同一验证路径；

@@ -151,7 +151,9 @@ Revision 发布时登记：
 镜像、Compose 和探针入口见 [sandbox-runtime/README.md](../sandbox-runtime/README.md)。
 
 Redis Streams 消费组支持多 Worker 竞争消费；超过 60 秒的 pending 消息会通过
-`XAUTOCLAIM` 接管，结果键按 verificationId 覆盖并由 Java 端删除。
+`XAUTOCLAIM` 接管。Redis 6.2 以下不支持该命令时，Worker 自动切换到
+`XPENDING + XCLAIM`，不会因单次命令不支持而阻塞新消息消费。结果键按
+verificationId 覆盖并由 Java 端删除。
 
 ## 七、真实探针结果
 
@@ -162,6 +164,8 @@ Redis Streams 消费组支持多 Worker 竞争消费；超过 60 秒的 pending 
   `RenderReport`，三档全部可用并检出问题；
 - Java `RedisBrowserVerificationTransport` 经 Redis Streams 下发任务，Node Worker
   消费并回写结果键，端到端探针通过；
+- Redis 5 上真实验证 XAUTOCLAIM 不可用后自动切换 `XPENDING + XCLAIM`，
+  新任务继续被消费且三档问题页正常返回；
 - 普通 PDF/截图文本不作为生成质量判断依据，真实 DOM/console/network 才是报告事实。
 
 ## 八、Vue 验证
