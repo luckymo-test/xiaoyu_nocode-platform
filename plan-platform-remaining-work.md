@@ -817,7 +817,7 @@ codegen.runtime.next-static-export.enabled=false
 
 ### 8.4 Skill 工具权限真正生效
 
-状态：技能注册、Profile 兼容和 Prompt 注入已完成，allowedTools 尚未裁剪执行工具。
+状态：已完成（2026-10-24）。
 
 任务：
 
@@ -826,6 +826,15 @@ codegen.runtime.next-static-export.enabled=false
 - 工具风险等级与 Skill permission 同时校验；
 - tool call 命中越权能力时返回结构化拒绝；
 - 将实际暴露工具集合写入 AI 调用明细和 Revision Manifest。
+
+验收结果：
+
+- `AgentToolLoop` 在注册工具前计算所有激活 Skill 的 `allowedTools` 交集；
+- 未声明工具不会出现在模型 Tool Schema 中，`seo-audit` 仅暴露 readFile/writeFile/finish；
+- `finish` 作为循环控制协议始终保留，不受业务 Skill 裁剪；
+- 自管循环收到伪造或越权工具名时返回 `TOOL_NOT_ALLOWED` 结构化拒绝；
+- 实际暴露工具集合继续写入 `ModelExecutionTrace`，随 Revision Manifest 固化；
+- 无 Skill 时保持原有完整工具集，避免破坏现有生成行为。
 
 验收：
 

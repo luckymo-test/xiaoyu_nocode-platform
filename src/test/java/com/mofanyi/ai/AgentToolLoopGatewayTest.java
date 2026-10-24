@@ -23,12 +23,15 @@ import com.mofanyi.core.AiCallListener;
 import com.mofanyi.core.ImageMaterialPlanner;
 import com.mofanyi.core.TokenUsageAccumulator;
 import com.mofanyi.model.enums.CodeGenTypeEnum;
+import com.mofanyi.skill.SkillContext;
+import com.mofanyi.skill.SkillDefinition;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -37,6 +40,7 @@ import reactor.core.publisher.Flux;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -59,6 +63,7 @@ class AgentToolLoopGatewayTest {
     private AiCallListener callListener;
     private FinishTool finishTool;
     private ToolCallback finishCallback;
+    private SkillContext skillContext;
     private AgentToolLoop loop;
 
     @BeforeEach
@@ -68,7 +73,10 @@ class AgentToolLoopGatewayTest {
         profiles = mock(ReasoningProfileRegistry.class);
         callListener = mock(AiCallListener.class);
         finishTool = mock(FinishTool.class);
+        skillContext = mock(SkillContext.class);
         finishCallback = callback("finish");
+        when(skillContext.get(7L)).thenReturn(List.of());
+        when(skillContext.allowedToolIntersection(7L)).thenReturn(java.util.Optional.empty());
 
         when(profiles.resolve(ReasoningLevel.STANDARD)).thenReturn(
                 new ReasoningProfile(true, "high", 4, 20_000, 1,
@@ -92,7 +100,8 @@ class AgentToolLoopGatewayTest {
                 finishTool,
                 mock(GenerationTaskRegistry.class),
                 callListener,
-                profiles);
+                profiles,
+                skillContext);
     }
 
     @Test
@@ -166,6 +175,73 @@ class AgentToolLoopGatewayTest {
                 ArgumentCaptor.forClass(ModelRequest.class);
         verify(modelGateway).stream(requestCaptor.capture());
         assertNull(requestCaptor.getValue().preferredModelId());
+    }
+
+    @Test
+    @DisplayName("激活 Skill 后只向模型注册技能允许的工具并保留 finish")
+    void filtersToolsByActiveSkills() {
+        when(skillContext.allowedToolIntersection(7L))
+                .thenReturn(java.util.Optional.of(Set.of("readFile", "writeFile")));
+        when(skillContext.get(7L)).thenReturn(List.of(new SkillDefinition(
+                "seo-audit", "1", "SEO",
+                Set.of("html-static"), Set.of("readFile", "writeFile"),
+                Set.of("content-read"), "prompt", List.of(), Set.of())));
+        when(modelGateway.stream(any())).thenReturn(Flux.just(
+                new ModelChunk("done", "", List.of(), "stop",
+                        new ModelUsage(1, 1), "deepseek",
+                        "deepseek-flash", "deepseek-flash")));
+
+        loop.run(request(new AtomicReference<>(""), new AtomicBoolean(),
+                new TokenUsageAccumulator(), null));
+
+        ArgumentCaptor<ModelRequest> requestCaptor =
+                ArgumentCaptor.forClass(ModelRequest.class);
+        verify(modelGateway).stream(requestCaptor.capture());
+        assertEquals(List.of("writeFile", "readFile", "finish"),
+                requestCaptor.getValue().tools().stream()
+                        .map(callback -> callback.getToolDefinition().name()).toList());
+    }
+
+    @Test
+    @DisplayName("自管循环拒绝模型伪造的未授权工具名")
+    void rejectsForgedToolNameInSelfManagedMode() {
+        ReflectionTestUtils.setField(loop, "selfManagedLoopEnabled", true);
+        when(skillContext.allowedToolIntersection(7L))
+                .thenReturn(java.util.Optional.of(Set.of("readFile", "writeFile")));
+        when(skillContext.get(7L)).thenReturn(List.of(new SkillDefinition(
+                "seo-audit", "1", "SEO",
+                Set.of("html-static"), Set.of("readFile", "writeFile"),
+                Set.of("content-read"), "prompt", List.of(), Set.of())));
+        AssistantMessage.ToolCall forged = new AssistantMessage.ToolCall(
+                "call-forged", "function", "searchImage", "{}");
+        AssistantMessage.ToolCall finish = new AssistantMessage.ToolCall(
+                "call-finish", "function", "finish", "{\"description\":\"done\"}");
+        when(modelGateway.stream(any())).thenReturn(
+                Flux.just(new ModelChunk("", "", List.of(forged), "tool_calls",
+                        new ModelUsage(1, 1), "deepseek",
+                        "deepseek-flash", "deepseek-flash")),
+                Flux.just(new ModelChunk("", "", List.of(finish), "tool_calls",
+                        new ModelUsage(1, 1), "deepseek",
+                        "deepseek-flash", "deepseek-flash")));
+        AtomicBoolean finished = new AtomicBoolean();
+        when(finishCallback.call(anyString())).thenAnswer(invocation -> {
+            finished.set(true);
+            return "finished";
+        });
+
+        AgentToolLoop.ToolLoopRequest request = request(
+                new AtomicReference<>(""), finished,
+                new TokenUsageAccumulator(), null);
+        loop.run(request);
+
+        String refusal = request.messages().stream()
+                .filter(ToolResponseMessage.class::isInstance)
+                .map(ToolResponseMessage.class::cast)
+                .flatMap(message -> message.getResponses().stream())
+                .filter(response -> "call-forged".equals(response.id()))
+                .findFirst().orElseThrow().responseData();
+        assertTrue(refusal.contains("\"code\":\"TOOL_NOT_ALLOWED\""));
+        assertTrue(refusal.contains("\"tool\":\"searchImage\""));
     }
 
     private AgentToolLoop.ToolLoopRequest request(

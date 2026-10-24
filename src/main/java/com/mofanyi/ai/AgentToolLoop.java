@@ -31,6 +31,7 @@ import com.mofanyi.exception.ErrorCode;
 import com.mofanyi.exception.ThrowUtils;
 import com.mofanyi.job.GenerationExecutionCondition;
 import com.mofanyi.model.enums.CodeGenTypeEnum;
+import com.mofanyi.skill.SkillContext;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
@@ -77,6 +78,7 @@ public class AgentToolLoop {
     private final GenerationTaskRegistry taskRegistry;
     private final AiCallListener aiCallListener;
     private final ReasoningProfileRegistry reasoningProfiles;
+    private final SkillContext skillContext;
 
     @Value("${codegen.agent.self-managed-loop.enabled:false}")
     private boolean selfManagedLoopEnabled;
@@ -96,7 +98,8 @@ public class AgentToolLoop {
                          FinishTool finishTool,
                          GenerationTaskRegistry taskRegistry,
                          AiCallListener aiCallListener,
-                         ReasoningProfileRegistry reasoningProfiles) {
+                         ReasoningProfileRegistry reasoningProfiles,
+                         SkillContext skillContext) {
         this.modelGateway = modelGateway;
         this.modelProperties = modelProperties;
         this.modelExecutionTrace = modelExecutionTrace;
@@ -110,6 +113,7 @@ public class AgentToolLoop {
         this.taskRegistry = taskRegistry;
         this.aiCallListener = aiCallListener;
         this.reasoningProfiles = reasoningProfiles;
+        this.skillContext = skillContext;
     }
 
     /**
@@ -144,23 +148,40 @@ public class AgentToolLoop {
         ReasoningLevel level = request.reasoningLevel() == null
                 ? reasoningProfiles.defaultReasoningLevel() : request.reasoningLevel();
         ReasoningProfile profile = reasoningProfiles.resolve(level);
+        Set<String> allowedTools = skillContext.allowedToolIntersection(request.appId())
+                .orElse(null);
         List<ToolCallback> callbacks = new ArrayList<>();
-        callbacks.add(writeFileTool.build(
-                request.type(), request.appId(), request.files(), request.listener()));
-        callbacks.add(readFileTool.build(request.type(), request.appId()));
-        callbacks.add(searchImageTool.build(
-                request.appId(), request.materials() == null ? List.of() : request.materials()));
-        if (searchWebTool.isEnabled()) {
+        if (toolAllowed("writeFile", allowedTools)) {
+            callbacks.add(writeFileTool.build(
+                    request.type(), request.appId(), request.files(), request.listener()));
+        }
+        if (toolAllowed("readFile", allowedTools)) {
+            callbacks.add(readFileTool.build(request.type(), request.appId()));
+        }
+        if (toolAllowed("searchImage", allowedTools)) {
+            callbacks.add(searchImageTool.build(
+                    request.appId(), request.materials() == null ? List.of() : request.materials()));
+        }
+        if (toolAllowed("searchWeb", allowedTools) && searchWebTool.isEnabled()) {
             callbacks.add(searchWebTool.build());
         }
-        if (fetchWebTool.isEnabled()) {
+        if (toolAllowed("fetchWeb", allowedTools) && fetchWebTool.isEnabled()) {
             callbacks.add(fetchWebTool.build());
         }
-        callbacks.add(diagramTool.build(request.appId()));
+        if (toolAllowed("diagram", allowedTools)) {
+            callbacks.add(diagramTool.build(request.appId()));
+        }
+        // finish 是循环控制协议，不属于业务能力，任何技能都不能将其裁剪。
         callbacks.add(finishTool.build(request.finished(), request.description()));
         List<ToolCallback> toolCallbacks = List.copyOf(callbacks);
         modelExecutionTrace.recordProfile(request.ctx().jobId(), level.code(), profile);
         modelExecutionTrace.recordTools(request.ctx().jobId(), toolCallbacks);
+        log.info("[agent] tool capability filter skills={} exposed={} restricted={}",
+                skillContext.get(request.appId()).stream()
+                        .map(com.mofanyi.skill.SkillDefinition::id).toList(),
+                toolCallbacks.stream()
+                        .map(callback -> callback.getToolDefinition().name()).toList(),
+                allowedTools != null);
 
         log.info("[agent] reasoning_level={} thinking={} effort={} maxSteps={} maxLoopTokens={} model={}",
                 level.code(), profile.thinkingEnabled() ? "on" : "off",
@@ -276,7 +297,7 @@ public class AgentToolLoop {
                 String result;
                 try {
                     result = callback == null
-                            ? "未知工具: " + toolCall.name()
+                            ? toolNotAllowed(toolCall.name())
                             : callback.call(toolCall.arguments());
                 } catch (RuntimeException e) {
                     result = "工具执行失败: " + e.getMessage();
@@ -366,6 +387,18 @@ public class AgentToolLoop {
             return ModelTask.REPAIR;
         }
         return ModelTask.GENERATE;
+    }
+
+    private static boolean toolAllowed(String tool, Set<String> allowedTools) {
+        return allowedTools == null || allowedTools.contains(tool);
+    }
+
+    private static String toolNotAllowed(String tool) {
+        ObjectNode error = COMPACT_MAPPER.createObjectNode();
+        error.put("code", "TOOL_NOT_ALLOWED");
+        error.put("tool", tool == null ? "" : tool);
+        error.put("message", "工具未注册或未被当前 Skill 允许");
+        return error.toString();
     }
 
     private void logCallResult(String mode, int round, TokenUsageAccumulator usage,

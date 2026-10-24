@@ -33,6 +33,8 @@ AI 应用生成平台。用户通过一句话创建网站或前端工程，平�
   已完成隔离构建和三档验证，默认由 Feature Flag 关闭。控制台通过
   `/v1/runtime-profiles` 获取可用技术栈，见
   [docs/stack-runtime.md](docs/stack-runtime.md)。
+- Skill 的 `allowedTools` 已在 AgentToolLoop 注册工具前取交集并真正裁剪；
+  模型只能看到当前 Skill 允许的工具，伪造未注册工具返回 `TOOL_NOT_ALLOWED`。
 
 ## 必读文档
 
