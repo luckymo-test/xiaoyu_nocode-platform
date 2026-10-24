@@ -705,6 +705,14 @@ codegen.runtime.next-static-export.enabled=false
 - 引入 OpenAPI 生成前端 client，减少手写 API drift；
 - 用实际并发压测验证 100 Job、队列积压、死信、Worker 接管和内存占用。
 
+OpenAPI Client 已完成：
+
+- 生成目录迁移到 `src/generated/api`，不再覆盖 `src/api` 手写封装；
+- 生成类型使用独立 `GeneratedAPI` 命名空间；
+- 已从真实 `/v3/api-docs` 生成 19 个 TypeScript Client 文件；
+- `npm run openapi2ts` 生成后自动验证手写 SSE、CSRF、可视编辑、运行时 Profile 文件未被删除；
+- 前端 TypeScript/Vite 构建通过。
+
 ## 五、明确不做
 
 - 不把 Vue 控制台重写成 React；

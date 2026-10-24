@@ -104,10 +104,9 @@ $env:JAVA_HOME = 'D:\computer tools\java\JDK'
 
 ## OpenAPI 前端代码
 
-`npm run openapi2ts` 会重建 `src/api/`，可能删除手写 SSE/API 封装。
-
-执行后必须检查 `git diff`。不要直接使用会覆盖用户修改的批量恢复命令；
-长期方案是把生成代码和手写 API 分到不同目录。
+`npm run openapi2ts` 只重建 `src/generated/api/`，类型命名空间为 `GeneratedAPI`。
+`src/api/` 保留 SSE、CSRF、可视编辑和运行时选择等手写封装，生成完成后会自动校验
+5 个受保护手写文件仍存在。执行后仍必须检查 `git diff`，不要使用覆盖用户修改的恢复命令。
 
 ## Git
 
