@@ -3,12 +3,14 @@ package com.mofanyi.ai.memory;
 import cn.hutool.core.util.StrUtil;
 import com.mofanyi.core.AiCallContext;
 import com.mofanyi.entity.ChatHistory;
+import com.mofanyi.job.GenerationExecutionCondition;
 import com.mofanyi.model.enums.ChatMessageTypeEnum;
 import com.mofanyi.model.enums.CodeGenTypeEnum;
 import com.mofanyi.service.ChatHistoryService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
@@ -36,6 +38,7 @@ import java.util.ListIterator;
  */
 @Slf4j
 @Service
+@Conditional(GenerationExecutionCondition.class)
 public class AgentMemoryService {
 
     /**

@@ -47,6 +47,9 @@ public class AppRevision implements Serializable {
     @Column("codeGenType")
     private String codeGenType;
 
+    @Column("stackProfileVersion")
+    private String stackProfileVersion;
+
     @Column("templateBundleId")
     private String templateBundleId;
 
@@ -58,6 +61,9 @@ public class AppRevision implements Serializable {
 
     @Column("skillsJson")
     private String skillsJson;
+
+    @Column("skillsSnapshotJson")
+    private String skillsSnapshotJson;
 
     @Column("sourceUri")
     private String sourceUri;

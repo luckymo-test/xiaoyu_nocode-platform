@@ -3,7 +3,6 @@ package com.mofanyi.service;
 import cn.hutool.core.util.StrUtil;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.mofanyi.core.AiCodeGeneratorFacade;
 import com.mofanyi.ai.reasoning.ReasoningProfileRegistry;
 import com.mofanyi.entity.App;
 import com.mofanyi.entity.ChatHistory;
@@ -59,7 +58,6 @@ public class GenerationJobService {
     private final WorkspaceService workspaceService;
     private final ChatHistoryService chatHistoryService;
     private final AppService appService;
-    private final AiCodeGeneratorFacade aiCodeGeneratorFacade;
     private final ReasoningProfileRegistry reasoningProfiles;
     private final ObjectMapper objectMapper;
     private final GenerationJobQueue jobQueue;
@@ -84,7 +82,6 @@ public class GenerationJobService {
                                 WorkspaceService workspaceService,
                                 ChatHistoryService chatHistoryService,
                                 AppService appService,
-                                AiCodeGeneratorFacade aiCodeGeneratorFacade,
                                 ReasoningProfileRegistry reasoningProfiles,
                                 GenerationJobQueue jobQueue,
                                 GenerationDeadLetterMapper deadLetterMapper,
@@ -99,7 +96,6 @@ public class GenerationJobService {
         this.workspaceService = workspaceService;
         this.chatHistoryService = chatHistoryService;
         this.appService = appService;
-        this.aiCodeGeneratorFacade = aiCodeGeneratorFacade;
         this.reasoningProfiles = reasoningProfiles;
         this.jobQueue = jobQueue;
         this.deadLetterMapper = deadLetterMapper;
@@ -168,6 +164,7 @@ public class GenerationJobService {
 
         ChatHistory userMessage = chatHistoryService.saveMessage(appId, loginUser.getId(),
                 request.getMessage(), ChatMessageTypeEnum.USER.getValue(), null);
+        StackProfile stackProfile = stackProfiles.require(request.getStackProfileId());
         LocalDateTime now = LocalDateTime.now();
         GenerationJob job = GenerationJob.builder()
                 .workspaceId(workspaceId)
@@ -182,10 +179,12 @@ public class GenerationJobService {
                 .currentStage(STAGE_QUEUED)
                 .codeGenType(request.getCodeGenType())
                 .stackProfileId(request.getStackProfileId())
+                .stackProfileVersion(stackProfile.version())
                 .templateBundleId(request.getTemplateBundleId())
                 .templateVersion(request.getTemplateVersion())
                 .templateHash(request.getTemplateHash())
                 .skillsJson(writeJson(request.getSkills()))
+                .skillsSnapshotJson(writeSkillSnapshot(request.getSkills()))
                 .visibility(request.getVisibility())
                 .baseRevisionId(app.getCurrentRevision())
                 .priority(0)
@@ -258,8 +257,10 @@ public class GenerationJobService {
                     java.util.Map.of("message", "用户取消生成"));
             appService.updateGenerateStatus(job.getAppId(), AppGenerateStatusEnum.STOPPED.getValue());
         } else {
-            jobMapper.requestCancel(jobId);
-            aiCodeGeneratorFacade.stopGenerate(job.getAppId());
+            if (jobMapper.requestCancel(jobId) == 1) {
+                eventService.append(jobId, "cancel_requested", "CANCEL_REQUESTED",
+                        java.util.Map.of("message", "已请求取消，Worker 将在下一个工具边界退出"));
+            }
         }
         return toVO(requireJob(jobId));
     }
@@ -285,6 +286,16 @@ public class GenerationJobService {
         }
         return jobMapper.renewLease(job.getId(), owner, job.getFencingToken(),
                 LocalDateTime.now().plusSeconds(leaseSeconds)) == 1;
+    }
+
+    /**
+     * Worker 通过数据库状态感知跨进程取消，不依赖 API 进程内任务注册表。
+     */
+    public boolean isCancelRequested(Long jobId) {
+        ThrowUtils.throwIf(jobId == null || jobId <= 0, ErrorCode.PARAMS_ERROR);
+        return jobMapper.selectCountByQuery(QueryWrapper.create()
+                .eq("id", jobId)
+                .eq("status", GenerationJobStatusEnum.CANCEL_REQUESTED.getValue())) == 1;
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -422,6 +433,7 @@ public class GenerationJobService {
         vo.setCurrentStage(job.getCurrentStage());
         vo.setCodeGenType(job.getCodeGenType());
         vo.setStackProfileId(job.getStackProfileId());
+        vo.setStackProfileVersion(job.getStackProfileVersion());
         vo.setTemplateBundleId(job.getTemplateBundleId());
         vo.setTemplateVersion(job.getTemplateVersion());
         vo.setTemplateHash(job.getTemplateHash());
@@ -447,5 +459,47 @@ public class GenerationJobService {
         } catch (Exception e) {
             return List.of();
         }
+    }
+
+    /**
+     * 从 V15 快照读取 Skill 版本；旧 Job 没有快照时返回空 Map，由 Worker 兼容执行。
+     */
+    public java.util.Map<String, String> readSkillVersions(String snapshotJson) {
+        if (StrUtil.isBlank(snapshotJson)) {
+            return java.util.Map.of();
+        }
+        try {
+            JsonNode root = objectMapper.readTree(snapshotJson);
+            java.util.Map<String, String> versions = new java.util.LinkedHashMap<>();
+            if (root.isArray()) {
+                for (JsonNode node : root) {
+                    String id = node.path("id").asText("");
+                    String version = node.path("version").asText("");
+                    if (StrUtil.isNotBlank(id)) {
+                        versions.put(id, version);
+                    }
+                }
+            }
+            return java.util.Map.copyOf(versions);
+        } catch (Exception e) {
+            throw new IllegalStateException("生成任务 Skill 快照损坏", e);
+        }
+    }
+
+    private String writeSkillSnapshot(List<String> skillIds) {
+        if (skillIds == null || skillIds.isEmpty()) {
+            return "[]";
+        }
+        List<java.util.Map<String, String>> snapshot = skillIds.stream()
+                .map(id -> {
+                    SkillDefinition skill = skillRegistry.get(id);
+                    if (skill == null) {
+                        return java.util.Map.of("id", id, "version", "");
+                    }
+                    return java.util.Map.of("id", id,
+                            "version", StrUtil.blankToDefault(skill.version(), ""));
+                })
+                .toList();
+        return writeJson(snapshot);
     }
 }

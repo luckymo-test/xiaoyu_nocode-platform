@@ -10,12 +10,14 @@ import com.mofanyi.ai.model.ModelResponse;
 import com.mofanyi.ai.model.ModelTask;
 import com.mofanyi.ai.task.GenerationCancelledException;
 import com.mofanyi.ai.task.GenerationTaskRegistry;
+import com.mofanyi.job.GenerationExecutionCondition;
 import com.mofanyi.model.enums.CodeGenTypeEnum;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.stereotype.Component;
+import org.springframework.context.annotation.Conditional;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -45,6 +47,7 @@ import java.util.concurrent.TimeUnit;
  */
 @Slf4j
 @Component
+@Conditional(GenerationExecutionCondition.class)
 public class ImageMaterialPlanner {
 
     /**

@@ -30,6 +30,7 @@ public class StackProfileController {
     private StackProfileVO toVO(StackProfile profile) {
         StackProfileVO vo = new StackProfileVO();
         vo.setId(profile.id());
+        vo.setVersion(profile.version());
         vo.setDisplayName(profile.displayName());
         vo.setCompatibilityType(profile.compatibilityType().getValue());
         vo.setCapabilities(profile.capabilities().stream().sorted().toList());

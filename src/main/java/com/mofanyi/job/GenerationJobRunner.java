@@ -24,11 +24,11 @@ import com.mofanyi.template.TemplateContext;
 import com.mofanyi.template.TemplateRegistry;
 import com.mofanyi.template.TemplateBundle;
 import com.mofanyi.skill.SkillContext;
-import com.mofanyi.skill.SkillRegistry;
 import com.mofanyi.skill.SkillDefinition;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.stereotype.Component;
 
 import java.util.LinkedHashMap;
@@ -38,6 +38,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -46,9 +47,9 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 @Slf4j
 @Component
+@Conditional(GenerationExecutionCondition.class)
 public class GenerationJobRunner {
 
-    private static final int LEASE_SECONDS = 120;
     private static final long MAX_EXECUTION_MINUTES = 45;
 
     private final GenerationJobService jobService;
@@ -65,13 +66,19 @@ public class GenerationJobRunner {
     private final GenerationJobMetrics metrics;
     private final TemplateRegistry templateRegistry;
     private final TemplateContext templateContext;
-    private final SkillRegistry skillRegistry;
     private final SkillContext skillContext;
     private final ModelExecutionTrace modelExecutionTrace;
+    private final GenerationRuntimeSnapshotValidator runtimeSnapshotValidator;
     private final ScheduledExecutorService heartbeatExecutor;
 
     @Value("${codegen.jobs.worker-id:${HOSTNAME:local-worker}}")
     private String workerId;
+
+    @Value("${codegen.generation-worker.lease-seconds:120}")
+    private int leaseSeconds;
+
+    @Value("${codegen.generation-worker.cancel-poll-millis:1000}")
+    private long cancelPollMillis;
 
     public GenerationJobRunner(GenerationJobService jobService,
                                GenerationJobEventService eventService,
@@ -87,9 +94,9 @@ public class GenerationJobRunner {
                                GenerationJobMetrics metrics,
                                TemplateRegistry templateRegistry,
                                TemplateContext templateContext,
-                               SkillRegistry skillRegistry,
                                SkillContext skillContext,
                                ModelExecutionTrace modelExecutionTrace,
+                               GenerationRuntimeSnapshotValidator runtimeSnapshotValidator,
                                @Qualifier("jobHeartbeatExecutor")
                                ScheduledExecutorService heartbeatExecutor) {
         this.jobService = jobService;
@@ -106,14 +113,14 @@ public class GenerationJobRunner {
         this.metrics = metrics;
         this.templateRegistry = templateRegistry;
         this.templateContext = templateContext;
-        this.skillRegistry = skillRegistry;
         this.skillContext = skillContext;
         this.modelExecutionTrace = modelExecutionTrace;
+        this.runtimeSnapshotValidator = runtimeSnapshotValidator;
         this.heartbeatExecutor = heartbeatExecutor;
     }
 
     public void run(Long jobId) {
-        GenerationJob job = jobService.claim(jobId, workerId, LEASE_SECONDS);
+        GenerationJob job = jobService.claim(jobId, workerId, leaseSeconds);
         if (job == null) {
             return;
         }
@@ -122,19 +129,26 @@ public class GenerationJobRunner {
         java.util.List<SkillDefinition> skills = java.util.List.of();
         CountDownLatch finished = new CountDownLatch(1);
         AtomicBoolean callbackFinished = new AtomicBoolean(false);
+        AtomicBoolean cancellationSignalled = new AtomicBoolean(false);
         AtomicReference<Throwable> callbackFailure = new AtomicReference<>();
         AtomicReference<AiCodeGenResultVO> callbackResult = new AtomicReference<>();
+        long leaseRenewMillis = Math.max(1_000L, leaseSeconds * 1_000L / 3);
+        long monitorMillis = Math.max(250L, cancelPollMillis);
+        AtomicLong lastLeaseRenew = new AtomicLong(System.currentTimeMillis());
         ScheduledFuture<?> heartbeat = heartbeatExecutor.scheduleAtFixedRate(
-                () -> renewQuietly(job),
-                LEASE_SECONDS / 3L, LEASE_SECONDS / 3L, TimeUnit.SECONDS);
+                () -> monitorJob(job, cancellationSignalled, lastLeaseRenew, leaseRenewMillis),
+                monitorMillis, Math.min(monitorMillis, leaseRenewMillis), TimeUnit.MILLISECONDS);
 
         try {
+            runtimeSnapshotValidator.validateProfile(job);
             workspace = workspaceManager.begin(job);
             template = activateTemplate(job);
             skills = activateSkills(job);
             GenerationJobCreateRequest request = jobService.readCreateRequest(job);
             CodeGenTypeEnum type = CodeGenTypeEnum.getEnumByValue(job.getCodeGenType());
             ReasoningLevel reasoningLevel = reasoningProfiles.parseLevel(request.getReasoningLevel());
+            ThrowUtils.throwIf(jobService.isCancelRequested(job.getId()),
+                    ErrorCode.OPERATION_ERROR, "用户已取消生成");
             emitStage(job, "GENERATE", "RUNNING");
             generatorFacade.streamGenerate(type, request.getMessage(), job.getAppId(),
                     new com.mofanyi.core.StreamCallback(
@@ -193,18 +207,11 @@ public class GenerationJobRunner {
     }
 
     private java.util.List<SkillDefinition> activateSkills(GenerationJob job) {
-        java.util.List<String> ids = jobService.readSkillIds(job.getSkillsJson());
-        if (ids.isEmpty()) {
+        java.util.List<SkillDefinition> skills =
+                runtimeSnapshotValidator.validateAndLoadSkills(job);
+        if (skills.isEmpty()) {
             return java.util.List.of();
         }
-        java.util.List<SkillDefinition> skills = ids.stream()
-                .map(id -> {
-                    SkillDefinition skill = skillRegistry.get(id);
-                    ThrowUtils.throwIf(skill == null, ErrorCode.OPERATION_ERROR,
-                            "Job 中的技能已不存在：" + id);
-                    return skill;
-                })
-                .toList();
         skillContext.activate(job.getAppId(), skills);
         return skills;
     }
@@ -220,7 +227,7 @@ public class GenerationJobRunner {
             handleFailure(job, new GenerationCancelledException(job.getAppId()));
             return;
         }
-        String validationStatus = awaitRepairAndValidationStatus(job.getAppId());
+        String validationStatus = awaitRepairAndValidationStatus(job);
         latest = jobService.requireJob(job.getId());
         if (GenerationJobStatusEnum.CANCEL_REQUESTED.getValue().equals(latest.getStatus())) {
             handleFailure(job, new GenerationCancelledException(job.getAppId()));
@@ -240,10 +247,16 @@ public class GenerationJobRunner {
         }
     }
 
-    private String awaitRepairAndValidationStatus(Long appId) {
+    private String awaitRepairAndValidationStatus(GenerationJob job) {
         long deadline = System.currentTimeMillis() + 5 * 60_000L;
+        String lastStatus = null;
         while (System.currentTimeMillis() < deadline) {
-            String status = generatorFacade.renderFixStatus(appId);
+            String status = generatorFacade.renderFixStatus(job.getAppId());
+            if (status != null && !status.equals(lastStatus)) {
+                appendQuietly(job, "render_fix", "VERIFY",
+                        Map.of("status", status));
+                lastStatus = status;
+            }
             if (!"fixing".equals(status)) {
                 return status == null ? "NOT_APPLICABLE" : status;
             }
@@ -254,7 +267,7 @@ public class GenerationJobRunner {
                 throw new IllegalStateException("等待渲染修复被中断", e);
             }
         }
-        generatorFacade.stopGenerate(appId);
+        generatorFacade.stopGenerate(job.getAppId());
         throw new IllegalStateException("渲染修复超时，版本未发布");
     }
 
@@ -301,9 +314,28 @@ public class GenerationJobRunner {
         modelExecutionTrace.clear(job.getId());
     }
 
+    private void monitorJob(GenerationJob job, AtomicBoolean cancellationSignalled,
+                            AtomicLong lastLeaseRenew, long leaseRenewMillis) {
+        try {
+            if (!cancellationSignalled.get() && jobService.isCancelRequested(job.getId())) {
+                cancellationSignalled.set(true);
+                generatorFacade.stopGenerate(job.getAppId());
+                log.info("[job] Worker 收到跨进程取消请求，jobId={}, appId={}",
+                        job.getId(), job.getAppId());
+            }
+        } catch (RuntimeException e) {
+            log.debug("[job] 取消状态轮询失败，jobId={}", job.getId(), e);
+        }
+        long now = System.currentTimeMillis();
+        long previous = lastLeaseRenew.get();
+        if (now - previous >= leaseRenewMillis && lastLeaseRenew.compareAndSet(previous, now)) {
+            renewQuietly(job);
+        }
+    }
+
     private void renewQuietly(GenerationJob job) {
         try {
-            if (!jobService.renewLease(job, workerId, LEASE_SECONDS)) {
+            if (!jobService.renewLease(job, workerId, leaseSeconds)) {
                 log.warn("[job] 租约续期失败，旧 Worker 后续写入将受 fencing 保护，jobId={}", job.getId());
             }
         } catch (RuntimeException e) {

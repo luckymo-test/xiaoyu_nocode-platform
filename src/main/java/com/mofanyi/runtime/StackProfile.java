@@ -12,6 +12,8 @@ public interface StackProfile {
 
     String id();
 
+    String version();
+
     String displayName();
 
     CodeGenTypeEnum compatibilityType();

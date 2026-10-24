@@ -2,9 +2,11 @@ package com.mofanyi.workspace;
 
 import cn.hutool.core.io.FileUtil;
 import com.mofanyi.core.CodeFileWriteService;
+import com.mofanyi.job.GenerationExecutionCondition;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.stereotype.Component;
 
 import java.io.File;
@@ -17,6 +19,7 @@ import java.nio.file.Path;
  */
 @Slf4j
 @Component
+@Conditional(GenerationExecutionCondition.class)
 public class WorkspaceRecoveryRunner implements ApplicationRunner {
 
     private final CodeFileWriteService codeFileWriteService;

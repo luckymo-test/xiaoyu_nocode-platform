@@ -117,6 +117,8 @@ codegen:
         - ${CODEGEN_CORS_ORIGIN_IP:http://127.0.0.1:5199}
   # Phase 1：持久化 Job 执行内核。默认数据库 Outbox，后续可替换 Redis Streams。
   jobs:
+    # embedded：API 进程内执行；api：只跑控制面；worker：只消费并执行 Job
+    execution-mode: ${CODEGEN_JOB_EXECUTION_MODE:embedded}
     worker-id: ${CODEGEN_JOB_WORKER_ID:${HOSTNAME:local-worker}}
     queue: ${CODEGEN_JOB_QUEUE:db}
     max-attempts: ${CODEGEN_JOB_MAX_ATTEMPTS:3}
@@ -128,6 +130,10 @@ codegen:
     redis:
       stream: ${CODEGEN_JOB_REDIS_STREAM:codegen:generation-jobs}
       group: ${CODEGEN_JOB_REDIS_GROUP:generation-workers}
+  generation-worker:
+    consumer-concurrency: ${CODEGEN_WORKER_CONSUMER_CONCURRENCY:2}
+    lease-seconds: ${CODEGEN_WORKER_LEASE_SECONDS:120}
+    cancel-poll-millis: ${CODEGEN_WORKER_CANCEL_POLL_MILLIS:1000}
   file:
     tmp-root: ${CODEGEN_TMP_ROOT:D:\IDEAproject\xiaoyu_zerocode\tmp}
     deploy-root: ${CODEGEN_DEPLOY_ROOT:D:\IDEAproject\xiaoyu_zerocode\deploy}

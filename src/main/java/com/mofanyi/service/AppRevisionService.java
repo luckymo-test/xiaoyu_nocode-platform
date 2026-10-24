@@ -111,10 +111,12 @@ public class AppRevisionService {
                 .baseRevisionId(job.getBaseRevisionId())
                 .status(STATUS_CREATED)
                 .codeGenType(job.getCodeGenType())
+                .stackProfileVersion(job.getStackProfileVersion())
                 .templateBundleId(job.getTemplateBundleId())
                 .templateVersion(job.getTemplateVersion())
                 .templateHash(job.getTemplateHash())
                 .skillsJson(job.getSkillsJson())
+                .skillsSnapshotJson(job.getSkillsSnapshotJson())
                 .sourceUri("pending://" + job.getId())
                 .validationStatus(validationStatus)
                 .createdBy(job.getRequestedBy())
@@ -314,6 +316,9 @@ public class AppRevisionService {
         manifest.put("baseRevision", revision.getBaseRevisionId() == null
                 ? null : String.valueOf(revision.getBaseRevisionId()));
         manifest.put("stackProfile", revision.getCodeGenType());
+        if (StrUtil.isNotBlank(revision.getStackProfileVersion())) {
+            manifest.put("stackProfileVersion", revision.getStackProfileVersion());
+        }
         manifest.put("promptVersions", promptRegistry.versions());
         manifest.put("modelExecution",
                 modelExecutionTrace.snapshot(revision.getJobId(), modelRegistry));
@@ -323,7 +328,14 @@ public class AppRevisionService {
                     "version", revision.getTemplateVersion(),
                     "hash", revision.getTemplateHash()));
         }
-        if (StrUtil.isNotBlank(revision.getSkillsJson())) {
+        if (StrUtil.isNotBlank(revision.getSkillsSnapshotJson())) {
+            try {
+                manifest.put("skills", objectMapper.readValue(
+                        revision.getSkillsSnapshotJson(), List.class));
+            } catch (Exception ignored) {
+                manifest.put("skills", List.of());
+            }
+        } else if (StrUtil.isNotBlank(revision.getSkillsJson())) {
             try {
                 manifest.put("skills", objectMapper.readValue(revision.getSkillsJson(), List.class));
             } catch (Exception ignored) {
@@ -451,6 +463,7 @@ public class AppRevisionService {
         vo.setBaseRevisionId(revision.getBaseRevisionId());
         vo.setStatus(revision.getStatus());
         vo.setCodeGenType(revision.getCodeGenType());
+        vo.setStackProfileVersion(revision.getStackProfileVersion());
         vo.setTemplateBundleId(revision.getTemplateBundleId());
         vo.setTemplateVersion(revision.getTemplateVersion());
         vo.setTemplateHash(revision.getTemplateHash());

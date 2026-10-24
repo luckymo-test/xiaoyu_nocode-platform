@@ -9,6 +9,7 @@ import com.mofanyi.service.GenerationJobService;
 import com.mybatisflex.core.query.QueryWrapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -21,6 +22,7 @@ import java.util.concurrent.ExecutorService;
  */
 @Slf4j
 @Component
+@Conditional(GenerationExecutionCondition.class)
 public class GenerationJobDispatcher {
 
     private final GenerationJobQueue queue;

@@ -10,12 +10,14 @@ import com.mofanyi.core.CodeFileWriteService;
 import com.mofanyi.core.ProjectCodeScanner;
 import com.mofanyi.exception.ErrorCode;
 import com.mofanyi.exception.ThrowUtils;
+import com.mofanyi.job.GenerationExecutionCondition;
 import com.mofanyi.model.enums.CodeGenTypeEnum;
 import com.mofanyi.service.ManualEditService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -30,6 +32,7 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 @Slf4j
 @Component
+@Conditional(GenerationExecutionCondition.class)
 public class SiteRepairAgent {
 
     private final AgentToolLoop agentToolLoop;

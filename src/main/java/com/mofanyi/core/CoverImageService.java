@@ -17,6 +17,7 @@ import org.openqa.selenium.edge.EdgeDriver;
 import org.openqa.selenium.edge.EdgeOptions;
 import org.openqa.selenium.support.ui.WebDriverWait;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.io.File;
@@ -43,6 +44,9 @@ public class CoverImageService {
 
     private final ThreadPoolExecutor screenshotExecutor;
 
+    @Value("${codegen.cover.capture-enabled:true}")
+    private boolean captureEnabled;
+
     public CoverImageService(ScreenshotProperties screenshotProperties,
                              CosManager cosManager,
                              CosClientConfig cosClientConfig,
@@ -63,6 +67,10 @@ public class CoverImageService {
      * @param deployUrl 已部署应用的访问地址
      */
     public void generateCoverAsync(long appId, String deployUrl) {
+        if (!captureEnabled) {
+            log.info("当前进程不执行浏览器截图，跳过封面生成，appId={}", appId);
+            return;
+        }
         screenshotExecutor.execute(() -> generateCover(appId, deployUrl));
     }
 

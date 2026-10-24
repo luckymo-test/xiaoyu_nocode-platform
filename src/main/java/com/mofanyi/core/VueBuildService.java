@@ -7,10 +7,12 @@ import com.mofanyi.ai.reasoning.ReasoningProfileRegistry;
 import com.mofanyi.exception.BusinessException;
 import com.mofanyi.exception.ErrorCode;
 import com.mofanyi.exception.ThrowUtils;
+import com.mofanyi.job.GenerationExecutionCondition;
 import com.mofanyi.model.enums.CodeGenTypeEnum;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.context.annotation.Conditional;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -31,6 +33,7 @@ import java.util.regex.Pattern;
  */
 @Slf4j
 @Service
+@Conditional(GenerationExecutionCondition.class)
 public class VueBuildService {
 
     /**

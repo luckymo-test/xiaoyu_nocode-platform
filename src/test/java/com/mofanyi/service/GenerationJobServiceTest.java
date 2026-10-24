@@ -1,7 +1,6 @@
 package com.mofanyi.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.mofanyi.core.AiCodeGeneratorFacade;
 import com.mofanyi.ai.reasoning.ReasoningProfileRegistry;
 import com.mofanyi.entity.App;
 import com.mofanyi.entity.ChatHistory;
@@ -20,14 +19,18 @@ import com.mofanyi.model.vo.GenerationJobVO;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 
 import java.time.LocalDateTime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -47,14 +50,16 @@ class GenerationJobServiceTest {
     private User user;
     private App app;
     private TemplateRegistry templateRegistry;
+    private AppAuthService appAuthService;
+    private WorkspaceService workspaceService;
 
     @BeforeEach
     void setUp() {
         jobMapper = mock(GenerationJobMapper.class);
         outboxMapper = mock(GenerationOutboxMapper.class);
         eventService = mock(GenerationJobEventService.class);
-        AppAuthService appAuthService = mock(AppAuthService.class);
-        WorkspaceService workspaceService = mock(WorkspaceService.class);
+        appAuthService = mock(AppAuthService.class);
+        workspaceService = mock(WorkspaceService.class);
         chatHistoryService = mock(ChatHistoryService.class);
         templateRegistry = new TemplateRegistry();
         service = new GenerationJobService(
@@ -65,7 +70,6 @@ class GenerationJobServiceTest {
                 workspaceService,
                 chatHistoryService,
                 mock(AppService.class),
-                mock(AiCodeGeneratorFacade.class),
                 new ReasoningProfileRegistry(),
                 mock(GenerationJobQueue.class),
                 mock(GenerationDeadLetterMapper.class),
@@ -153,6 +157,44 @@ class GenerationJobServiceTest {
         assertEquals(9002L, result.getJobId());
         assertEquals("QUEUED", result.getStatus());
         verify(outboxMapper).insertSelective(any());
+        ArgumentCaptor<GenerationJob> jobCaptor =
+                ArgumentCaptor.forClass(GenerationJob.class);
+        verify(jobMapper).insertSelective(jobCaptor.capture());
+        assertEquals("html-static", jobCaptor.getValue().getStackProfileId());
+        assertEquals("1", jobCaptor.getValue().getStackProfileVersion());
+        assertEquals("[]", jobCaptor.getValue().getSkillsSnapshotJson());
+    }
+
+    @Test
+    @DisplayName("运行中取消只写 CANCEL_REQUESTED，由 Worker 跨进程协作退出")
+    void cancelRunningJobUsesPersistentCancelSignal() {
+        GenerationJob running = GenerationJob.builder()
+                .id(9003L)
+                .workspaceId(WORKSPACE_ID)
+                .appId(APP_ID)
+                .requestedBy(USER_ID)
+                .status("RUNNING")
+                .currentStage("GENERATE")
+                .build();
+        when(jobMapper.selectOneById(9003L)).thenReturn(running);
+        when(jobMapper.cancelQueued(9003L)).thenReturn(0);
+        when(jobMapper.requestCancel(9003L)).thenReturn(1);
+
+        GenerationJobVO result = service.cancel(9003L, user);
+
+        assertNotNull(result);
+        verify(jobMapper).requestCancel(9003L);
+        verify(eventService).append(eq(9003L), eq("cancel_requested"),
+                eq("CANCEL_REQUESTED"), any());
+        verify(workspaceService).requireMember(WORKSPACE_ID, USER_ID);
+    }
+
+    @Test
+    @DisplayName("Worker 通过数据库状态轮询跨进程取消")
+    void detectsPersistentCancelRequest() {
+        when(jobMapper.selectCountByQuery(any())).thenReturn(1L);
+
+        assertTrue(service.isCancelRequested(9003L));
     }
 
     private GenerationJobCreateRequest request() {

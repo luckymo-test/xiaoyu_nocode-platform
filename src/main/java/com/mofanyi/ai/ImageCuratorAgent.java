@@ -13,8 +13,10 @@ import com.mofanyi.core.AiCallListener;
 import com.mofanyi.core.SiteImageService;
 import com.mofanyi.exception.ErrorCode;
 import com.mofanyi.exception.ThrowUtils;
+import com.mofanyi.job.GenerationExecutionCondition;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.ByteArrayResource;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Component;
 import org.springframework.util.MimeTypeUtils;
@@ -52,6 +54,7 @@ import java.util.Set;
  */
 @Slf4j
 @Component
+@Conditional(GenerationExecutionCondition.class)
 public class ImageCuratorAgent {
 
     private static final int BATCH_SIZE = 10;

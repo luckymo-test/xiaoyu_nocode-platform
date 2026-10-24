@@ -10,6 +10,7 @@ import java.util.List;
 public class StackProfileVO implements Serializable {
 
     private String id;
+    private String version;
     private String displayName;
     private String compatibilityType;
     private List<String> capabilities = new ArrayList<>();

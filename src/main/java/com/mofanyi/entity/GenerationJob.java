@@ -62,6 +62,9 @@ public class GenerationJob implements Serializable {
     @Column("stackProfileId")
     private String stackProfileId;
 
+    @Column("stackProfileVersion")
+    private String stackProfileVersion;
+
     @Column("templateBundleId")
     private String templateBundleId;
 
@@ -73,6 +76,9 @@ public class GenerationJob implements Serializable {
 
     @Column("skillsJson")
     private String skillsJson;
+
+    @Column("skillsSnapshotJson")
+    private String skillsSnapshotJson;
 
     @Column("baseRevisionId")
     private Long baseRevisionId;

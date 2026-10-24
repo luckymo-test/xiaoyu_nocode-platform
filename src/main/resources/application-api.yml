@@ -1,0 +1,9 @@
+codegen:
+  jobs:
+    execution-mode: api
+  cover:
+    capture-enabled: false
+
+spring:
+  main:
+    lazy-initialization: true

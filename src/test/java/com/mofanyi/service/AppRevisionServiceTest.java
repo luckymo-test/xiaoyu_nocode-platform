@@ -88,6 +88,9 @@ class AppRevisionServiceTest {
                 .status("RUNNING")
                 .currentStage("GENERATE")
                 .codeGenType("html")
+                .stackProfileId("html-static")
+                .stackProfileVersion("1")
+                .skillsSnapshotJson("[]")
                 .visibility("private")
                 .baseRevisionId(44L)
                 .fencingToken(1L)
@@ -109,6 +112,7 @@ class AppRevisionServiceTest {
         assertEquals("high", manifest.path("modelExecution")
                 .path("reasoningProfiles").path("standard").path("effort").asText());
         assertTrue(manifest.path("promptVersions").has("html"));
+        assertEquals("1", manifest.path("stackProfileVersion").asText());
         assertTrue(manifest.path("modelExecution").path("routing").has("version"));
         assertTrue(revision.getSourceUri().startsWith("file:"));
         assertTrue(Files.isDirectory(Path.of(URI.create(revision.getSourceUri()))));

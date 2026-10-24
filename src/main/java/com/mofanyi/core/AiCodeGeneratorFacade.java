@@ -9,6 +9,7 @@ import com.mofanyi.ai.reasoning.ReasoningProfileRegistry;
 import com.mofanyi.ai.task.GenerationCancelledException;
 import com.mofanyi.ai.task.GenerationTask;
 import com.mofanyi.ai.task.GenerationTaskRegistry;
+import com.mofanyi.job.GenerationExecutionCondition;
 import com.mofanyi.exception.ErrorCode;
 import com.mofanyi.exception.ThrowUtils;
 import com.mofanyi.model.enums.AppGenerateStatusEnum;
@@ -17,6 +18,7 @@ import com.mofanyi.model.vo.AiCodeGenResultVO;
 import com.mofanyi.service.AppService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.stereotype.Component;
 import org.springframework.beans.factory.annotation.Autowired;
 
@@ -34,6 +36,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 @Slf4j
 @Component
+@Conditional(GenerationExecutionCondition.class)
 public class AiCodeGeneratorFacade {
 
     private final CodeFileWriteService codeFileWriteService;

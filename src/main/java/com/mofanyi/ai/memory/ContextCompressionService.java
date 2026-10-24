@@ -10,12 +10,14 @@ import com.mofanyi.ai.model.ModelTask;
 import com.mofanyi.core.AiCallContext;
 import com.mofanyi.core.AiCallListener;
 import com.mofanyi.core.CodeFileWriteService;
+import com.mofanyi.job.GenerationExecutionCondition;
 import com.mofanyi.model.enums.CodeGenTypeEnum;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.stereotype.Component;
 
 import java.nio.charset.StandardCharsets;
@@ -38,6 +40,7 @@ import java.util.Map;
  */
 @Slf4j
 @Component
+@Conditional(GenerationExecutionCondition.class)
 public class ContextCompressionService {
 
     private static final String SUMMARY_VERSION = "v1";

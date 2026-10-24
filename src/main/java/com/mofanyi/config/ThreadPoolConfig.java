@@ -1,10 +1,14 @@
 package com.mofanyi.config;
 
+import com.mofanyi.job.GenerationExecutionCondition;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Configuration;
 
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -62,16 +66,27 @@ public class ThreadPoolConfig {
      * 不占用生成线程池，也不会因生成线程池满而阻塞。
      */
     @Bean(destroyMethod = "close")
+    @Conditional(GenerationExecutionCondition.class)
     public ExecutorService renderFixExecutor() {
         return Executors.newVirtualThreadPerTaskExecutor();
     }
 
     /**
-     * Job 执行与 SSE 读取均为阻塞型长任务，使用虚拟线程，避免耗尽 Tomcat/平台线程。
+     * Job 执行使用有界平台线程池，保证 Worker 并发数可控且不会无限创建生成任务。
      */
-    @Bean(destroyMethod = "close")
-    public ExecutorService jobExecutionExecutor() {
-        return Executors.newVirtualThreadPerTaskExecutor();
+    @Bean(destroyMethod = "shutdownNow")
+    @Conditional(GenerationExecutionCondition.class)
+    public ThreadPoolExecutor jobExecutionExecutor(
+            @Value("${codegen.generation-worker.consumer-concurrency:2}") int concurrency) {
+        int threads = Math.max(1, Math.min(32, concurrency));
+        return new ThreadPoolExecutor(
+                threads,
+                threads,
+                0L,
+                TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(threads * 4),
+                daemonFactory("generation-worker-"),
+                new ThreadPoolExecutor.AbortPolicy());
     }
 
     @Bean(destroyMethod = "close")
@@ -80,9 +95,10 @@ public class ThreadPoolConfig {
     }
 
     /**
-     * 单个平台调度线程用于任务租约心跳；实际执行仍在虚拟线程 Runner 中。
+     * 单个平台调度线程用于取消轮询与租约心跳；实际生成仍在线程池 Worker 中。
      */
     @Bean(destroyMethod = "shutdownNow")
+    @Conditional(GenerationExecutionCondition.class)
     public ScheduledExecutorService jobHeartbeatExecutor() {
         return Executors.newSingleThreadScheduledExecutor(task -> {
             Thread thread = new Thread(task, "job-lease-heartbeat");
@@ -93,7 +109,18 @@ public class ThreadPoolConfig {
 
     private ThreadPoolExecutor buildExecutor(int core, int max, int keepAliveSeconds, int queueCapacity,
                                              String threadNamePrefix, RejectedExecutionHandler handler) {
-        ThreadFactory threadFactory = new ThreadFactory() {
+        return new ThreadPoolExecutor(
+                core,
+                max,
+                keepAliveSeconds,
+                TimeUnit.SECONDS,
+                new LinkedBlockingQueue<>(queueCapacity),
+                daemonFactory(threadNamePrefix),
+                handler);
+    }
+
+    private static ThreadFactory daemonFactory(String threadNamePrefix) {
+        return new ThreadFactory() {
             private final AtomicInteger counter = new AtomicInteger(1);
 
             @Override
@@ -103,13 +130,5 @@ public class ThreadPoolConfig {
                 return thread;
             }
         };
-        return new ThreadPoolExecutor(
-                core,
-                max,
-                keepAliveSeconds,
-                TimeUnit.SECONDS,
-                new LinkedBlockingQueue<>(queueCapacity),
-                threadFactory,
-                handler);
     }
 }

@@ -114,10 +114,12 @@ class GenerationJobPersistenceProbeTest {
                 .currentStage("QUEUED")
                 .codeGenType("html")
                 .stackProfileId("html-static")
+                .stackProfileVersion("1")
                 .templateBundleId("default-neutral")
                 .templateVersion("1")
                 .templateHash("probe-template-hash")
                 .skillsJson("[]")
+                .skillsSnapshotJson("[]")
                 .visibility("private")
                 .priority(0)
                 .attempt(0)
@@ -143,10 +145,12 @@ class GenerationJobPersistenceProbeTest {
                 .revisionNo(1L)
                 .status("CREATED")
                 .codeGenType("html")
+                .stackProfileVersion("1")
                 .templateBundleId("default-neutral")
                 .templateVersion("1")
                 .templateHash("probe-template-hash")
                 .skillsJson("[]")
+                .skillsSnapshotJson("[]")
                 .sourceUri("file:///probe/source")
                 .validationStatus("ok")
                 .createdBy(1L)
@@ -310,6 +314,33 @@ class GenerationJobPersistenceProbeTest {
                 workspace.getId(), 990001000000000022L, "RUNNING", "active-1", now)));
         assertThrows(DataIntegrityViolationException.class, () -> jobMapper.insertSelective(newJob(
                 workspace.getId(), 990001000000000022L, "QUEUED", "active-2", now)));
+    }
+
+    @Test
+    @Transactional
+    @DisplayName("等待重试的 Job 可被 Worker 再次 claim")
+    void claimsWaitingRetryJob() {
+        LocalDateTime now = LocalDateTime.now();
+        Workspace workspace = Workspace.builder()
+                .id(990001000000000031L)
+                .ownerId(1L)
+                .workspaceName("probe-retry-claim")
+                .visibility("private")
+                .createTime(now)
+                .updateTime(now)
+                .isDelete(0)
+                .build();
+        assertEquals(1, workspaceMapper.insertSelective(workspace));
+        GenerationJob waiting = newJob(workspace.getId(), 990001000000000032L,
+                "WAITING_RETRY", "waiting-retry", now);
+        assertEquals(1, jobMapper.insertSelective(waiting));
+
+        assertEquals(1, jobMapper.claim(waiting.getId(), "worker-probe",
+                now.plusMinutes(2)));
+        GenerationJob claimed = jobMapper.selectOneById(waiting.getId());
+        assertEquals("RUNNING", claimed.getStatus());
+        assertEquals(1, claimed.getAttempt());
+        assertEquals("worker-probe", claimed.getLeaseOwner());
     }
 
     private GenerationJob newJob(Long workspaceId, Long appId, String status,

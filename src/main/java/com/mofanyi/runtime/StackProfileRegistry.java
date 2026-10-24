@@ -23,28 +23,28 @@ public class StackProfileRegistry {
     public StackProfileRegistry() {
         Map<String, StackProfile> values = new LinkedHashMap<>();
         register(values, new BuiltInProfile(
-                "html-static", "原生 HTML", CodeGenTypeEnum.HTML,
+                "html-static", "1", "原生 HTML", CodeGenTypeEnum.HTML,
                 Set.of("static", "responsive", "seo-basic"), true, null,
                 List.of(), List.of(), "."));
         register(values, new BuiltInProfile(
-                "multi-file-static", "原生多文件", CodeGenTypeEnum.MULTI_FILE,
+                "multi-file-static", "1", "原生多文件", CodeGenTypeEnum.MULTI_FILE,
                 Set.of("static", "multi-file", "responsive"), true, null,
                 List.of(), List.of(), "."));
         register(values, new BuiltInProfile(
-                "vue-vite", "Vue 3 + Vite", CodeGenTypeEnum.VUE,
+                "vue-vite", "1", "Vue 3 + Vite", CodeGenTypeEnum.VUE,
                 Set.of("spa", "routing", "interaction"), true, null,
                 List.of(new CommandSpec("install", List.of("npm", "install"), Duration.ofMinutes(5))),
                 List.of(new CommandSpec("build", List.of("npm", "run", "build"), Duration.ofMinutes(5))),
                 "dist"));
         register(values, new BuiltInProfile(
-                "react-vite-ts", "React + Vite + TypeScript", CodeGenTypeEnum.VUE,
+                "react-vite-ts", "1", "React + Vite + TypeScript", CodeGenTypeEnum.VUE,
                 Set.of("spa", "routing", "interaction", "typescript"), false,
                 "Prompt/脚手架适配尚未完成",
                 List.of(new CommandSpec("install", List.of("npm", "ci"), Duration.ofMinutes(5))),
                 List.of(new CommandSpec("build", List.of("npm", "run", "build"), Duration.ofMinutes(5))),
                 "dist"));
         register(values, new BuiltInProfile(
-                "next-static-export", "Next.js Static Export", CodeGenTypeEnum.VUE,
+                "next-static-export", "1", "Next.js Static Export", CodeGenTypeEnum.VUE,
                 Set.of("ssg", "routing", "seo", "motion", "typescript"), false,
                 "静态导出脚手架与验证流程尚未完成",
                 List.of(new CommandSpec("install", List.of("npm", "ci"), Duration.ofMinutes(8))),
@@ -91,6 +91,7 @@ public class StackProfileRegistry {
 
     private record BuiltInProfile(
             String id,
+            String version,
             String displayName,
             CodeGenTypeEnum compatibilityType,
             Set<String> capabilities,

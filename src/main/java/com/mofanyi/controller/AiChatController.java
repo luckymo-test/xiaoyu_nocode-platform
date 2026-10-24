@@ -11,6 +11,7 @@ import com.mofanyi.core.StreamCallback;
 import com.mofanyi.entity.App;
 import com.mofanyi.entity.ChatHistory;
 import com.mofanyi.entity.User;
+import com.mofanyi.job.GenerationExecutionCondition;
 import com.mofanyi.exception.ErrorCode;
 import com.mofanyi.exception.ThrowUtils;
 import com.mofanyi.model.enums.ChatMessageTypeEnum;
@@ -35,6 +36,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import org.springframework.context.annotation.Conditional;
 
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -45,6 +47,7 @@ import java.util.function.Consumer;
 
 @Slf4j
 @RestController
+@Conditional(GenerationExecutionCondition.class)
 @RequestMapping("/ai")
 public class AiChatController {
 

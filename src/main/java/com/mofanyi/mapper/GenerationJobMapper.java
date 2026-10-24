@@ -16,7 +16,7 @@ public interface GenerationJobMapper extends BaseMapper<GenerationJob> {
                 attempt = attempt + 1, leaseOwner = #{owner},
                 leaseExpiresAt = #{expiresAt}, fencingToken = fencingToken + 1,
                 updateTime = now()
-            where id = #{jobId} and status = 'QUEUED'
+            where id = #{jobId} and status in ('QUEUED', 'WAITING_RETRY')
             """)
     int claim(@Param("jobId") Long jobId,
               @Param("owner") String owner,

@@ -11,11 +11,13 @@ import com.mofanyi.core.TokenUsageAccumulator;
 import com.mofanyi.core.ToolPaths;
 import com.mofanyi.exception.ErrorCode;
 import com.mofanyi.exception.ThrowUtils;
+import com.mofanyi.job.GenerationExecutionCondition;
 import com.mofanyi.model.enums.CodeGenTypeEnum;
 import com.mofanyi.service.ManualEditService;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
@@ -29,6 +31,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * 可视化修改 Agent：准备点选上下文、保护用户手动改动、调用共享循环并记录规格变化。
  */
 @Component
+@Conditional(GenerationExecutionCondition.class)
 public class SiteModifyAgent {
 
     private final AgentToolLoop agentToolLoop;

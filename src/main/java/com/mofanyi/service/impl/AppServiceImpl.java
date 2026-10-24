@@ -37,6 +37,7 @@ import com.mybatisflex.core.query.QueryColumn;
 import com.mybatisflex.core.query.QueryCondition;
 import com.mybatisflex.core.query.QueryWrapper;
 import com.mybatisflex.spring.service.impl.ServiceImpl;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
 import java.security.SecureRandom;
@@ -75,7 +76,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
 
     private final RedisChatMemoryRepository redisChatMemoryRepository;
 
-    private final VueBuildService vueBuildService;
+    private final ObjectProvider<VueBuildService> vueBuildServiceProvider;
 
     private final CoverImageService coverImageService;
 
@@ -87,7 +88,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
     public AppServiceImpl(CodeFileWriteService codeFileWriteService,
                           ChatHistoryService chatHistoryService,
                           RedisChatMemoryRepository redisChatMemoryRepository,
-                          VueBuildService vueBuildService,
+                          ObjectProvider<VueBuildService> vueBuildServiceProvider,
                           CoverImageService coverImageService,
                           AppImageMapper appImageMapper,
                           AppAuthService appAuthService,
@@ -96,7 +97,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         this.codeFileWriteService = codeFileWriteService;
         this.chatHistoryService = chatHistoryService;
         this.redisChatMemoryRepository = redisChatMemoryRepository;
-        this.vueBuildService = vueBuildService;
+        this.vueBuildServiceProvider = vueBuildServiceProvider;
         this.coverImageService = coverImageService;
         this.appImageMapper = appImageMapper;
         this.appAuthService = appAuthService;
@@ -134,7 +135,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         }
         if (CodeGenTypeEnum.VUE.getValue().equals(app.getCodeGenType())) {
             // vue 模式：构建 dist（失败自动修复）→ 拷 dist 到部署目录
-            java.io.File distDir = vueBuildService.build(app.getId(),
+            java.io.File distDir = requireVueBuildService().build(app.getId(),
                     text -> { if (progress != null) progress.accept(text); });
             java.io.File target = java.nio.file.Paths.get(deployRoot(), deployKey).toFile();
             if (!cn.hutool.core.io.FileUtil.exist(target)) {
@@ -160,6 +161,13 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
      */
     private String deployRoot() {
         return codeFileWriteService.getDeployRoot();
+    }
+
+    private VueBuildService requireVueBuildService() {
+        VueBuildService service = vueBuildServiceProvider.getIfAvailable();
+        ThrowUtils.throwIf(service == null, ErrorCode.OPERATION_ERROR,
+                "当前控制面不执行 npm；Vue 构建/预览请使用 Generation Worker 或 Execution Worker");
+        return service;
     }
 
     @Override
@@ -273,6 +281,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         ThrowUtils.throwIf(app == null, ErrorCode.NOT_FOUND_ERROR);
         ThrowUtils.throwIf(!CodeGenTypeEnum.VUE.getValue().equals(app.getCodeGenType()),
                 ErrorCode.PARAMS_ERROR, "非 Vue 工程无法预览构建产物");
+        VueBuildService vueBuildService = requireVueBuildService();
         String html = vueBuildService.readVueDist(app.getId());
         if (html == null) {
             // dist 未构建：同步构建（含自动修复）后再读

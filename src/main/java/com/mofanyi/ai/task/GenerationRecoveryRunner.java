@@ -1,11 +1,13 @@
 package com.mofanyi.ai.task;
 
 import com.mofanyi.model.enums.AppGenerateStatusEnum;
+import com.mofanyi.job.GenerationExecutionCondition;
 import com.mofanyi.service.AppService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -20,6 +22,7 @@ import org.springframework.stereotype.Component;
  */
 @Slf4j
 @Component
+@Conditional(GenerationExecutionCondition.class)
 public class GenerationRecoveryRunner implements ApplicationRunner {
 
     /**

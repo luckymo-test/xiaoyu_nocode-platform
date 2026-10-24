@@ -1,9 +1,11 @@
 package com.mofanyi.ai.tools;
 
 import com.mofanyi.core.ImageMaterialPlanner;
+import com.mofanyi.job.GenerationExecutionCondition;
 import com.mofanyi.core.SiteImageService;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.function.FunctionToolCallback;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -17,6 +19,7 @@ import java.util.List;
  * 预取清单为空（图源不可用等）时才回退成实时搜索。
  */
 @Component
+@Conditional(GenerationExecutionCondition.class)
 public class SearchImageTool {
 
     public record SearchImageRequest(String query, String orientation) {

@@ -19,6 +19,7 @@ public class AppRevisionVO implements Serializable {
     private Long baseRevisionId;
     private String status;
     private String codeGenType;
+    private String stackProfileVersion;
     private String templateBundleId;
     private String templateVersion;
     private String templateHash;

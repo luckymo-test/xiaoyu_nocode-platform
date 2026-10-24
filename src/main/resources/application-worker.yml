@@ -1,0 +1,25 @@
+server:
+  # 不暴露业务 Controller；管理端点走独立端口
+  port: -1
+
+spring:
+  main:
+    lazy-initialization: false
+
+management:
+  server:
+    port: ${CODEGEN_WORKER_MANAGEMENT_PORT:8126}
+  endpoint:
+    health:
+      show-details: always
+
+codegen:
+  jobs:
+    execution-mode: worker
+  generation-worker:
+    consumer-concurrency: ${CODEGEN_WORKER_CONSUMER_CONCURRENCY:2}
+    lease-seconds: ${CODEGEN_WORKER_LEASE_SECONDS:120}
+    cancel-poll-millis: ${CODEGEN_WORKER_CANCEL_POLL_MILLIS:1000}
+  # 浏览器验证在 Phase D 拆到独立 execution-worker；生成 Worker 不启动浏览器。
+  verify:
+    enabled: false
