@@ -65,7 +65,9 @@ public class PlaywrightBrowserVerifier implements BrowserVerifierPort {
         }
         Path projectDir = Path.of(codeFileWriteService.getProjectDir(type, appId))
                 .toAbsolutePath().normalize();
-        File index = projectDir.resolve("index.html").toFile();
+        Path sourceDir = type == CodeGenTypeEnum.VUE
+                ? projectDir.resolve("dist") : projectDir;
+        File index = sourceDir.resolve("index.html").toFile();
         if (!FileUtil.exist(index)) {
             return new RenderVerifier.RenderReport(
                     List.of(), List.of("未找到 index.html，跳过渲染验证"));
@@ -77,7 +79,7 @@ public class PlaywrightBrowserVerifier implements BrowserVerifierPort {
         request.put("verificationId", (jobId == null ? appId : jobId) + "-" + safeStage);
         request.put("jobId", jobId == null ? null : String.valueOf(jobId));
         request.put("revisionId", null);
-        request.put("sourceDir", projectDir.toString());
+        request.put("sourceDir", sourceDir.toString());
         request.put("outputDir", outputDir.toString());
         request.put("stage", safeStage);
         request.put("viewports", List.of(

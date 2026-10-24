@@ -44,8 +44,9 @@ import java.util.List;
  * </ul>
  * 报告落盘到 {@code .agent/verify.json} 供追溯，同时转成文本喂给修复 agent。
  *
- * <p>范围：html / multi_file（vue 预览走 dist 构建产物，暂不在此验证）。
- * 局限：通过 {@code file://} 加载，ES module / fetch 这类需要 http 源的页面可能加载失败。
+ * <p>范围：html / multi_file / vue dist 构建产物。
+ * 局限：通过 {@code file://} 加载，ES module / fetch 这类需要 http 源的页面可能加载失败；
+ * 生产 Playwright Adapter 使用一次性 HTTP 静态源避免该问题。
  */
 @Slf4j
 @Service
@@ -210,7 +211,9 @@ public class RenderVerifier implements BrowserVerifierPort {
             return new RenderReport(results, List.of("参数非法"));
         }
         String projectDir = codeFileWriteService.getProjectDir(type, appId);
-        File index = Paths.get(projectDir, "index.html").toFile();
+        File index = type == CodeGenTypeEnum.VUE
+                ? Paths.get(projectDir, "dist", "index.html").toFile()
+                : Paths.get(projectDir, "index.html").toFile();
         if (!FileUtil.exist(index)) {
             return new RenderReport(results, List.of("未找到 index.html，跳过渲染验证"));
         }

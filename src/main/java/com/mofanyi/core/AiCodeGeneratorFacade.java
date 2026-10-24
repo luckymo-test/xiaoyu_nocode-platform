@@ -44,6 +44,7 @@ public class AiCodeGeneratorFacade {
     private final VueProjectAgent vueProjectAgent;
     private final SiteRepairAgent siteRepairAgent;
     private final SiteModifyAgent siteModifyAgent;
+    private final VueBuildService vueBuildService;
     private final ReasoningProfileRegistry reasoningProfiles;
     /**
      * 生成任务注册表：负责 appId 级互斥与"停止生成"的取消句柄
@@ -80,6 +81,7 @@ public class AiCodeGeneratorFacade {
                                  VueProjectAgent vueProjectAgent,
                                  SiteRepairAgent siteRepairAgent,
                                  SiteModifyAgent siteModifyAgent,
+                                 VueBuildService vueBuildService,
                                  ReasoningProfileRegistry reasoningProfiles,
                                  GenerationTaskRegistry taskRegistry,
                                  BrowserVerifierPort renderVerifier,
@@ -90,6 +92,7 @@ public class AiCodeGeneratorFacade {
         this.vueProjectAgent = vueProjectAgent;
         this.siteRepairAgent = siteRepairAgent;
         this.siteModifyAgent = siteModifyAgent;
+        this.vueBuildService = vueBuildService;
         this.reasoningProfiles = reasoningProfiles;
         this.taskRegistry = taskRegistry;
         this.renderVerifier = renderVerifier;
@@ -153,8 +156,9 @@ public class AiCodeGeneratorFacade {
      */
     private void afterGenerate(CodeGenTypeEnum type, Long appId, Long jobId) {
         if (type == CodeGenTypeEnum.VUE) {
-            // 源码更新后失效旧构建产物，下次预览/部署重新构建
-            codeFileWriteService.deleteVueDist(appId);
+            // Vue 先生成隔离构建产物，再与 HTML/MultiFile 一样执行浏览器验证。
+            vueBuildService.build(appId, null);
+            verifyAndScheduleFix(type, appId, jobId);
             return;
         }
         verifyAndScheduleFix(type, appId, jobId);
@@ -399,7 +403,7 @@ public class AiCodeGeneratorFacade {
      * <p>验证/修复失败都不影响生成结果返回，只记日志与落盘报告。
      */
     private void verifyAndScheduleFix(CodeGenTypeEnum type, Long appId, Long jobId) {
-        if (!renderVerifyEnabled || type == null || type == CodeGenTypeEnum.VUE) {
+        if (!renderVerifyEnabled || type == null) {
             return;
         }
         try {

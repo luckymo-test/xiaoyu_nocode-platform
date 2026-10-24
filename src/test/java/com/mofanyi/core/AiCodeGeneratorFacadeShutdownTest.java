@@ -29,6 +29,7 @@ class AiCodeGeneratorFacadeShutdownTest {
                 mock(VueProjectAgent.class),
                 mock(SiteRepairAgent.class),
                 mock(SiteModifyAgent.class),
+                mock(VueBuildService.class),
                 mock(ReasoningProfileRegistry.class),
                 taskRegistry,
                 mock(BrowserVerifierPort.class),
