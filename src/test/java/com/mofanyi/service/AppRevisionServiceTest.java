@@ -11,6 +11,7 @@ import com.mofanyi.core.AiCallContext;
 import com.mofanyi.ai.reasoning.ReasoningProfile;
 import com.mofanyi.core.CodeFileWriteService;
 import com.mofanyi.entity.App;
+import com.mofanyi.entity.AppArtifact;
 import com.mofanyi.entity.AppRevision;
 import com.mofanyi.entity.GenerationJob;
 import com.mofanyi.mapper.AppArtifactMapper;
@@ -21,6 +22,7 @@ import com.mofanyi.workspace.WorkspaceManager;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.mockito.ArgumentCaptor;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -33,6 +35,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -78,6 +81,9 @@ class AppRevisionServiceTest {
         Files.createDirectories(workspace.resolve(".agent"));
         Files.writeString(workspace.resolve("index.html"), "hello", StandardCharsets.UTF_8);
         Files.writeString(workspace.resolve(".agent/materials.json"), "{}", StandardCharsets.UTF_8);
+        Files.writeString(workspace.resolve(".agent/network-before.json"), "[]", StandardCharsets.UTF_8);
+        Files.writeString(workspace.resolve(".agent/console-before.json"), "[]", StandardCharsets.UTF_8);
+        Files.write(workspace.resolve(".agent/trace-before.zip"), new byte[]{1, 2, 3});
         GenerationJob job = GenerationJob.builder()
                 .id(99L)
                 .appId(7L)
@@ -121,5 +127,11 @@ class AppRevisionServiceTest {
         assertEquals("hello", Files.readString(live.resolve("index.html")));
         verify(appMapper).compareAndSetCurrentRevision(7L, 44L, 55L);
         verify(jobService).recordPublishedRevision(job, 55L);
+        ArgumentCaptor<AppArtifact> artifactCaptor = ArgumentCaptor.forClass(AppArtifact.class);
+        verify(artifactMapper, atLeastOnce()).insertSelective(artifactCaptor.capture());
+        assertTrue(artifactCaptor.getAllValues().stream().map(AppArtifact::getArtifactType)
+                .anyMatch("BROWSER_TRACE_BEFORE"::equals));
+        assertTrue(artifactCaptor.getAllValues().stream().map(AppArtifact::getArtifactType)
+                .anyMatch("NETWORK_FAILURE_BEFORE"::equals));
     }
 }

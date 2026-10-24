@@ -141,6 +141,12 @@ codegen:
   # 交付前渲染验证（plan-agent-pipeline P0-4）：无头浏览器 3 档视口实拍检查图裂/横向溢出/空白页/console 报错
   verify:
     enabled: ${CODEGEN_VERIFY_ENABLED:true}
+  browser:
+    engine: ${CODEGEN_BROWSER_ENGINE:selenium}
+    playwright:
+      url: ${CODEGEN_PLAYWRIGHT_WORKER_URL:http://127.0.0.1:8090}
+      connect-timeout-ms: ${CODEGEN_PLAYWRIGHT_CONNECT_TIMEOUT_MS:3000}
+      read-timeout-ms: ${CODEGEN_PLAYWRIGHT_READ_TIMEOUT_MS:120000}
   # Agent 循环形态（S5）：true=自管循环（逐步预算真正生效）；false=框架内部循环（现状，默认）
   agent:
     self-managed-loop:

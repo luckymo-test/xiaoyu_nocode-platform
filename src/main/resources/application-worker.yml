@@ -20,6 +20,7 @@ codegen:
     consumer-concurrency: ${CODEGEN_WORKER_CONSUMER_CONCURRENCY:2}
     lease-seconds: ${CODEGEN_WORKER_LEASE_SECONDS:120}
     cancel-poll-millis: ${CODEGEN_WORKER_CANCEL_POLL_MILLIS:1000}
-  # 浏览器验证在 Phase D 拆到独立 execution-worker；生成 Worker 不启动浏览器。
+  browser:
+    engine: playwright
   verify:
-    enabled: false
+    enabled: ${CODEGEN_WORKER_RENDER_VERIFY_ENABLED:true}

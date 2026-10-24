@@ -1,0 +1,171 @@
+package com.mofanyi.core;
+
+import cn.hutool.core.io.FileUtil;
+import cn.hutool.core.util.StrUtil;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mofanyi.job.GenerationExecutionCondition;
+import com.mofanyi.model.enums.CodeGenTypeEnum;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Conditional;
+import org.springframework.http.MediaType;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
+import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestClient;
+
+import java.io.File;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Playwright Node Execution Worker 的 HTTP Adapter。
+ *
+ * <p>Java 只提交一个有界工作区路径并接收结构化报告；浏览器进程完全位于 Node Worker。
+ */
+@Slf4j
+@Service
+@Conditional(GenerationExecutionCondition.class)
+@ConditionalOnProperty(name = "codegen.browser.engine", havingValue = "playwright")
+public class PlaywrightBrowserVerifier implements BrowserVerifierPort {
+
+    private final ObjectMapper objectMapper;
+    private final CodeFileWriteService codeFileWriteService;
+    private final RestClient restClient;
+    private final String workerUrl;
+
+    public PlaywrightBrowserVerifier(
+            ObjectMapper objectMapper,
+            CodeFileWriteService codeFileWriteService,
+            @Value("${codegen.browser.playwright.url:http://127.0.0.1:8090}") String workerUrl,
+            @Value("${codegen.browser.playwright.connect-timeout-ms:3000}") int connectTimeoutMs,
+            @Value("${codegen.browser.playwright.read-timeout-ms:120000}") int readTimeoutMs) {
+        this.objectMapper = objectMapper;
+        this.codeFileWriteService = codeFileWriteService;
+        this.workerUrl = StrUtil.removeSuffix(workerUrl, "/");
+        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
+        requestFactory.setConnectTimeout(Duration.ofMillis(Math.max(500, connectTimeoutMs)));
+        requestFactory.setReadTimeout(Duration.ofMillis(Math.max(5_000, readTimeoutMs)));
+        this.restClient = RestClient.builder().requestFactory(requestFactory).build();
+    }
+
+    @Override
+    public RenderVerifier.RenderReport verify(CodeGenTypeEnum type, Long appId) {
+        return verify(type, appId, "latest", null);
+    }
+
+    @Override
+    public RenderVerifier.RenderReport verify(CodeGenTypeEnum type, Long appId, String stage) {
+        return verify(type, appId, stage, null);
+    }
+
+    @Override
+    public RenderVerifier.RenderReport verify(CodeGenTypeEnum type, Long appId,
+                                              String stage, Long jobId) {
+        if (type == null || appId == null || appId <= 0) {
+            return new RenderVerifier.RenderReport(List.of(), List.of("参数非法"));
+        }
+        Path projectDir = Path.of(codeFileWriteService.getProjectDir(type, appId))
+                .toAbsolutePath().normalize();
+        File index = projectDir.resolve("index.html").toFile();
+        if (!FileUtil.exist(index)) {
+            return new RenderVerifier.RenderReport(
+                    List.of(), List.of("未找到 index.html，跳过渲染验证"));
+        }
+        Path outputDir = projectDir.resolve(".agent");
+        String safeStage = StrUtil.blankToDefault(stage, "latest")
+                .replaceAll("[^a-zA-Z0-9_-]", "_");
+        Map<String, Object> request = new LinkedHashMap<>();
+        request.put("verificationId", (jobId == null ? appId : jobId) + "-" + safeStage);
+        request.put("jobId", jobId == null ? null : String.valueOf(jobId));
+        request.put("revisionId", null);
+        request.put("sourceDir", projectDir.toString());
+        request.put("outputDir", outputDir.toString());
+        request.put("stage", safeStage);
+        request.put("viewports", List.of(
+                Map.of("name", "desktop", "label", "桌面", "width", 1440, "height", 900),
+                Map.of("name", "tablet", "label", "平板", "width", 768, "height", 900),
+                Map.of("name", "mobile", "label", "手机", "width", 375, "height", 800)));
+        request.put("checks", List.of(
+                "dom", "console", "network", "screenshot", "trace"));
+        request.put("egressPolicy", "generated-app");
+
+        try {
+            String body = restClient.post()
+                    .uri(workerUrl + "/verify")
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(request)
+                    .retrieve()
+                    .body(String.class);
+            RenderVerifier.RenderReport report = parseReport(body);
+            persistReport(type, appId, report, safeStage);
+            log.info("[verify] Playwright Worker 完成，appId={} stage={} {}",
+                    appId, safeStage, report.summary());
+            return report;
+        } catch (RuntimeException e) {
+            log.warn("[verify] Playwright Worker 不可用，跳过渲染验证，appId={}", appId, e);
+            return new RenderVerifier.RenderReport(
+                    List.of(), List.of("Playwright Worker 不可用：" + safeMessage(e)));
+        }
+    }
+
+    @Override
+    public void persistReport(CodeGenTypeEnum type, Long appId,
+                              RenderVerifier.RenderReport report, String stage) {
+        try {
+            BrowserReportPersistence.persist(
+                    codeFileWriteService, type, appId, report, stage);
+        } catch (RuntimeException e) {
+            log.warn("[verify] Playwright 报告落盘失败，appId={}", appId, e);
+        }
+    }
+
+    RenderVerifier.RenderReport parseReport(String body) {
+        try {
+            JsonNode root = objectMapper.readTree(body);
+            List<RenderVerifier.ViewportResult> viewports = new ArrayList<>();
+            for (JsonNode item : root.path("viewports")) {
+                List<String> broken = strings(item.path("brokenImages"));
+                List<String> consoleErrors = strings(item.path("consoleErrors"));
+                viewports.add(new RenderVerifier.ViewportResult(
+                        item.path("viewport").asText("unknown"),
+                        item.path("label").asText(item.path("viewport").asText("unknown")),
+                        item.path("width").asInt(0),
+                        broken,
+                        item.path("overflow").asBoolean(false),
+                        item.path("scrollWidth").asInt(0),
+                        item.path("clientWidth").asInt(0),
+                        item.path("textLength").asInt(0),
+                        consoleErrors,
+                        nullableText(item.path("screenshotPath")),
+                        nullableText(item.path("screenshotSha256"))));
+            }
+            return new RenderVerifier.RenderReport(viewports, strings(root.path("errors")));
+        } catch (Exception e) {
+            throw new IllegalStateException("Playwright Worker 报告非法：" + safeMessage(e), e);
+        }
+    }
+
+    private static List<String> strings(JsonNode array) {
+        List<String> values = new ArrayList<>();
+        if (array != null && array.isArray()) {
+            array.forEach(node -> values.add(node.asText("")));
+        }
+        return List.copyOf(values);
+    }
+
+    private static String nullableText(JsonNode node) {
+        return node == null || node.isNull() || node.isMissingNode() ? null : node.asText();
+    }
+
+    private static String safeMessage(Throwable error) {
+        return error == null ? "unknown" : StrUtil.maxLength(
+                StrUtil.blankToDefault(error.getMessage(), error.getClass().getSimpleName()), 400);
+    }
+}

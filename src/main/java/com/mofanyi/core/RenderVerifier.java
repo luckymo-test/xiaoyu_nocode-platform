@@ -6,8 +6,11 @@ import cn.hutool.json.JSONArray;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import com.mofanyi.config.ScreenshotProperties;
+import com.mofanyi.job.GenerationExecutionCondition;
 import com.mofanyi.model.enums.CodeGenTypeEnum;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.context.annotation.Conditional;
 import org.openqa.selenium.JavascriptExecutor;
 import org.openqa.selenium.Dimension;
 import org.openqa.selenium.WebDriver;
@@ -20,7 +23,6 @@ import org.openqa.selenium.TakesScreenshot;
 import org.springframework.stereotype.Service;
 
 import java.io.File;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Paths;
 import java.nio.file.Path;
 import java.security.MessageDigest;
@@ -47,7 +49,10 @@ import java.util.List;
  */
 @Slf4j
 @Service
-public class RenderVerifier {
+@Conditional(GenerationExecutionCondition.class)
+@ConditionalOnProperty(name = "codegen.browser.engine",
+        havingValue = "selenium", matchIfMissing = true)
+public class RenderVerifier implements BrowserVerifierPort {
 
     /**
      * 3 档视口
@@ -192,10 +197,12 @@ public class RenderVerifier {
     /**
      * 渲染验证：逐视口渲染并采集问题。浏览器不可用时返回 report.isUsable()==false。
      */
+    @Override
     public RenderReport verify(CodeGenTypeEnum type, Long appId) {
         return verify(type, appId, "latest");
     }
 
+    @Override
     public RenderReport verify(CodeGenTypeEnum type, Long appId, String stage) {
         List<ViewportResult> results = new ArrayList<>();
         List<String> errors = new ArrayList<>();
@@ -241,37 +248,10 @@ public class RenderVerifier {
      *
      * @param stage 阶段标识，如 before / after
      */
+    @Override
     public void persistReport(CodeGenTypeEnum type, Long appId, RenderReport report, String stage) {
-        if (report == null) {
-            return;
-        }
         try {
-            JSONObject root = new JSONObject();
-            root.set("generatedAt", java.time.LocalDateTime.now().toString());
-            root.set("hasProblems", report.hasProblems());
-            JSONArray arr = new JSONArray();
-            if (report.viewports() != null) {
-                for (ViewportResult v : report.viewports()) {
-                    JSONObject o = new JSONObject();
-                    o.set("viewport", v.name());
-                    o.set("width", v.width());
-                    o.set("brokenImages", v.brokenImages());
-                    o.set("overflow", v.overflow());
-                    o.set("scrollWidth", v.scrollWidth());
-                    o.set("clientWidth", v.clientWidth());
-                    o.set("textLength", v.textLength());
-                    o.set("consoleErrors", v.consoleErrors());
-                    o.set("screenshotPath", v.screenshotPath());
-                    o.set("screenshotSha256", v.screenshotSha256());
-                    arr.add(o);
-                }
-            }
-            root.set("viewports", arr);
-            root.set("errors", report.errors());
-            String projectDir = codeFileWriteService.getProjectDir(type, appId);
-            File out = Paths.get(projectDir, ".agent", "verify-" + stage + ".json").toFile();
-            FileUtil.mkParentDirs(out);
-            FileUtil.writeString(root.toStringPretty(), out, StandardCharsets.UTF_8);
+            BrowserReportPersistence.persist(codeFileWriteService, type, appId, report, stage);
         } catch (RuntimeException e) {
             log.warn("[verify] 报告落盘失败，appId={}", appId, e);
         }

@@ -6,6 +6,7 @@ import com.mofanyi.ai.VueProjectAgent;
 import com.mofanyi.controller.AiChatController;
 import com.mofanyi.controller.GenerationJobController;
 import com.mofanyi.core.AiCodeGeneratorFacade;
+import com.mofanyi.core.BrowserVerifierPort;
 import com.mofanyi.core.VueBuildService;
 import com.mofanyi.job.GenerationJobDispatcher;
 import com.mofanyi.job.GenerationJobRunner;
@@ -36,6 +37,7 @@ class ApiProcessBoundaryTest {
                 GenerationJobRunner.class,
                 GenerationJobDispatcher.class,
                 AiCodeGeneratorFacade.class,
+                BrowserVerifierPort.class,
                 AgentToolLoop.class,
                 VueProjectAgent.class,
                 SiteRepairAgent.class,

@@ -18,11 +18,15 @@ public class GenerationWorkerConfigurationValidator implements InitializingBean 
     @Value("${codegen.verify.enabled:false}")
     private boolean renderVerifyEnabled;
 
+    @Value("${codegen.browser.engine:selenium}")
+    private String browserEngine;
+
     @Override
     public void afterPropertiesSet() {
-        if (renderVerifyEnabled) {
+        if (renderVerifyEnabled && !"playwright".equalsIgnoreCase(browserEngine)) {
             throw new IllegalStateException(
-                    "Generation Worker 不允许启动浏览器；请关闭 codegen.verify.enabled");
+                    "Generation Worker 不允许启动本地 Selenium；"
+                            + "请改用 codegen.browser.engine=playwright");
         }
     }
 }

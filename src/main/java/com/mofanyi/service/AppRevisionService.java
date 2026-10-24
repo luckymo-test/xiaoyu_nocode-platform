@@ -226,6 +226,20 @@ public class AppRevisionService {
                 handle.root().resolve(".agent/verify-before.json"), "application/json", "{}");
         addFileArtifact(job, revision, artifacts, artifactRoot, "RENDER_REPORT_AFTER",
                 handle.root().resolve(".agent/verify-after.json"), "application/json", "{}");
+        addFileArtifact(job, revision, artifacts, artifactRoot, "NETWORK_FAILURE_BEFORE",
+                handle.root().resolve(".agent/network-before.json"), "application/json", "{}");
+        addFileArtifact(job, revision, artifacts, artifactRoot, "NETWORK_FAILURE_AFTER",
+                handle.root().resolve(".agent/network-after.json"), "application/json", "{}");
+        addFileArtifact(job, revision, artifacts, artifactRoot, "CONSOLE_ERROR_BEFORE",
+                handle.root().resolve(".agent/console-before.json"), "application/json", "{}");
+        addFileArtifact(job, revision, artifacts, artifactRoot, "CONSOLE_ERROR_AFTER",
+                handle.root().resolve(".agent/console-after.json"), "application/json", "{}");
+        addNamedFileArtifact(job, revision, artifacts, artifactRoot, "BROWSER_TRACE_BEFORE",
+                handle.root().resolve(".agent/trace-before.zip"),
+                "browser-trace-before.zip", "application/zip");
+        addNamedFileArtifact(job, revision, artifacts, artifactRoot, "BROWSER_TRACE_AFTER",
+                handle.root().resolve(".agent/trace-after.zip"),
+                "browser-trace-after.zip", "application/zip");
         addScreenshotArtifacts(job, revision, artifacts, artifactRoot,
                 handle.root().resolve(".agent/screenshots"));
         addFileArtifact(job, revision, artifacts, artifactRoot, "VISUAL_DIFF",
@@ -262,6 +276,18 @@ public class AppRevisionService {
         ArtifactStore.StoredArtifact stored = artifactStore.storeFile(
                 artifactRoot, name, source, mimeType);
         artifacts.add(newArtifact(job, revision, type, stored, metadata));
+    }
+
+    private void addNamedFileArtifact(GenerationJob job, AppRevision revision,
+                                      List<AppArtifact> artifacts, Path artifactRoot,
+                                      String type, Path source, String name, String mimeType) {
+        if (!Files.isRegularFile(source)) {
+            return;
+        }
+        ArtifactStore.StoredArtifact stored = artifactStore.storeFile(
+                artifactRoot, name, source, mimeType);
+        artifacts.add(newArtifact(job, revision, type, stored,
+                "{\"source\":\"" + source.getFileName() + "\"}"));
     }
 
     private void addScreenshotArtifacts(GenerationJob job, AppRevision revision,

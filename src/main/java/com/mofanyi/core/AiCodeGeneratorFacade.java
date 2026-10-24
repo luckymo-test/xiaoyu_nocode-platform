@@ -49,7 +49,7 @@ public class AiCodeGeneratorFacade {
      * 生成任务注册表：负责 appId 级互斥与"停止生成"的取消句柄
      */
     private final GenerationTaskRegistry taskRegistry;
-    private final RenderVerifier renderVerifier;
+    private final BrowserVerifierPort renderVerifier;
 
     /**
      * 渲染修复执行器：交付后异步修复（见 {@link #runRenderFix}）
@@ -82,7 +82,7 @@ public class AiCodeGeneratorFacade {
                                  SiteModifyAgent siteModifyAgent,
                                  ReasoningProfileRegistry reasoningProfiles,
                                  GenerationTaskRegistry taskRegistry,
-                                 RenderVerifier renderVerifier,
+                                 BrowserVerifierPort renderVerifier,
                                  @Qualifier("renderFixExecutor") ExecutorService renderFixExecutor,
                                  ThreadPoolExecutor vueThreadPoolExecutor) {
         this.codeFileWriteService = codeFileWriteService;
@@ -403,7 +403,8 @@ public class AiCodeGeneratorFacade {
             return;
         }
         try {
-            RenderVerifier.RenderReport report = renderVerifier.verify(type, appId, "before");
+            RenderVerifier.RenderReport report =
+                    renderVerifier.verify(type, appId, "before", jobId);
             renderVerifier.persistReport(type, appId, report, "before");
             if (!report.isUsable() || !report.hasProblems()) {
                 renderFixStatus.put(appId, "ok");
@@ -438,7 +439,8 @@ public class AiCodeGeneratorFacade {
             siteRepairAgent.fixRenderIssues(type, appId, issueText,
                     callContext(appId, "render_fix", jobId), null,
                     reasoningProfiles.defaultReasoningLevel());
-            RenderVerifier.RenderReport after = renderVerifier.verify(type, appId, "after");
+            RenderVerifier.RenderReport after =
+                    renderVerifier.verify(type, appId, "after", jobId);
             renderVerifier.persistReport(type, appId, after, "after");
             if (visualRegressionService != null) {
                 visualRegressionService.compareAndPersist(codeFileWriteService, type, appId);

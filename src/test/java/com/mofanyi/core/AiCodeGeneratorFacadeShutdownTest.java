@@ -31,7 +31,7 @@ class AiCodeGeneratorFacadeShutdownTest {
                 mock(SiteModifyAgent.class),
                 mock(ReasoningProfileRegistry.class),
                 taskRegistry,
-                mock(RenderVerifier.class),
+                mock(BrowserVerifierPort.class),
                 renderFixExecutor,
                 generationPool);
 
