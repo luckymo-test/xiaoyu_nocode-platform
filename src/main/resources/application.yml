@@ -75,6 +75,9 @@ management:
 
 # 代码生成文件临时目录与部署配置
 codegen:
+  node:
+    # 默认使用 PATH 中与应用 Node 版本匹配的 npm shim；仅在离线定制环境显式开启。
+    use-explicit-cli: ${CODEGEN_NODE_USE_EXPLICIT_CLI:false}
   model:
     routing:
       enabled: ${CODEGEN_MODEL_ROUTING_ENABLED:false}
@@ -134,6 +137,27 @@ codegen:
     consumer-concurrency: ${CODEGEN_WORKER_CONSUMER_CONCURRENCY:2}
     lease-seconds: ${CODEGEN_WORKER_LEASE_SECONDS:120}
     cancel-poll-millis: ${CODEGEN_WORKER_CANCEL_POLL_MILLIS:1000}
+  sandbox:
+    enabled: ${CODEGEN_SANDBOX_ENABLED:true}
+    max-source-files: ${CODEGEN_SANDBOX_MAX_SOURCE_FILES:2000}
+    max-source-bytes: ${CODEGEN_SANDBOX_MAX_SOURCE_BYTES:52428800}
+    max-output-files: ${CODEGEN_SANDBOX_MAX_OUTPUT_FILES:10000}
+    max-output-bytes: ${CODEGEN_SANDBOX_MAX_OUTPUT_BYTES:209715200}
+    command-timeout-seconds: ${CODEGEN_SANDBOX_COMMAND_TIMEOUT_SECONDS:300}
+    build:
+      require-lockfile: ${CODEGEN_SANDBOX_REQUIRE_LOCKFILE:true}
+      ignore-scripts: ${CODEGEN_SANDBOX_IGNORE_SCRIPTS:true}
+      registry: ${CODEGEN_SANDBOX_NPM_REGISTRY:https://registry.npmmirror.com}
+      allowed-packages: [vue, vite, "@vitejs/plugin-vue", typescript, vue-tsc, pinia, vue-router, axios, gsap]
+    egress:
+      allowed-hosts:
+        - 127.0.0.1
+        - localhost
+        - yun-picture-1419359718.cos.ap-shanghai.myqcloud.com
+        - images.pexels.com
+        - cdn.pixabay.com
+        - fonts.googleapis.com
+        - fonts.gstatic.com
   file:
     tmp-root: ${CODEGEN_TMP_ROOT:D:\IDEAproject\xiaoyu_zerocode\tmp}
     deploy-root: ${CODEGEN_DEPLOY_ROOT:D:\IDEAproject\xiaoyu_zerocode\deploy}

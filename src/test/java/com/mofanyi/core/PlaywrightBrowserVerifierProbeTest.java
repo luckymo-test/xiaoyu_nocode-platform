@@ -1,6 +1,7 @@
 package com.mofanyi.core;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mofanyi.config.SandboxProperties;
 import com.mofanyi.model.enums.CodeGenTypeEnum;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -31,12 +32,14 @@ class PlaywrightBrowserVerifierProbeTest {
                 <body><h1>Playwright Java Port 探针</h1>
                 <p>应检出图裂与横向溢出。</p>
                 <img src="file:///definitely/not/exist/broken.png" alt="broken">
+                <img src="http://169.254.169.254/latest/meta-data/" alt="metadata">
                 <div class="wide"></div></body></html>
                 """);
         PlaywrightBrowserVerifier verifier = new PlaywrightBrowserVerifier(
                 new ObjectMapper(), files,
                 new HttpBrowserVerificationTransport(
-                        "http://127.0.0.1:8090", 3_000, 120_000));
+                        "http://127.0.0.1:8090", 3_000, 120_000),
+                new SandboxProperties());
 
         RenderVerifier.RenderReport report =
                 verifier.verify(CodeGenTypeEnum.HTML, appId, "probe", 99L);
@@ -47,5 +50,7 @@ class PlaywrightBrowserVerifierProbeTest {
         Path agentDir = Path.of(files.getProjectDir(CodeGenTypeEnum.HTML, appId), ".agent");
         assertTrue(Files.isRegularFile(agentDir.resolve("trace-probe.zip")));
         assertFalse(Files.readString(agentDir.resolve("network-probe.json")).isBlank());
+        String verifyJson = Files.readString(agentDir.resolve("verify-probe.json"));
+        assertTrue(verifyJson.contains("EGRESS_BLOCKED 169.254.169.254"));
     }
 }

@@ -2,8 +2,10 @@ package com.mofanyi.core;
 
 import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.util.StrUtil;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mofanyi.ai.SiteRepairAgent;
 import com.mofanyi.ai.reasoning.ReasoningProfileRegistry;
+import com.mofanyi.config.SandboxProperties;
 import com.mofanyi.exception.BusinessException;
 import com.mofanyi.exception.ErrorCode;
 import com.mofanyi.exception.ThrowUtils;
@@ -19,9 +21,14 @@ import java.io.File;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.regex.Matcher;
@@ -41,16 +48,16 @@ public class VueBuildService {
      */
     private static final int MAX_FIX_ATTEMPTS = 3;
 
-    /**
-     * 单条 npm 命令执行超时（毫秒）
-     */
-    private static final long EXEC_TIMEOUT_MS = 300_000;
+    private static final int MAX_LOG_CHARS = 200_000;
 
     private static final boolean IS_WINDOWS = System.getProperty("os.name", "").toLowerCase().contains("win");
 
     private final CodeFileWriteService codeFileWriteService;
     private final SiteRepairAgent siteRepairAgent;
     private final ReasoningProfileRegistry reasoningProfiles;
+    private final SandboxProperties sandboxProperties;
+    private final SandboxWorkspaceGuard sandboxGuard;
+    private final ObjectMapper objectMapper;
 
     /**
      * node 可执行文件绝对路径；为空时用 PATH 里的 node。
@@ -66,12 +73,21 @@ public class VueBuildService {
     @Value("${codegen.node.npmCli:}")
     private String npmCliPath;
 
+    @Value("${codegen.node.use-explicit-cli:false}")
+    private boolean useExplicitNodeCli;
+
     public VueBuildService(CodeFileWriteService codeFileWriteService,
                            SiteRepairAgent siteRepairAgent,
-                           ReasoningProfileRegistry reasoningProfiles) {
+                           ReasoningProfileRegistry reasoningProfiles,
+                           SandboxProperties sandboxProperties,
+                           SandboxWorkspaceGuard sandboxGuard,
+                           ObjectMapper objectMapper) {
         this.codeFileWriteService = codeFileWriteService;
         this.siteRepairAgent = siteRepairAgent;
         this.reasoningProfiles = reasoningProfiles;
+        this.sandboxProperties = sandboxProperties;
+        this.sandboxGuard = sandboxGuard;
+        this.objectMapper = objectMapper;
     }
 
     /**
@@ -90,41 +106,76 @@ public class VueBuildService {
      */
     public File build(Long appId, BuildProgress progress) {
         ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
-        String projectDir = codeFileWriteService.getLiveProjectDir(CodeGenTypeEnum.VUE, appId);
-        ThrowUtils.throwIf(!FileUtil.exist(Paths.get(projectDir).toFile()), ErrorCode.OPERATION_ERROR, "应用尚未生成代码，请先生成");
+        Path liveDir = Path.of(codeFileWriteService.getLiveProjectDir(
+                CodeGenTypeEnum.VUE, appId)).toAbsolutePath().normalize();
+        ThrowUtils.throwIf(!Files.isDirectory(liveDir), ErrorCode.OPERATION_ERROR,
+                "应用尚未生成代码，请先生成");
+        long startedAt = System.currentTimeMillis();
+        Path sandbox = null;
+        SandboxWorkspaceGuard.Stats sourceStats = null;
+        SandboxWorkspaceGuard.Stats outputStats = null;
+        ExecResult install = null;
+        ExecResult build = null;
+        String failureReason = null;
+        try {
+            sourceStats = sandboxGuard.validateSource(liveDir);
+            sandbox = sandboxGuard.createBuildWorkspace(
+                    codeFileWriteService.getTmpRoot(), appId);
+            sandboxGuard.syncSource(liveDir, sandbox);
 
-        notify(progress, "START_INSTALL");
-        ExecResult install = exec(projectDir, "install");
-        if (!install.success()) {
-            throw new BusinessException(ErrorCode.OPERATION_ERROR,
-                    "npm install 失败：" + truncate(extractError(install.all())));
-        }
-
-        notify(progress, "START_BUILD");
-        ExecResult build = exec(projectDir, "run build");
-        for (int attempt = 0; attempt < MAX_FIX_ATTEMPTS && !build.success(); attempt++) {
-            String error = extractError(build.all());
-            notify(progress, "BUILD_FAILED|" + truncate(error, 300));
-            // 修复 agent：根据错误日志覆盖出问题文件
-            try {
-                siteRepairAgent.fixBuildError(appId, error,
-                        AiCallContext.of(appId, null, "fix"),
-                        (path, size, content) -> notify(progress, "FIXED|" + path),
-                        reasoningProfiles.defaultReasoningLevel());
-            } catch (RuntimeException e) {
-                log.warn("Vue 自动修复失败, appId={}, attempt={}", appId, attempt + 1, e);
-                notify(progress, "FIX_FAILED|" + truncate(e.getMessage(), 200));
-                break;
+            notify(progress, "START_INSTALL");
+            install = exec(sandbox, "install");
+            if (!install.success()) {
+                failureReason = install.timedOut()
+                        ? "npm install 超时" : "npm install 失败：" + extractError(install.all());
+                throw new BusinessException(ErrorCode.OPERATION_ERROR, failureReason);
             }
-            notify(progress, "REBUILDING");
-            build = exec(projectDir, "run build");
+
+            notify(progress, "START_BUILD");
+            build = exec(sandbox, "run build");
+            for (int attempt = 0; attempt < MAX_FIX_ATTEMPTS && !build.success(); attempt++) {
+                String error = build.timedOut()
+                        ? "构建命令超时" : extractError(build.all());
+                notify(progress, "BUILD_FAILED|" + truncate(error, 300));
+                try {
+                    siteRepairAgent.fixBuildError(appId, error,
+                            AiCallContext.of(appId, null, "fix"),
+                            (path, size, content) -> notify(progress, "FIXED|" + path),
+                            reasoningProfiles.defaultReasoningLevel());
+                } catch (RuntimeException e) {
+                    log.warn("Vue 自动修复失败, appId={}, attempt={}", appId, attempt + 1, e);
+                    notify(progress, "FIX_FAILED|" + truncate(e.getMessage(), 200));
+                    break;
+                }
+                sourceStats = sandboxGuard.validateSource(liveDir);
+                sandboxGuard.syncSource(liveDir, sandbox);
+                notify(progress, "REBUILDING");
+                build = exec(sandbox, "run build");
+            }
+            if (!build.success()) {
+                failureReason = build.timedOut() ? "构建命令超时"
+                        : "构建失败（已自动修复 " + MAX_FIX_ATTEMPTS + " 次）："
+                        + truncate(extractError(build.all()));
+                throw new BusinessException(ErrorCode.OPERATION_ERROR, failureReason);
+            }
+
+            Path sandboxDist = sandbox.resolve("dist");
+            outputStats = sandboxGuard.validateOutput(sandboxDist);
+            sandboxGuard.replaceOutput(sandboxDist, liveDir.resolve("dist"));
+            notify(progress, "BUILD_OK");
+            writeBuildReport(appId, startedAt, true, null,
+                    sourceStats, outputStats, install, build);
+            return liveDir.resolve("dist").toFile();
+        } catch (RuntimeException e) {
+            if (failureReason == null) {
+                failureReason = truncate(e.getMessage(), 1_000);
+            }
+            writeBuildReport(appId, startedAt, false, failureReason,
+                    sourceStats, outputStats, install, build);
+            throw e;
+        } finally {
+            sandboxGuard.cleanup(sandbox);
         }
-        if (!build.success()) {
-            throw new BusinessException(ErrorCode.OPERATION_ERROR,
-                    "构建失败（已自动修复 " + MAX_FIX_ATTEMPTS + " 次）：" + truncate(extractError(build.stderr())));
-        }
-        notify(progress, "BUILD_OK");
-        return Paths.get(projectDir, "dist").toFile();
     }
 
     /**
@@ -177,64 +228,135 @@ public class VueBuildService {
      * 优先 node.exe <npm-cli.js> <args...>（不依赖 PATH），否则回退 npm.cmd。
      * args 按空格拆成多个 token（如 "run build" → run + build）。
      */
-    private ExecResult exec(String workDir, String args) {
-        List<String> argTokens = args == null ? List.of() : List.of(args.trim().split("\\s+"));
+    private ExecResult exec(Path workDir, String action) {
+        List<String> argTokens = new ArrayList<>();
+        if ("install".equals(action)) {
+            argTokens.add("install");
+            if (sandboxProperties.getBuild().isIgnoreScripts()) {
+                argTokens.add("--ignore-scripts");
+            }
+            argTokens.add("--no-audit");
+            argTokens.add("--no-fund");
+            if (StrUtil.isNotBlank(sandboxProperties.getBuild().getRegistry())) {
+                argTokens.add("--registry=" + sandboxProperties.getBuild().getRegistry());
+            }
+        } else {
+            argTokens.add("run");
+            argTokens.add("build");
+        }
         List<String> cmd = new ArrayList<>();
-        if (StrUtil.isNotBlank(nodeCommand) && StrUtil.isNotBlank(npmCliPath)) {
-            // node.exe <npm-cli.js> <args...>
+        if (useExplicitNodeCli
+                && StrUtil.isNotBlank(nodeCommand) && StrUtil.isNotBlank(npmCliPath)) {
             cmd.add(nodeCommand);
             cmd.add(npmCliPath);
             cmd.addAll(argTokens);
         } else if (IS_WINDOWS) {
-            cmd.add("cmd");
+            cmd.add("cmd.exe");
+            cmd.add("/d");
+            cmd.add("/s");
             cmd.add("/c");
-            cmd.add(StrUtil.isNotBlank(nodeCommand) ? nodeCommand : "npm.cmd");
-            cmd.add(args);
+            cmd.add("npm.cmd");
+            cmd.addAll(argTokens);
         } else {
-            cmd.add(StrUtil.isNotBlank(nodeCommand) ? nodeCommand : "npm");
+            cmd.add("npm");
             cmd.addAll(argTokens);
         }
+        long timeoutMillis = Math.max(30,
+                sandboxProperties.getCommandTimeoutSeconds()) * 1_000L;
         try {
             ProcessBuilder pb = new ProcessBuilder(cmd);
-            pb.directory(new File(workDir));
+            pb.directory(workDir.toFile());
             pb.redirectErrorStream(false);
+            sanitizeEnvironment(pb.environment(), workDir);
             Process process = pb.start();
-            // 读 stdout / stderr（虚拟线程防管道阻塞，创建成本低，适合高并发）
-            StringBuilder stdout = new StringBuilder();
-            StringBuilder stderr = new StringBuilder();
+            BoundedOutput stdout = new BoundedOutput(MAX_LOG_CHARS);
+            BoundedOutput stderr = new BoundedOutput(MAX_LOG_CHARS);
             Thread outThread = Thread.ofVirtual().name("vue-build-out")
                     .start(() -> readAll(process.getInputStream(), stdout));
             Thread errThread = Thread.ofVirtual().name("vue-build-err")
                     .start(() -> readAll(process.getErrorStream(), stderr));
-            boolean ok = process.waitFor(EXEC_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+            boolean ok = process.waitFor(timeoutMillis, TimeUnit.MILLISECONDS);
             if (!ok) {
-                process.destroyForcibly();
-                throw new BusinessException(ErrorCode.OPERATION_ERROR, "命令执行超时: npm " + args);
+                killTree(process);
+                outThread.join(3000);
+                errThread.join(3000);
+                return new ExecResult(false, stdout.text(), stderr.text(), true);
             }
             outThread.join(3000);
             errThread.join(3000);
-            return new ExecResult(process.exitValue() == 0, stdout.toString(), stderr.toString());
-        } catch (BusinessException e) {
-            throw e;
+            return new ExecResult(process.exitValue() == 0,
+                    stdout.text(), stderr.text(), false);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new BusinessException(ErrorCode.OPERATION_ERROR,
+                    "构建命令被中断：" + e.getMessage());
         } catch (Exception e) {
-            throw new BusinessException(ErrorCode.OPERATION_ERROR, "执行 npm " + args + " 失败: " + e.getMessage());
+            throw new BusinessException(ErrorCode.OPERATION_ERROR,
+                    "执行 npm " + action + " 失败: " + e.getMessage());
         }
     }
 
     /**
      * 读取流到 StringBuilder
      */
-    private void readAll(InputStream in, StringBuilder sb) {
+    private void readAll(InputStream in, BoundedOutput output) {
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(in, StandardCharsets.UTF_8))) {
             String line;
             while ((line = reader.readLine()) != null) {
-                if (sb.length() > 0) {
-                    sb.append('\n');
-                }
-                sb.append(line);
+                output.append(line);
             }
         } catch (Exception ignore) {
             // 读取失败不影响主流程
+        }
+    }
+
+    private void sanitizeEnvironment(Map<String, String> environment, Path sandbox) {
+        environment.keySet().removeIf(VueBuildService::sensitiveEnvironmentKey);
+        Path cache = sandbox.resolve(".npm-cache");
+        Path temp = sandbox.resolve(".tmp");
+        try {
+            Files.createDirectories(cache);
+            Files.createDirectories(temp);
+        } catch (Exception e) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR,
+                    "创建 npm 隔离目录失败：" + e.getMessage());
+        }
+        environment.put("TEMP", temp.toString());
+        environment.put("TMP", temp.toString());
+        environment.put("NPM_CONFIG_CACHE", cache.toString());
+        environment.put("NPM_CONFIG_REGISTRY", sandboxProperties.getBuild().getRegistry());
+        environment.put("CI", "1");
+    }
+
+    private static boolean sensitiveEnvironmentKey(String key) {
+        String upper = key == null ? "" : key.toUpperCase();
+        return upper.contains("API_KEY")
+                || upper.contains("SECRET")
+                || upper.contains("TOKEN")
+                || upper.contains("PASSWORD")
+                || upper.contains("CREDENTIAL")
+                || upper.startsWith("DEEPSEEK_")
+                || upper.startsWith("OPENAI_")
+                || upper.startsWith("TENCENT")
+                || upper.startsWith("COS_")
+                || upper.startsWith("MYSQL_")
+                || upper.startsWith("REDIS_")
+                || upper.startsWith("AWS_");
+    }
+
+    private void killTree(Process process) {
+        process.descendants().forEach(handle -> {
+            try {
+                handle.destroyForcibly();
+            } catch (Exception ignore) {
+                // 尽力回收后代进程
+            }
+        });
+        process.destroyForcibly();
+        try {
+            process.waitFor(5, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -282,6 +404,35 @@ public class VueBuildService {
         }
     }
 
+    private void writeBuildReport(Long appId, long startedAt, boolean success,
+                                  String failureReason,
+                                  SandboxWorkspaceGuard.Stats sourceStats,
+                                  SandboxWorkspaceGuard.Stats outputStats,
+                                  ExecResult install, ExecResult build) {
+        try {
+            Map<String, Object> report = new LinkedHashMap<>();
+            report.put("generatedAt", LocalDateTime.now().toString());
+            report.put("appId", String.valueOf(appId));
+            report.put("success", success);
+            report.put("failureReason", failureReason);
+            report.put("durationMs", System.currentTimeMillis() - startedAt);
+            report.put("sandboxEnabled", sandboxProperties.isEnabled());
+            report.put("sourceFiles", sourceStats == null ? 0 : sourceStats.files());
+            report.put("sourceBytes", sourceStats == null ? 0 : sourceStats.bytes());
+            report.put("outputFiles", outputStats == null ? 0 : outputStats.files());
+            report.put("outputBytes", outputStats == null ? 0 : outputStats.bytes());
+            report.put("installTimedOut", install != null && install.timedOut());
+            report.put("buildTimedOut", build != null && build.timedOut());
+            Path out = Path.of(codeFileWriteService.getLiveProjectDir(
+                    CodeGenTypeEnum.VUE, appId), ".agent", "build-report.json");
+            Files.createDirectories(out.getParent());
+            objectMapper.writerWithDefaultPrettyPrinter()
+                    .writeValue(out.toFile(), report);
+        } catch (Exception e) {
+            log.warn("[build] 构建报告落盘失败，appId={}", appId, e);
+        }
+    }
+
     private String truncate(String s) {
         return truncate(s, 800);
     }
@@ -296,7 +447,8 @@ public class VueBuildService {
     /**
      * 命令执行结果
      */
-    private record ExecResult(boolean success, String stdout, String stderr) {
+    private record ExecResult(boolean success, String stdout, String stderr,
+                              boolean timedOut) {
 
         /**
          * 合并 stdout 与 stderr（错误可能输出到任意流）
@@ -305,6 +457,44 @@ public class VueBuildService {
             String out = stdout == null ? "" : stdout;
             String err = stderr == null ? "" : stderr;
             return err.isBlank() ? out : out + "\n" + err;
+        }
+    }
+
+    private static final class BoundedOutput {
+        private final int maxChars;
+        private final StringBuilder value;
+        private boolean truncated;
+
+        private BoundedOutput(int maxChars) {
+            this.maxChars = maxChars;
+            this.value = new StringBuilder(Math.min(maxChars, 16_384));
+        }
+
+        synchronized void append(String line) {
+            if (truncated) {
+                return;
+            }
+            int needed = (value.length() == 0 ? 0 : 1) + (line == null ? 0 : line.length());
+            if (value.length() + needed > maxChars) {
+                int remaining = maxChars - value.length();
+                if (remaining > 1) {
+                    if (value.length() > 0) {
+                        value.append('\n');
+                    }
+                    value.append(StrUtil.maxLength(line, Math.max(0, remaining - 2)));
+                }
+                value.append("\n…(输出已截断)");
+                truncated = true;
+                return;
+            }
+            if (value.length() > 0) {
+                value.append('\n');
+            }
+            value.append(line);
+        }
+
+        synchronized String text() {
+            return value.toString();
         }
     }
 }

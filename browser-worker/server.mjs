@@ -6,14 +6,20 @@ import { chromium } from "playwright-core";
 import { createClient } from "redis";
 
 const PORT = Number(process.env.BROWSER_WORKER_PORT || 8090);
-const WORKSPACE_ROOT = path.resolve(
+const WORKSPACE_ROOT_RAW = path.resolve(
   process.env.BROWSER_WORKER_WORKSPACE_ROOT || path.join(process.cwd(), "..", "tmp")
 );
+await fs.mkdir(WORKSPACE_ROOT_RAW, { recursive: true });
+const WORKSPACE_ROOT = await fs.realpath(WORKSPACE_ROOT_RAW);
 const BROWSER_CHANNEL = process.env.BROWSER_WORKER_CHANNEL || "msedge";
 const BROWSER_EXECUTABLE = process.env.BROWSER_WORKER_EXECUTABLE || "";
 const MAX_BODY_BYTES = 1024 * 1024;
 const SETTLE_MILLIS = Number(process.env.BROWSER_WORKER_SETTLE_MILLIS || 1200);
 const MAX_EVENTS = 50;
+const MAX_SOURCE_FILES = Number(process.env.BROWSER_WORKER_MAX_SOURCE_FILES || 2000);
+const MAX_SOURCE_BYTES = Number(process.env.BROWSER_WORKER_MAX_SOURCE_BYTES || 52428800);
+const MAX_OUTPUT_FILES = Number(process.env.BROWSER_WORKER_MAX_OUTPUT_FILES || 10000);
+const MAX_OUTPUT_BYTES = Number(process.env.BROWSER_WORKER_MAX_OUTPUT_BYTES || 209715200);
 const REDIS_URL = process.env.BROWSER_WORKER_REDIS_URL || "redis://127.0.0.1:6379";
 const REDIS_STREAM = process.env.BROWSER_WORKER_REDIS_STREAM
   || "codegen:browser-verify:requests";
@@ -52,16 +58,63 @@ function json(res, status, body) {
   res.end(payload);
 }
 
-function scopedPath(value, label) {
+async function scopedPath(value, label, create = false) {
   if (!value || typeof value !== "string") {
     throw new Error(`${label} 不能为空`);
   }
   const resolved = path.resolve(value);
-  const relative = path.relative(WORKSPACE_ROOT, resolved);
+  if (create) {
+    await fs.mkdir(resolved, { recursive: true });
+  }
+  const real = await fs.realpath(resolved);
+  const relative = path.relative(WORKSPACE_ROOT, real);
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
     throw new Error(`${label} 超出允许的工作区根目录`);
   }
-  return resolved;
+  return real;
+}
+
+async function directoryStats(root, skippedNames = new Set()) {
+  let files = 0;
+  let bytes = 0;
+  async function walk(current) {
+    const entries = await fs.readdir(current, { withFileTypes: true });
+    for (const entry of entries) {
+      if (skippedNames.has(entry.name)) {
+        continue;
+      }
+      const target = path.join(current, entry.name);
+      const stat = await fs.lstat(target);
+      if (stat.isSymbolicLink()) {
+        throw new Error(`工作区包含不允许的符号链接：${path.relative(root, target)}`);
+      }
+      if (entry.isDirectory()) {
+        await walk(target);
+      } else if (entry.isFile()) {
+        files++;
+        bytes += stat.size;
+      }
+    }
+  }
+  await walk(root);
+  return { files, bytes };
+}
+
+function assertQuota(label, stats, maxFiles, maxBytes) {
+  if (stats.files > maxFiles) {
+    throw new Error(`${label} 文件数超限：${stats.files}/${maxFiles}`);
+  }
+  if (stats.bytes > maxBytes) {
+    throw new Error(`${label} 大小超限：${stats.bytes}/${maxBytes}`);
+  }
+}
+
+function hostAllowed(host, allowedHosts) {
+  const normalized = String(host || "").toLowerCase();
+  return allowedHosts.some((allowed) => {
+    const suffix = String(allowed || "").toLowerCase();
+    return normalized === suffix || normalized.endsWith(`.${suffix}`);
+  });
 }
 
 async function readJson(req) {
@@ -93,9 +146,16 @@ async function startStaticServer(root) {
         res.end("Forbidden");
         return;
       }
-      const data = await fs.readFile(file);
+      const realFile = await fs.realpath(file);
+      const realFromRoot = path.relative(root, realFile);
+      if (realFromRoot.startsWith("..") || path.isAbsolute(realFromRoot)) {
+        res.writeHead(403);
+        res.end("Forbidden");
+        return;
+      }
+      const data = await fs.readFile(realFile);
       res.writeHead(200, {
-        "content-type": MIME_TYPES.get(path.extname(file).toLowerCase())
+        "content-type": MIME_TYPES.get(path.extname(realFile).toLowerCase())
           || "application/octet-stream",
         "cache-control": "no-store"
       });
@@ -114,11 +174,30 @@ async function startStaticServer(root) {
 }
 
 async function verify(request) {
-  const sourceDir = scopedPath(request.sourceDir, "sourceDir");
-  const outputDir = scopedPath(request.outputDir, "outputDir");
+  const startedAt = Date.now();
+  const sourceDir = await scopedPath(request.sourceDir, "sourceDir");
+  const outputCandidate = path.resolve(request.outputDir);
+  const outputLexical = path.relative(WORKSPACE_ROOT, outputCandidate);
+  if (outputLexical.startsWith("..") || path.isAbsolute(outputLexical)) {
+    throw new Error("outputDir 超出允许的工作区根目录");
+  }
+  await fs.mkdir(outputCandidate, { recursive: true });
+  const outputDir = await scopedPath(outputCandidate, "outputDir");
   const indexFile = path.join(sourceDir, "index.html");
   await fs.access(indexFile);
+  const sourceStats = await directoryStats(
+    sourceDir, new Set(["node_modules", "dist", ".git"])
+  );
+  assertQuota(
+    "sourceDir",
+    sourceStats,
+    Math.min(MAX_SOURCE_FILES, Number(request.maxSourceFiles || MAX_SOURCE_FILES)),
+    Math.min(MAX_SOURCE_BYTES, Number(request.maxSourceBytes || MAX_SOURCE_BYTES))
+  );
   await fs.mkdir(path.join(outputDir, "screenshots"), { recursive: true });
+  const allowedHosts = Array.isArray(request.allowedHosts)
+    ? request.allowedHosts
+    : ["127.0.0.1", "localhost"];
 
   const stage = String(request.stage || "latest").replace(/[^a-zA-Z0-9_-]/g, "_");
   const viewports = Array.isArray(request.viewports) && request.viewports.length
@@ -160,6 +239,7 @@ async function verify(request) {
   const errors = [];
   const networkFailures = [];
   const consoleErrors = [];
+  const blockedRequests = [];
   const byViewport = new Map();
   let currentViewport = viewports[0].name;
 
@@ -203,14 +283,36 @@ async function verify(request) {
     });
     observation(currentViewport).network.push(text.slice(0, 300));
   });
+  if (request.egressPolicy !== "unrestricted") {
+    await page.route("**/*", async (route) => {
+      const target = new URL(route.request().url());
+      if (!["http:", "https:"].includes(target.protocol)
+          || hostAllowed(target.hostname, allowedHosts)) {
+        await route.continue();
+        return;
+      }
+      const text = `EGRESS_BLOCKED ${target.hostname} ${target.pathname}`;
+      blockedRequests.push({ viewport: currentViewport, url: target.href, error: text });
+      observation(currentViewport).network.push(text);
+      await route.abort("blockedbyclient");
+    });
+  }
 
   const traceFile = path.join(outputDir, `trace-${stage}.zip`);
   const results = [];
+  const hardTimeoutMs = Math.min(
+    120000,
+    Math.max(30000, Number(request.timeoutMs || 90000))
+  );
+  const hardTimeout = setTimeout(() => {
+    errors.push(`验证超过 ${hardTimeoutMs}ms，强制关闭浏览器`);
+    browser.close().catch(() => {});
+  }, hardTimeoutMs);
   try {
     await context.tracing.start({ screenshots: true, snapshots: true, sources: true });
     await page.goto(`${staticServer.origin}/index.html`, {
       waitUntil: "load",
-      timeout: 30000
+      timeout: Math.min(30000, hardTimeoutMs)
     });
     for (const viewport of viewports) {
       currentViewport = String(viewport.name || "viewport");
@@ -260,6 +362,7 @@ async function verify(request) {
   } catch (error) {
     errors.push(`Playwright 执行失败：${String(error?.message || error).slice(0, 500)}`);
   } finally {
+    clearTimeout(hardTimeout);
     try {
       await context.tracing.stop({ path: traceFile });
     } catch (error) {
@@ -269,6 +372,14 @@ async function verify(request) {
     await browser.close().catch(() => {});
     await staticServer.close().catch(() => {});
   }
+
+  const outputStats = await directoryStats(outputDir);
+  assertQuota(
+    "outputDir",
+    outputStats,
+    Math.min(MAX_OUTPUT_FILES, Number(request.maxOutputFiles || MAX_OUTPUT_FILES)),
+    Math.min(MAX_OUTPUT_BYTES, Number(request.maxOutputBytes || MAX_OUTPUT_BYTES))
+  );
 
   const report = {
     generatedAt: new Date().toISOString(),
@@ -286,9 +397,18 @@ async function verify(request) {
     ),
     viewports: results,
     networkFailures: networkFailures.slice(0, MAX_EVENTS * viewports.length),
+    blockedRequests: blockedRequests.slice(0, MAX_EVENTS * viewports.length),
     consoleErrors: consoleErrors.slice(0, MAX_EVENTS * viewports.length),
     tracePath: traceFile,
-    errors
+    errors,
+    durationMs: Date.now() - startedAt,
+    sourceStats,
+    outputStats,
+    runtime: {
+      rssBytes: process.memoryUsage().rss,
+      heapUsedBytes: process.memoryUsage().heapUsed
+    },
+    timedOut: errors.some((text) => text.includes("验证超过"))
   };
   await fs.writeFile(
     path.join(outputDir, `verify-${stage}.json`),

@@ -1,6 +1,7 @@
 package com.mofanyi.core;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mofanyi.config.SandboxProperties;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -13,7 +14,8 @@ class PlaywrightBrowserVerifierTest {
     private final PlaywrightBrowserVerifier verifier = new PlaywrightBrowserVerifier(
             new ObjectMapper(),
             mock(CodeFileWriteService.class),
-            mock(BrowserVerificationTransport.class));
+            mock(BrowserVerificationTransport.class),
+            new SandboxProperties());
 
     @Test
     @DisplayName("Playwright Worker JSON 映射为统一渲染报告")

@@ -4,6 +4,7 @@ import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.util.StrUtil;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mofanyi.config.SandboxProperties;
 import com.mofanyi.job.GenerationExecutionCondition;
 import com.mofanyi.model.enums.CodeGenTypeEnum;
 import lombok.extern.slf4j.Slf4j;
@@ -33,14 +34,17 @@ public class PlaywrightBrowserVerifier implements BrowserVerifierPort {
     private final ObjectMapper objectMapper;
     private final CodeFileWriteService codeFileWriteService;
     private final BrowserVerificationTransport transport;
+    private final SandboxProperties sandbox;
 
     public PlaywrightBrowserVerifier(
             ObjectMapper objectMapper,
             CodeFileWriteService codeFileWriteService,
-            BrowserVerificationTransport transport) {
+            BrowserVerificationTransport transport,
+            SandboxProperties sandbox) {
         this.objectMapper = objectMapper;
         this.codeFileWriteService = codeFileWriteService;
         this.transport = transport;
+        this.sandbox = sandbox;
     }
 
     @Override
@@ -82,12 +86,17 @@ public class PlaywrightBrowserVerifier implements BrowserVerifierPort {
                 Map.of("name", "mobile", "label", "手机", "width", 375, "height", 800)));
         request.put("checks", List.of(
                 "dom", "console", "network", "screenshot", "trace"));
-        request.put("egressPolicy", "generated-app");
+        request.put("egressPolicy", sandbox.isEnabled() ? "generated-app" : "unrestricted");
+        request.put("allowedHosts", sandbox.getEgress().getAllowedHosts());
+        request.put("maxSourceFiles", sandbox.getMaxSourceFiles());
+        request.put("maxSourceBytes", sandbox.getMaxSourceBytes());
+        request.put("maxOutputFiles", sandbox.getMaxOutputFiles());
+        request.put("maxOutputBytes", sandbox.getMaxOutputBytes());
+        request.put("timeoutMs", sandbox.getCommandTimeoutSeconds() * 1000);
 
         try {
             String body = transport.execute(request);
             RenderVerifier.RenderReport report = parseReport(body);
-            persistReport(type, appId, report, safeStage);
             log.info("[verify] Playwright Worker 完成，appId={} stage={} {}",
                     appId, safeStage, report.summary());
             return report;

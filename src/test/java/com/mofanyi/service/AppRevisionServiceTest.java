@@ -83,6 +83,7 @@ class AppRevisionServiceTest {
         Files.writeString(workspace.resolve(".agent/materials.json"), "{}", StandardCharsets.UTF_8);
         Files.writeString(workspace.resolve(".agent/network-before.json"), "[]", StandardCharsets.UTF_8);
         Files.writeString(workspace.resolve(".agent/console-before.json"), "[]", StandardCharsets.UTF_8);
+        Files.writeString(workspace.resolve(".agent/build-report.json"), "{}", StandardCharsets.UTF_8);
         Files.write(workspace.resolve(".agent/trace-before.zip"), new byte[]{1, 2, 3});
         GenerationJob job = GenerationJob.builder()
                 .id(99L)
@@ -133,5 +134,7 @@ class AppRevisionServiceTest {
                 .anyMatch("BROWSER_TRACE_BEFORE"::equals));
         assertTrue(artifactCaptor.getAllValues().stream().map(AppArtifact::getArtifactType)
                 .anyMatch("NETWORK_FAILURE_BEFORE"::equals));
+        assertTrue(artifactCaptor.getAllValues().stream().map(AppArtifact::getArtifactType)
+                .anyMatch("BUILD_REPORT"::equals));
     }
 }

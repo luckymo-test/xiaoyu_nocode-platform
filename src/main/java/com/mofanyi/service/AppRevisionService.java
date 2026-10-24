@@ -245,6 +245,9 @@ public class AppRevisionService {
         addFileArtifact(job, revision, artifacts, artifactRoot, "VISUAL_DIFF",
                 handle.root().resolve(".agent/screenshots/visual-diff.json"),
                 "application/json", "{\"semantics\":\"pixel-change-only\"}");
+        addFileArtifact(job, revision, artifacts, artifactRoot, "BUILD_REPORT",
+                handle.root().resolve(".agent/build-report.json"),
+                "application/json", "{}");
 
         ArtifactStore.StoredArtifact request = artifactStore.storeText(
                 artifactRoot, "requirement-baseline.json", job.getRequestPayload(),
