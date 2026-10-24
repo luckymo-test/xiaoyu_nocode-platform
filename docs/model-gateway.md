@@ -38,7 +38,10 @@ Flux<ModelChunk> stream(ModelRequest request);
 
 - 上下文压缩：`ContextCompressionService` 在 Gateway 开启时通过 `COMPRESS` 任务调用；
 - 图库查询规划：`ImageMaterialPlanner` 在 Gateway 开启时通过 `QUERY_PLAN` 任务调用；
-- 两个调用都保留旧 ChatModel 分支用于灰度回滚。
+- `AgentToolLoop`：框架内置工具和自管工具两种模式都可通过 Gateway 调用；
+- 生成循环的 token 预算、取消检查、工具顺序、reasoning 聚合和调用打点仍由
+  `AgentToolLoop` 维护，Gateway 只负责模型路由和协议转换；
+- 以上调用都保留旧 ChatModel 分支用于灰度回滚。
 
 ## 二、配置
 
@@ -99,20 +102,23 @@ gateway=false
 - fallback 只追加满足能力的候选；
 - DeepSeek/OpenAI-compatible 参数在 Adapter 内组装；
 - 统一响应映射文本、reasoning、finish reason 和 usage；
-- 压缩与查询规划在开关开启时不再直接调用旧 ChatModel。
+- 压缩、查询规划和 AgentToolLoop 在开关开启时不再直接调用旧 ChatModel。
 
-默认测试不访问真实模型。真实模型回归仍需在 Phase C 完成时执行。
+真实模型回归已执行：
+
+- Gateway 模式下上下文压缩生成合法结构化摘要；
+- Gateway 模式下六主题查询规划分别生成自然、城市、人文、动物、cosplay、电影 query；
+- Gateway + 自管工具循环完成真实 HTML/CSS 生成，实际调用 `writeFile/readFile/finish`，
+  总 token 为 prompt 209724 / completion 51727，三档视口渲染验证通过。
 
 ## 四、尚未完成
 
 以下仍直接依赖旧路径，因此 Phase C 未完成：
 
-- `AgentToolLoop` 仍直接构造 `OpenAiChatOptions`；
 - `ImageCuratorAgent` 仍硬编码视觉模型并直接 POST `/chat/completions`；
 - `WebResearchClient` 仍直接使用 DeepSeek Search/Fetch endpoint；
 - AI 明细和 Prometheus 仍按全局模型配置记录，尚未记录实际 provider/model/task；
 - 尚无模型级熔断、限流和真实第二供应商契约测试；
 - 尚无 Generation/Revision 级模型与路由版本快照。
 
-下一小步应迁移 `AgentToolLoop`，保持预算、取消、工具顺序、reasoning 聚合和 SSE 行为不变；
-之后再迁移视觉选片和调用明细字段。
+下一小步应迁移视觉选片和调用明细字段，并增加第二供应商契约测试。
