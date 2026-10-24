@@ -1,8 +1,8 @@
 # 计划书：零代码生成平台后续改造
 
 > 日期：2026-10-23
-> 状态：Phase A、Phase B、Phase C、Phase C.5 完成；Phase D 执行框架完成、
-> Vue 构建后验证待 Phase F；Phase E～G 待实施
+> 状态：Phase A、Phase B、Phase C、Phase C.5 完成；Phase D 执行框架完成，
+> Vue 构建后验证待 Phase F；Phase E 代码级沙箱完成、容器强隔离待部署环境
 > 来源：[plan-platform-rearchitecture.md](plan-platform-rearchitecture.md)
 > 定位：本文件是后续执行和验收的唯一入口；旧计划保留当前架构与实施记录。
 
@@ -380,7 +380,7 @@ codegen.model.fallback.enabled=false
 
 验收结果：
 
-- 138 个默认后端测试通过，20 个外部探针按约定跳过；
+- 142 个默认后端测试通过，21 个外部探针按约定跳过；
 - MySQL 5.7 与 8.4 均从空库执行 V1～V15，并通过 Job、ChatHistory、Artifact 与
   `ai_call_log.jobId` 持久化探针；
 - 压缩、查询规划和视觉选片都通过 `AiCallListener` 写 Prometheus 与 `ai_call_log`；
@@ -479,7 +479,7 @@ API 内嵌 Runner 保持默认
 
 验收结果：
 
-- 138 个默认后端测试通过，20 个外部探针按约定跳过；
+- 142 个默认后端测试通过，21 个外部探针按约定跳过；
 - API 模式上下文验证不存在 `GenerationJobRunner`、`AgentToolLoop`、
   `AiCodeGeneratorFacade`、`VueBuildService` 和旧直连生成 Controller；
 - Worker 模式上下文验证完整消费链和健康指示器存在；
@@ -579,6 +579,9 @@ codegen.browser.playwright.read-timeout-ms=120000
 
 #### Phase E：隔离 Build / Browser Sandbox（5～10 天）
 
+状态：代码级隔离与配额完成（2026-10-24）；当前机器无 Docker/WSL/Podman，
+容器/轻量 VM 强隔离仍需部署环境支持。执行边界见 [docs/sandbox.md](docs/sandbox.md)。
+
 目标：防止模型生成代码与 npm 依赖获得宿主机权限。
 
 任务：
@@ -593,12 +596,39 @@ codegen.browser.playwright.read-timeout-ms=120000
 - Worker 进程退出后强制清理 workspace；
 - 记录 build/verify 的资源消耗与超时原因。
 
+已完成：
+
+- Vue 构建复制到独立临时目录，成功后才替换 live `dist`；
+- package-lock 强制、依赖 allowlist、build script allowlist、默认禁用 npm scripts；
+- 源码/产物文件数与大小上限，拒绝符号链接；
+- 有界 stdout/stderr、命令超时、进程树递归回收；
+- 剔除密钥/云/数据库环境变量，隔离 TEMP 与 npm cache；
+- Browser Worker 真实路径解析、egress host allowlist、云元数据阻断；
+- Browser 单次硬超时与 source/output/runtime 指标；
+- Build/Browser 执行报告落盘。
+
+未完成：
+
+- cgroup CPU/内存/PID 配额；
+- 容器只读 rootfs 与网络 namespace；
+- npm install script 的内核级隔离。
+
 验收：
 
 - 恶意 `../../`、绝对路径、内网 URL、云元数据地址被拒绝；
 - 无限循环、巨量文件、超大依赖和 fork bomb 能在配额内终止；
 - Worker 超时后主 API 不受影响；
 - 旧 Worker 无法覆盖新 Revision（继续使用 fencingToken）。
+
+验收结果：
+
+- 未知依赖、任意 build shell 命令和缺失 lockfile 均被拒绝；
+- 源码文件数超限被拒绝；
+- 真实 Vue 工程在隔离目录完成 npm install/build，并清理沙箱；
+- Playwright 对 `169.254.169.254` 返回 `EGRESS_BLOCKED`；
+- Build/Browser 均记录耗时、文件大小、超时和资源摘要；
+- fencingToken 与 Revision CAS 沿用既有真实探针；
+- 容器内核级隔离明确保留为部署前置条件，未伪装为已完成。
 
 #### Phase F：React / Next 运行时落地（5～8 天）
 

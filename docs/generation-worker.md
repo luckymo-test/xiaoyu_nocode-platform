@@ -123,7 +123,7 @@ Worker 执行前校验：
 
 ## 七、验证结果
 
-- 138 个默认后端测试通过，20 个外部探针按约定跳过；
+- 142 个默认后端测试通过，21 个外部探针按约定跳过；
 - API 模式上下文不存在 Runner、Dispatcher、Agent、Facade、Vue 构建和旧直连 Controller；
 - Worker 模式上下文包含完整消费链和健康指示器；
 - MySQL 5.7 与 8.4 均通过 V1～V15 和 Job 重试 claim 探针；

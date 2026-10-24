@@ -286,7 +286,8 @@ ThrowUtils.throwIf(loginUser == null || loginUser.getId() == null,
 - 默认 `embedded` 仍允许 Agent 在 API JVM 内执行；生产 `api` 模式必须由独立
   Generation Worker 消费 Job，API 不得恢复本地生成入口。
 - `embedded` 仍可使用本地 Selenium；生产 Generation Worker 必须通过
-  Playwright Node Worker 执行浏览器验证；npm/build 的隔离仍待 Sandbox/Execution Worker。
+  Playwright Node Worker 执行浏览器验证；npm/build 已实现代码级隔离、allowlist
+  和配额，但生产仍必须补容器 cgroup/PID/network namespace 强隔离。
 - Spring Security FilterChain、CSRF 与 CORS allowlist 已实现灰度；默认仍保留
   自定义 Session/AOP 路径，稳定后再删除旧 AOP。
 - ModelGateway 已成为唯一模型执行入口，生成循环、压缩、查询规划、视觉选片和
