@@ -58,6 +58,18 @@ public class AiCallLog implements Serializable {
     private String model;
 
     /**
+     * 实际模型供应商
+     */
+    @Column("provider")
+    private String provider;
+
+    /**
+     * 模型任务类型
+     */
+    @Column("modelTask")
+    private String modelTask;
+
+    /**
      * 本次调用的最大输出 token 配置
      */
     @Column("maxOutputTokens")

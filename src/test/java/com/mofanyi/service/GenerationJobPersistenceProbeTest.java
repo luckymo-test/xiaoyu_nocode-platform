@@ -1,6 +1,7 @@
 package com.mofanyi.service;
 
 import com.mofanyi.entity.GenerationJob;
+import com.mofanyi.entity.AiCallLog;
 import com.mofanyi.entity.GenerationJobEvent;
 import com.mofanyi.entity.AppRevision;
 import com.mofanyi.entity.AppArtifact;
@@ -21,6 +22,7 @@ import com.mofanyi.mapper.AppAnalyticsEventMapper;
 import com.mofanyi.mapper.AppAnalyticsDailyMapper;
 import com.mofanyi.mapper.AppPublicationMapper;
 import com.mofanyi.mapper.GenerationJobMapper;
+import com.mofanyi.mapper.AiCallLogMapper;
 import com.mofanyi.mapper.WorkspaceMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -46,6 +48,9 @@ class GenerationJobPersistenceProbeTest {
 
     @Autowired
     private GenerationJobMapper jobMapper;
+
+    @Autowired
+    private AiCallLogMapper aiCallLogMapper;
 
     @Autowired
     private GenerationJobEventService eventService;
@@ -255,6 +260,24 @@ class GenerationJobPersistenceProbeTest {
                 .updateTime(now)
                 .build();
         assertEquals(1, publicationMapper.insertSelective(publication));
+
+        AiCallLog callLog = AiCallLog.builder()
+                .appId(job.getAppId())
+                .userId(1L)
+                .callType("probe")
+                .provider("deepseek")
+                .modelTask("GENERATE")
+                .model("deepseek-flash")
+                .maxOutputTokens(1024)
+                .inputTokens(10)
+                .outputTokens(20)
+                .totalTokens(30)
+                .durationMs(100L)
+                .finishReason("stop")
+                .status("success")
+                .createTime(now)
+                .build();
+        assertEquals(1, aiCallLogMapper.insertSelective(callLog));
 
         assertEquals(workspace.getOwnerId(),
                 workspaceMapper.selectOneById(workspace.getId()).getOwnerId());

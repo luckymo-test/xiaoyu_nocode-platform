@@ -44,10 +44,22 @@ public class AiCallListener {
 
     public void onSuccess(AiCallContext ctx, String finishReason,
                           long inputTokens, long outputTokens, long durationMs, String reasoningLevel) {
-        metrics.record(ctx.callType(), "success", inputTokens, outputTokens, durationMs, reasoningLevel);
+        onSuccess(ctx, finishReason, inputTokens, outputTokens, durationMs,
+                reasoningLevel, "configured", metrics.model(), "legacy");
+    }
+
+    public void onSuccess(AiCallContext ctx, String finishReason,
+                          long inputTokens, long outputTokens, long durationMs,
+                          String reasoningLevel, String provider,
+                          String actualModel, String modelTask) {
+        metrics.record(ctx.callType(), "success", inputTokens, outputTokens,
+                durationMs, reasoningLevel, provider, actualModel, modelTask);
         AiCallLog row = AiCallLog.builder()
                 .appId(ctx.appId()).userId(ctx.userId()).callType(ctx.callType())
-                .model(metrics.model()).maxOutputTokens(metrics.maxOutputTokens())
+                .provider(provider).modelTask(modelTask)
+                .model(actualModel == null || actualModel.isBlank()
+                        ? metrics.model() : actualModel)
+                .maxOutputTokens(metrics.maxOutputTokens())
                 .inputTokens((int) inputTokens).outputTokens((int) outputTokens)
                 .totalTokens((int) (inputTokens + outputTokens))
                 .durationMs(durationMs).finishReason(finishReason)
@@ -64,12 +76,24 @@ public class AiCallListener {
     }
 
     public void onFailure(AiCallContext ctx, Throwable error, long durationMs, String reasoningLevel) {
+        onFailure(ctx, error, durationMs, reasoningLevel,
+                "configured", metrics.model(), "legacy");
+    }
+
+    public void onFailure(AiCallContext ctx, Throwable error, long durationMs,
+                          String reasoningLevel, String provider,
+                          String actualModel, String modelTask) {
         String errorType = AiMetricsRecorder.classify(error);
-        metrics.record(ctx.callType(), "error", 0, 0, durationMs, reasoningLevel);
-        metrics.recordError(ctx.callType(), errorType, reasoningLevel);
+        metrics.record(ctx.callType(), "error", 0, 0, durationMs, reasoningLevel,
+                provider, actualModel, modelTask);
+        metrics.recordError(ctx.callType(), errorType, reasoningLevel,
+                provider, actualModel, modelTask);
         AiCallLog row = AiCallLog.builder()
                 .appId(ctx.appId()).userId(ctx.userId()).callType(ctx.callType())
-                .model(metrics.model()).maxOutputTokens(metrics.maxOutputTokens())
+                .provider(provider).modelTask(modelTask)
+                .model(actualModel == null || actualModel.isBlank()
+                        ? metrics.model() : actualModel)
+                .maxOutputTokens(metrics.maxOutputTokens())
                 .durationMs(durationMs).status("error")
                 .errorMsg(truncate(error == null ? null : error.getMessage()))
                 .createTime(LocalDateTime.now())

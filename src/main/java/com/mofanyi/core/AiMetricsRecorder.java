@@ -54,14 +54,28 @@ public class AiMetricsRecorder {
      */
     public void record(String callType, String status, long inputTokens, long outputTokens,
                        long durationMs, String reasoningLevel) {
+        record(callType, status, inputTokens, outputTokens, durationMs,
+                reasoningLevel, "configured", model, "legacy");
+    }
+
+    public void record(String callType, String status, long inputTokens, long outputTokens,
+                       long durationMs, String reasoningLevel,
+                       String provider, String actualModel, String modelTask) {
         String level = reasoningLevel == null || reasoningLevel.isBlank() ? "standard" : reasoningLevel;
+        String normalizedProvider = tagValue(provider, "unknown");
+        String normalizedModel = tagValue(actualModel, model);
+        String normalizedTask = tagValue(modelTask, "legacy");
         Counter.builder("ai_call_total")
-                .tag("model", model).tag("call_type", callType).tag("status", status)
+                .tag("provider", normalizedProvider)
+                .tag("model", normalizedModel).tag("call_type", callType).tag("status", status)
+                .tag("model_task", normalizedTask)
                 .tag("reasoning_level", level)
                 .register(registry).increment();
 
         Timer.builder("ai_call_duration_seconds")
-                .tag("model", model).tag("call_type", callType)
+                .tag("provider", normalizedProvider)
+                .tag("model", normalizedModel).tag("call_type", callType)
+                .tag("model_task", normalizedTask)
                 .tag("reasoning_level", level)
                 .publishPercentileHistogram()
                 .serviceLevelObjectives(DURATION_BUCKETS)
@@ -69,13 +83,16 @@ public class AiMetricsRecorder {
                 .record(Duration.ofMillis(Math.max(durationMs, 0)));
 
         if (inputTokens > 0) {
-            tokens(callType, "input", inputTokens, level);
+            tokens(callType, "input", inputTokens, level,
+                    normalizedProvider, normalizedModel, normalizedTask);
         }
         if (outputTokens > 0) {
-            tokens(callType, "output", outputTokens, level);
+            tokens(callType, "output", outputTokens, level,
+                    normalizedProvider, normalizedModel, normalizedTask);
         }
         if (inputTokens > 0 || outputTokens > 0) {
-            tokens(callType, "total", inputTokens + outputTokens, level);
+            tokens(callType, "total", inputTokens + outputTokens, level,
+                    normalizedProvider, normalizedModel, normalizedTask);
         }
     }
 
@@ -83,18 +100,34 @@ public class AiMetricsRecorder {
      * 记录一次失败（按归一化的 error_type 分类）
      */
     public void recordError(String callType, String errorType, String reasoningLevel) {
+        recordError(callType, errorType, reasoningLevel,
+                "configured", model, "legacy");
+    }
+
+    public void recordError(String callType, String errorType, String reasoningLevel,
+                            String provider, String actualModel, String modelTask) {
         String level = reasoningLevel == null || reasoningLevel.isBlank() ? "standard" : reasoningLevel;
         Counter.builder("ai_call_errors_total")
-                .tag("model", model).tag("call_type", callType).tag("error_type", errorType)
+                .tag("provider", tagValue(provider, "unknown"))
+                .tag("model", tagValue(actualModel, model))
+                .tag("call_type", callType).tag("error_type", errorType)
+                .tag("model_task", tagValue(modelTask, "legacy"))
                 .tag("reasoning_level", level)
                 .register(registry).increment();
     }
 
-    private void tokens(String callType, String kind, long value, String reasoningLevel) {
+    private void tokens(String callType, String kind, long value, String reasoningLevel,
+                        String provider, String actualModel, String modelTask) {
         Counter.builder("ai_tokens_total")
-                .tag("model", model).tag("call_type", callType).tag("kind", kind)
+                .tag("provider", provider)
+                .tag("model", actualModel).tag("call_type", callType).tag("kind", kind)
+                .tag("model_task", modelTask)
                 .tag("reasoning_level", reasoningLevel)
                 .register(registry).increment(value);
+    }
+
+    private static String tagValue(String value, String fallback) {
+        return value == null || value.isBlank() ? fallback : value;
     }
 
     /**

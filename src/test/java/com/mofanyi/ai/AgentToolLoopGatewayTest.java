@@ -113,7 +113,7 @@ class AgentToolLoopGatewayTest {
         assertEquals(2, usage.completionTokens());
         verify(progress).onReasoning("think");
         verify(callListener).onSuccess(any(), eq("stop"), eq(10L), eq(2L), anyLong(),
-                eq("standard"));
+                eq("standard"), eq("deepseek"), eq("deepseek-flash"), eq("GENERATE"));
         verify(modelGateway).stream(any());
         verifyNoInteractions(chatModel);
     }

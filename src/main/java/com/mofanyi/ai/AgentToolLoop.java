@@ -192,7 +192,8 @@ public class AgentToolLoop {
                 turn = callModel(request, profile, toolCallbacks, true);
             } catch (RuntimeException e) {
                 long ms = System.currentTimeMillis() - callStart;
-                aiCallListener.onFailure(request.ctx(), e, ms, level.code());
+                aiCallListener.onFailure(request.ctx(), e, ms, level.code(),
+                        "unknown", profile.model(), modelTask(request.ctx()).name());
                 log.warn("[agent] 模型响应异常（参数截断/解析失败），step={}，提示模型重试", step, e);
                 if (++consecutiveFailures >= 3) {
                     log.error("[agent] 连续 3 次模型响应异常，终止生成，step={}", step);
@@ -247,7 +248,9 @@ public class AgentToolLoop {
             try {
                 turn = callModel(request, profile, toolCallbacks, false);
             } catch (RuntimeException e) {
-                aiCallListener.onFailure(request.ctx(), e, System.currentTimeMillis() - callStart, level.code());
+                aiCallListener.onFailure(request.ctx(), e,
+                        System.currentTimeMillis() - callStart, level.code(),
+                        "unknown", profile.model(), modelTask(request.ctx()).name());
                 if (++consecutiveFailures >= 3) {
                     throw e;
                 }
@@ -335,6 +338,7 @@ public class AgentToolLoop {
         long completionTokens = 0;
         String provider = null;
         String modelId = null;
+        String modelName = null;
         for (ModelChunk chunk : chunks) {
             text.append(chunk.text());
             reasoning.append(chunk.reasoning());
@@ -354,9 +358,12 @@ public class AgentToolLoop {
             if (StrUtil.isNotBlank(chunk.modelId())) {
                 modelId = chunk.modelId();
             }
+            if (StrUtil.isNotBlank(chunk.modelName())) {
+                modelName = chunk.modelName();
+            }
         }
         return new ModelTurn(text.toString(), reasoning.toString(), toolCalls,
-                finishReason, promptTokens, completionTokens, provider, modelId);
+                finishReason, promptTokens, completionTokens, provider, modelId, modelName);
     }
 
     private ModelTurn fromChatResponse(ChatResponse response) {
@@ -384,6 +391,8 @@ public class AgentToolLoop {
                 promptTokens,
                 completionTokens,
                 "legacy-chat-model",
+                output.getMetadata() == null ? null
+                        : String.valueOf(output.getMetadata().getOrDefault("model", "")),
                 output.getMetadata() == null ? null
                         : String.valueOf(output.getMetadata().getOrDefault("model", "")));
     }
@@ -420,9 +429,11 @@ public class AgentToolLoop {
         long callMs = System.currentTimeMillis() - callStart;
         long inDelta = usageValue(usage, true) - beforeIn;
         long outDelta = usageValue(usage, false) - beforeOut;
-        aiCallListener.onSuccess(ctx, turn.finishReason(), inDelta, outDelta, callMs, level.code());
-        log.info("[agent] round={} 模式={} provider={} model={} 本轮prompt={} 本轮completion={} total={} 调用耗时={}ms",
-                round, mode, turn.provider(), turn.modelId(),
+        aiCallListener.onSuccess(ctx, turn.finishReason(), inDelta, outDelta,
+                callMs, level.code(), turn.provider(), turn.modelName(),
+                modelTask(ctx).name());
+        log.info("[agent] round={} 模式={} provider={} modelId={} model={} 本轮prompt={} 本轮completion={} total={} 调用耗时={}ms",
+                round, mode, turn.provider(), turn.modelId(), turn.modelName(),
                 inDelta, outDelta, inDelta + outDelta, callMs);
     }
 
@@ -626,7 +637,8 @@ public class AgentToolLoop {
             long promptTokens,
             long completionTokens,
             String provider,
-            String modelId) {
+            String modelId,
+            String modelName) {
 
         private ModelTurn {
             text = text == null ? "" : text;
