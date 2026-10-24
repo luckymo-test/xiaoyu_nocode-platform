@@ -35,6 +35,15 @@ public class TokenUsageAccumulator {
         }
     }
 
+    public void accumulate(long promptTokenCount, long completionTokenCount) {
+        if (promptTokenCount > 0) {
+            promptTokens += promptTokenCount;
+        }
+        if (completionTokenCount > 0) {
+            completionTokens += completionTokenCount;
+        }
+    }
+
     public long promptTokens() {
         return promptTokens;
     }

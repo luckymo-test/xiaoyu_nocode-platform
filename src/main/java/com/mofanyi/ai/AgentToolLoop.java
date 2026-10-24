@@ -4,6 +4,11 @@ import cn.hutool.core.util.StrUtil;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.mofanyi.ai.model.ModelCapability;
+import com.mofanyi.ai.model.ModelChunk;
+import com.mofanyi.ai.model.ModelGateway;
+import com.mofanyi.ai.model.ModelRequest;
+import com.mofanyi.ai.model.ModelTask;
 import com.mofanyi.ai.reasoning.ReasoningLevel;
 import com.mofanyi.ai.reasoning.ReasoningProfile;
 import com.mofanyi.ai.reasoning.ReasoningProfileRegistry;
@@ -30,6 +35,7 @@ import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.metadata.ChatGenerationMetadata;
 import org.springframework.ai.chat.metadata.ChatResponseMetadata;
+import org.springframework.ai.chat.metadata.Usage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
@@ -44,6 +50,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
@@ -63,6 +70,7 @@ public class AgentToolLoop {
     private static final long MAX_LOOP_MILLIS = 600_000L;
 
     private final ChatModel chatModel;
+    private final ModelGateway modelGateway;
     private final WriteFileTool writeFileTool;
     private final ReadFileTool readFileTool;
     private final SearchImageTool searchImageTool;
@@ -80,7 +88,11 @@ public class AgentToolLoop {
     @Value("${codegen.agent.context-slim.enabled:false}")
     private boolean contextSlimEnabled;
 
+    @Value("${codegen.model.gateway.enabled:false}")
+    private boolean modelGatewayEnabled;
+
     public AgentToolLoop(@Qualifier("openAiChatModel") ChatModel chatModel,
+                         ModelGateway modelGateway,
                          WriteFileTool writeFileTool,
                          ReadFileTool readFileTool,
                          SearchImageTool searchImageTool,
@@ -92,6 +104,7 @@ public class AgentToolLoop {
                          AiCallListener aiCallListener,
                          ReasoningProfileRegistry reasoningProfiles) {
         this.chatModel = chatModel;
+        this.modelGateway = modelGateway;
         this.writeFileTool = writeFileTool;
         this.readFileTool = readFileTool;
         this.searchImageTool = searchImageTool;
@@ -168,17 +181,15 @@ public class AgentToolLoop {
         int consecutiveFailures = 0;
         long loopStart = System.currentTimeMillis();
         int stepCount = 0;
-        OpenAiChatOptions options = options(profile, toolCallbacks, true);
         for (int step = 0; step < profile.maxSteps(); step++) {
             stepCount++;
             logRoundStart("framework", stepCount, request.usage(), profile.maxLoopTokens(), loopStart);
             long callStart = System.currentTimeMillis();
             long beforeIn = usageValue(request.usage(), true);
             long beforeOut = usageValue(request.usage(), false);
-            ChatResponse response;
+            ModelTurn turn;
             try {
-                response = streamAndAggregate(new Prompt(request.messages(), options),
-                        reasoningSink(request.listener()));
+                turn = callModel(request, profile, toolCallbacks, true);
             } catch (RuntimeException e) {
                 long ms = System.currentTimeMillis() - callStart;
                 aiCallListener.onFailure(request.ctx(), e, ms, level.code());
@@ -197,10 +208,10 @@ public class AgentToolLoop {
             taskRegistry.checkCancelled(request.appId());
             checkBudget(loopStart, usageValue(request.usage(), true),
                     usageValue(request.usage(), false), profile.maxLoopTokens());
-            accumulateUsage(request.usage(), response);
-            logCallResult("framework", stepCount, request.usage(), response, callStart,
+            accumulateUsage(request.usage(), turn);
+            logCallResult("framework", stepCount, request.usage(), turn, callStart,
                     beforeIn, beforeOut, request.ctx(), level);
-            setDescription(request.description(), response);
+            setDescription(request.description(), turn);
             break;
         }
         log.info("[agent] tool-loop 结束：外层 step={}，写文件数={}，总耗时={}ms",
@@ -209,7 +220,6 @@ public class AgentToolLoop {
 
     private void runSelfManaged(ToolLoopRequest request, ReasoningProfile profile, ReasoningLevel level,
                                 List<ToolCallback> toolCallbacks) {
-        OpenAiChatOptions options = options(profile, toolCallbacks, false);
         Map<String, ToolCallback> byName = new LinkedHashMap<>();
         for (ToolCallback callback : toolCallbacks) {
             byName.put(callback.getToolDefinition().name(), callback);
@@ -233,10 +243,9 @@ public class AgentToolLoop {
             long callStart = System.currentTimeMillis();
             long beforeIn = usageValue(request.usage(), true);
             long beforeOut = usageValue(request.usage(), false);
-            ChatResponse response;
+            ModelTurn turn;
             try {
-                response = streamAndAggregate(new Prompt(request.messages(), options),
-                        reasoningSink(request.listener()));
+                turn = callModel(request, profile, toolCallbacks, false);
             } catch (RuntimeException e) {
                 aiCallListener.onFailure(request.ctx(), e, System.currentTimeMillis() - callStart, level.code());
                 if (++consecutiveFailures >= 3) {
@@ -246,11 +255,11 @@ public class AgentToolLoop {
                 continue;
             }
             consecutiveFailures = 0;
-            accumulateUsage(request.usage(), response);
-            logCallResult("self", round, request.usage(), response, callStart,
+            accumulateUsage(request.usage(), turn);
+            logCallResult("self", round, request.usage(), turn, callStart,
                     beforeIn, beforeOut, request.ctx(), level);
 
-            AssistantMessage output = response.getResult().getOutput();
+            AssistantMessage output = turn.asAssistantMessage();
             lastRoundStart = request.messages().size();
             request.messages().add(output);
             if (StrUtil.isNotBlank(output.getText()) && request.description().get().isBlank()) {
@@ -282,6 +291,114 @@ public class AgentToolLoop {
         }
     }
 
+    private ModelTurn callModel(ToolLoopRequest request,
+                                ReasoningProfile profile,
+                                List<ToolCallback> toolCallbacks,
+                                boolean internalToolExecution) {
+        if (!modelGatewayEnabled) {
+            return fromChatResponse(streamAndAggregate(
+                    new Prompt(request.messages(),
+                            options(profile, toolCallbacks, internalToolExecution)),
+                    reasoningSink(request.listener())));
+        }
+
+        ModelTask task = modelTask(request.ctx());
+        ModelRequest modelRequest = new ModelRequest(
+                task,
+                request.messages(),
+                toolCallbacks,
+                toolCallbacks.isEmpty() ? Set.of() : Set.of(ModelCapability.TOOLS),
+                0.7,
+                profile.maxOutputTokens(),
+                profile.thinkingEnabled(),
+                profile.effort(),
+                internalToolExecution,
+                profile.model(),
+                request.ctx());
+        List<ModelChunk> chunks = modelGateway.stream(modelRequest)
+                .doOnNext(chunk -> {
+                    AgentProgressListener listener = request.listener();
+                    if (listener != null && StrUtil.isNotBlank(chunk.reasoning())) {
+                        listener.onReasoning(chunk.reasoning());
+                    }
+                })
+                .collectList()
+                .block();
+        if (chunks == null || chunks.isEmpty()) {
+            throw new IllegalStateException("ModelGateway 未返回任何流式响应");
+        }
+        StringBuilder text = new StringBuilder();
+        StringBuilder reasoning = new StringBuilder();
+        List<AssistantMessage.ToolCall> toolCalls = List.of();
+        String finishReason = null;
+        long promptTokens = 0;
+        long completionTokens = 0;
+        String provider = null;
+        String modelId = null;
+        for (ModelChunk chunk : chunks) {
+            text.append(chunk.text());
+            reasoning.append(chunk.reasoning());
+            if (!chunk.toolCalls().isEmpty()) {
+                toolCalls = chunk.toolCalls();
+            }
+            if (StrUtil.isNotBlank(chunk.finishReason())) {
+                finishReason = chunk.finishReason();
+            }
+            if (chunk.usage() != null && chunk.usage().totalTokens() > 0) {
+                promptTokens = chunk.usage().promptTokens();
+                completionTokens = chunk.usage().completionTokens();
+            }
+            if (StrUtil.isNotBlank(chunk.provider())) {
+                provider = chunk.provider();
+            }
+            if (StrUtil.isNotBlank(chunk.modelId())) {
+                modelId = chunk.modelId();
+            }
+        }
+        return new ModelTurn(text.toString(), reasoning.toString(), toolCalls,
+                finishReason, promptTokens, completionTokens, provider, modelId);
+    }
+
+    private ModelTurn fromChatResponse(ChatResponse response) {
+        if (response == null || response.getResult() == null
+                || response.getResult().getOutput() == null) {
+            throw new IllegalStateException("ChatModel 未返回有效响应");
+        }
+        AssistantMessage output = response.getResult().getOutput();
+        String reasoning = "";
+        if (output.getMetadata() != null) {
+            Object value = output.getMetadata().get("reasoningContent");
+            reasoning = value == null ? "" : String.valueOf(value);
+        }
+        Usage usage = response.getMetadata() == null
+                ? null : response.getMetadata().getUsage();
+        long promptTokens = usage == null || usage.getPromptTokens() == null
+                ? 0 : usage.getPromptTokens();
+        long completionTokens = usage == null || usage.getCompletionTokens() == null
+                ? 0 : usage.getCompletionTokens();
+        return new ModelTurn(
+                output.getText() == null ? "" : output.getText(),
+                reasoning,
+                output.getToolCalls(),
+                finishReasonOf(response),
+                promptTokens,
+                completionTokens,
+                "legacy-chat-model",
+                output.getMetadata() == null ? null
+                        : String.valueOf(output.getMetadata().getOrDefault("model", "")));
+    }
+
+    private static ModelTask modelTask(AiCallContext context) {
+        String callType = context == null ? null : context.callType();
+        if ("modify".equalsIgnoreCase(callType)) {
+            return ModelTask.MODIFY;
+        }
+        if ("fix".equalsIgnoreCase(callType)) {
+            return ModelTask.REPAIR;
+        }
+        return ModelTask.GENERATE;
+    }
+
     private OpenAiChatOptions options(ReasoningProfile profile, List<ToolCallback> toolCallbacks,
                                       boolean internalToolExecution) {
         OpenAiChatOptions.Builder builder = OpenAiChatOptions.builder()
@@ -298,14 +415,15 @@ public class AgentToolLoop {
     }
 
     private void logCallResult(String mode, int round, TokenUsageAccumulator usage,
-                               ChatResponse response, long callStart, long beforeIn, long beforeOut,
+                               ModelTurn turn, long callStart, long beforeIn, long beforeOut,
                                AiCallContext ctx, ReasoningLevel level) {
         long callMs = System.currentTimeMillis() - callStart;
         long inDelta = usageValue(usage, true) - beforeIn;
         long outDelta = usageValue(usage, false) - beforeOut;
-        aiCallListener.onSuccess(ctx, finishReasonOf(response), inDelta, outDelta, callMs, level.code());
-        log.info("[agent] round={} 模式={} 本轮prompt={} 本轮completion={} total={} 调用耗时={}ms",
-                round, mode, inDelta, outDelta, inDelta + outDelta, callMs);
+        aiCallListener.onSuccess(ctx, turn.finishReason(), inDelta, outDelta, callMs, level.code());
+        log.info("[agent] round={} 模式={} provider={} model={} 本轮prompt={} 本轮completion={} total={} 调用耗时={}ms",
+                round, mode, turn.provider(), turn.modelId(),
+                inDelta, outDelta, inDelta + outDelta, callMs);
     }
 
     private static void logRoundStart(String mode, int round, TokenUsageAccumulator usage,
@@ -476,23 +594,20 @@ public class AgentToolLoop {
         }
     }
 
-    private static void setDescription(AtomicReference<String> description, ChatResponse response) {
-        if (!description.get().isBlank() || response == null || response.getResult() == null) {
+    private static void setDescription(AtomicReference<String> description, ModelTurn turn) {
+        if (!description.get().isBlank() || turn == null || turn.text().isBlank()) {
             return;
         }
-        String text = response.getResult().getOutput().getText();
-        if (text != null) {
-            description.set(text);
-        }
+        description.set(turn.text());
     }
 
     private static Consumer<String> reasoningSink(AgentProgressListener listener) {
         return listener == null ? null : listener::onReasoning;
     }
 
-    private static void accumulateUsage(TokenUsageAccumulator usage, ChatResponse response) {
+    private static void accumulateUsage(TokenUsageAccumulator usage, ModelTurn turn) {
         if (usage != null) {
-            usage.accumulate(response);
+            usage.accumulate(turn.promptTokens(), turn.completionTokens());
         }
     }
 
@@ -501,5 +616,32 @@ public class AgentToolLoop {
             return 0;
         }
         return prompt ? usage.promptTokens() : usage.completionTokens();
+    }
+
+    private record ModelTurn(
+            String text,
+            String reasoning,
+            List<AssistantMessage.ToolCall> toolCalls,
+            String finishReason,
+            long promptTokens,
+            long completionTokens,
+            String provider,
+            String modelId) {
+
+        private ModelTurn {
+            text = text == null ? "" : text;
+            reasoning = reasoning == null ? "" : reasoning;
+            toolCalls = toolCalls == null ? List.of() : List.copyOf(toolCalls);
+        }
+
+        private AssistantMessage asAssistantMessage() {
+            AssistantMessage.Builder builder = AssistantMessage.builder()
+                    .content(text)
+                    .toolCalls(toolCalls);
+            if (!reasoning.isBlank()) {
+                builder.properties(Map.of("reasoningContent", reasoning));
+            }
+            return builder.build();
+        }
     }
 }
