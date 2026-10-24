@@ -1,9 +1,12 @@
 package com.mofanyi.ai;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mofanyi.ai.model.ModelGateway;
 import com.mofanyi.core.SiteImageService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.UserMessage;
 
 import java.util.Set;
 import java.util.List;
@@ -17,7 +20,7 @@ import static org.mockito.Mockito.mock;
 class ImageCuratorAgentTest {
 
     private final ImageCuratorAgent agent = new ImageCuratorAgent(
-            mock(SiteImageService.class), new ObjectMapper());
+            mock(SiteImageService.class), mock(ModelGateway.class), new ObjectMapper());
 
     @Test
     @DisplayName("严格过滤越界 id、重复选片和非法用途")
@@ -133,6 +136,28 @@ class ImageCuratorAgentTest {
         Map<String, Object> image = (Map<String, Object>) content.get(2).get("image_url");
         assertTrue(((String) image.get("url")).startsWith("data:image/jpeg;base64,"));
         assertEquals("low", image.get("detail"));
+    }
+
+    @Test
+    @DisplayName("Gateway 多模态请求把每个候选事实与对应图片放在同一消息")
+    void gatewayMessagesBindFactsToMedia() {
+        ImageCuratorAgent.Candidate candidate = new ImageCuratorAgent.Candidate(
+                23, "https://example.com/cosplay.jpg", 1000, 1500,
+                "cosplay portrait photography", "pexels");
+        ImageCuratorAgent.VisualCandidate visual = new ImageCuratorAgent.VisualCandidate(
+                candidate, 800, 1200, new byte[]{1, 2, 3});
+
+        List<Message> messages = agent.buildVisualMessages(
+                "摄影照片墙，必须有 cosplay 主题", List.of(visual), true);
+
+        assertEquals(4, messages.size());
+        assertTrue(messages.get(0).getText().contains("选片"));
+        assertTrue(messages.get(1).getText().contains("cosplay"));
+        UserMessage candidateMessage = (UserMessage) messages.get(2);
+        assertTrue(candidateMessage.getText().contains("id=23"));
+        assertTrue(candidateMessage.getText().contains("cosplay portrait photography"));
+        assertEquals(1, candidateMessage.getMedia().size());
+        assertEquals(3, candidateMessage.getMedia().getFirst().getDataAsByteArray().length);
     }
 
 }
