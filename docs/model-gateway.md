@@ -39,6 +39,8 @@ Flux<ModelChunk> stream(ModelRequest request);
 - 上下文压缩：`ContextCompressionService` 在 Gateway 开启时通过 `COMPRESS` 任务调用；
 - 图库查询规划：`ImageMaterialPlanner` 在 Gateway 开启时通过 `QUERY_PLAN` 任务调用；
 - `AgentToolLoop`：框架内置工具和自管工具两种模式都可通过 Gateway 调用；
+- `ImageCuratorAgent`：每个候选事实与对应 JPEG 放在同一条多模态 user 消息中，
+  通过 `VISION_CURATE` 路由，不再直接 POST `/chat/completions`；
 - 生成循环的 token 预算、取消检查、工具顺序、reasoning 聚合和调用打点仍由
   `AgentToolLoop` 维护，Gateway 只负责模型路由和协议转换；
 - 以上调用都保留旧 ChatModel 分支用于灰度回滚。
@@ -119,14 +121,16 @@ gateway=false
 - Gateway 模式下六主题查询规划分别生成自然、城市、人文、动物、cosplay、电影 query；
 - Gateway + 自管工具循环完成真实 HTML/CSS 生成，实际调用 `writeFile/readFile/finish`，
   总 token 为 prompt 209724 / completion 51727，三档视口渲染验证通过。
+- Gateway 视觉选片在 10 张真实候选图上完成两轮筛选，最终选中 5 张，
+  两轮实际 provider/model 均为 deepseek/deepseek-flash。
 
 ## 四、尚未完成
 
 以下仍直接依赖旧路径，因此 Phase C 未完成：
 
-- `ImageCuratorAgent` 仍硬编码视觉模型并直接 POST `/chat/completions`；
 - `WebResearchClient` 仍直接使用 DeepSeek Search/Fetch endpoint；
 - 尚无模型级熔断、限流和真实第二供应商契约测试；
 - 尚无 Generation/Revision 级模型与路由版本快照。
 
-下一小步应迁移视觉选片和调用明细字段，并增加第二供应商契约测试。
+下一小步应收敛 Web Research 供应商边界，移除业务层旧 OpenAI Options 分支，
+并增加模型级熔断、限流和第二供应商契约测试。

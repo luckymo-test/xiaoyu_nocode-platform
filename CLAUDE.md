@@ -22,8 +22,8 @@ AI 应用生成平台。用户通过一句话创建网站或前端工程，平�
 - 浏览器和 npm 当前仍在本机执行；独立 Playwright/Sandbox Worker 仍在后续计划中。
 - Spring Security、CSRF 与 CORS allowlist 已实现灰度层，默认开关关闭；
   上线顺序见 [docs/security-migration.md](docs/security-migration.md)。
-- ModelRegistry / ModelGateway 已覆盖生成循环、压缩与查询规划；
-  视觉选片和真实 provider/model 指标仍在旧路径，见 [docs/model-gateway.md](docs/model-gateway.md)。
+- ModelRegistry / ModelGateway 已覆盖生成循环、压缩、查询规划和视觉选片；
+  Web Research 供应商边界与旧 Options 清理仍在迁移中，见 [docs/model-gateway.md](docs/model-gateway.md)。
 
 ## 必读文档
 

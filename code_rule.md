@@ -288,8 +288,8 @@ ThrowUtils.throwIf(loginUser == null || loginUser.getId() == null,
 - Spring Security FilterChain、CSRF 与 CORS allowlist 已实现灰度；默认仍保留
   自定义 Session/AOP 路径，稳定后再删除旧 AOP。
 - 模型调用仍包含 OpenAI/DeepSeek 参数；目标为 ModelGateway + Adapter。
-- ModelGateway 已覆盖生成循环、压缩和查询规划；视觉选片、Web Research
-  与真实 provider/model 明细仍在迁移中。
+- ModelGateway 已覆盖生成循环、压缩、查询规划、视觉选片和真实 provider/model 明细；
+  Web Research 供应商边界与旧 Options 分支清理仍在迁移中。
 - 渲染修复状态仍有 JVM 内存 Map；目标是持久化 JobEvent/状态。
 - 部分生成类型分支仍在 Facade 或构建服务中；目标是 StackProfile。
 
