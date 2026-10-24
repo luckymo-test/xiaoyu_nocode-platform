@@ -1,7 +1,7 @@
 # Playwright Browser Worker
 
 > 日期：2026-10-24
-> 状态：Phase D 执行框架完成；HTML / MultiFile 已验证，Vue 源码构建仍需 Execution Build Worker
+> 状态：Phase D 完成；HTML / MultiFile / Vue 构建产物均已完成三档真实验证
 
 ## 一、边界
 
@@ -153,9 +153,13 @@ Redis Streams 消费组支持多 Worker 竞争消费；超过 60 秒的 pending 
   消费并回写结果键，端到端探针通过；
 - 普通 PDF/截图文本不作为生成质量判断依据，真实 DOM/console/network 才是报告事实。
 
-## 八、Vue 说明
+## 八、Vue 验证
 
-Playwright 已能验证带有效 `index.html` 的静态页面和构建产物，但当前 Vue 源码工程
-没有 npm build/Execution Worker，因此不能把尚未构建的 `.vue` / TypeScript 源码
-当成可运行页面。Vue 的三档验证将在 Phase F 的 StackProfile 构建链路接通后启用，
-当前不得将 Vue 标记为已验证。
+Vue 生成完成后：
+
+1. `VueBuildService` 在隔离目录执行 npm install/build；
+2. 成功后将 `dist` 替换回 live 工程；
+3. Playwright Adapter 自动把 `dist` 作为静态源；
+4. 对构建产物执行 desktop/tablet/mobile 三档验证。
+
+真实 Vue 构建产物探针已完成三档验证。React/Next 仍属于 Phase F。

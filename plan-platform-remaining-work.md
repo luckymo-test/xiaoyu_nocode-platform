@@ -1,8 +1,8 @@
 # 计划书：零代码生成平台后续改造
 
 > 日期：2026-10-23
-> 状态：Phase A、Phase B、Phase C、Phase C.5 完成；Phase D 执行框架完成，
-> Vue 构建后验证待 Phase F；Phase E 代码级沙箱完成、容器强隔离待部署环境
+> 状态：Phase A、Phase B、Phase C、Phase C.5、Phase D 完成；
+> Phase E 代码级沙箱完成、容器强隔离待部署环境；Phase F～G 待实施
 > 来源：[plan-platform-rearchitecture.md](plan-platform-rearchitecture.md)
 > 定位：本文件是后续执行和验收的唯一入口；旧计划保留当前架构与实施记录。
 
@@ -380,7 +380,7 @@ codegen.model.fallback.enabled=false
 
 验收结果：
 
-- 142 个默认后端测试通过，21 个外部探针按约定跳过；
+- 144 个默认后端测试通过，22 个外部探针按约定跳过；
 - MySQL 5.7 与 8.4 均从空库执行 V1～V15，并通过 Job、ChatHistory、Artifact 与
   `ai_call_log.jobId` 持久化探针；
 - 压缩、查询规划和视觉选片都通过 `AiCallListener` 写 Prometheus 与 `ai_call_log`；
@@ -479,7 +479,7 @@ API 内嵌 Runner 保持默认
 
 验收结果：
 
-- 142 个默认后端测试通过，21 个外部探针按约定跳过；
+- 144 个默认后端测试通过，22 个外部探针按约定跳过；
 - API 模式上下文验证不存在 `GenerationJobRunner`、`AgentToolLoop`、
   `AiCodeGeneratorFacade`、`VueBuildService` 和旧直连生成 Controller；
 - Worker 模式上下文验证完整消费链和健康指示器存在；
@@ -491,8 +491,7 @@ API 内嵌 Runner 保持默认
 
 #### Phase D：Playwright Node Execution Worker（5～8 天）
 
-状态：执行框架完成（2026-10-24）。HTML/MultiFile 真实三视口探针通过；
-Vue 源码必须先由后续 Build Worker 构建，当前不标记为已验证。
+状态：已完成（2026-10-24）。HTML/MultiFile/Vue 均完成三档真实验证。
 运行手册见 [docs/browser-worker.md](docs/browser-worker.md)。
 
 目标：将浏览器验证从 API JVM 拆出，先解决能力和稳定性，再解决强沙箱。
@@ -545,8 +544,7 @@ trace.zip
 
 尚未完成：
 
-- Vue 源码的 npm build 与构建产物验证，随 Phase F StackProfile 构建链路完成；
-- 容器/低权限用户、egress allowlist 和资源配额，随 Phase E Sandbox 完成。
+- 无 Phase D 阻塞项。React/Next 构建与验证属于 Phase F。
 
 Feature Flag：
 
@@ -575,7 +573,8 @@ codegen.browser.playwright.read-timeout-ms=120000
 - Worker 不可用时返回 unusable report，不阻塞生成发布；
 - API 边界测试确认不装配 `BrowserVerifierPort`；
 - 普通静态 HTML 与 MultiFile 使用同一验证路径；
-- Vue 构建产物验证明确留到 Phase F，避免把未构建源码误报为产品缺陷。
+- Vue 先执行隔离 npm build，再对 dist 完成 desktop/tablet/mobile 三档真实验证；
+- Vue 构建失败会保留明确失败原因，不把未构建源码误报为视觉问题。
 
 #### Phase E：隔离 Build / Browser Sandbox（5～10 天）
 

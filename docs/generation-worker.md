@@ -58,6 +58,7 @@ Worker Profile 默认：
 - `codegen.browser.engine=playwright`，浏览器进程由独立 Node Worker 执行；
 - `codegen.browser.playwright.transport=redis`，通过 Redis Streams 异步下发验证任务；
 - Worker 内禁止 Selenium；如果开启验证却配置本地 Selenium，启动直接失败。
+- Vue 生成后先在隔离目录完成 npm build，再验证 `dist`，不再跳过浏览器验证。
 
 ## 三、进程边界
 
@@ -68,7 +69,8 @@ Worker Profile 默认：
   `AiCodeGeneratorFacade`、Vue 构建入口和旧 `/ai/*` 直连生成 Controller 不装配；
 - `spring.main.lazy-initialization=true`，避免无关生成 Bean 被意外实例化；
 - 不执行模型调用、npm 或浏览器截图；
-- Vue 构建/预览和封面截图在 API 模式明确跳过，等待 Phase D/E 的 Execution Worker。
+- Vue 构建在 Generation Worker 的隔离 Sandbox 中执行，随后由 Playwright 验证 dist；
+  API 模式不执行 Vue build 或封面浏览器截图。
 
 ### Generation Worker
 
@@ -123,7 +125,7 @@ Worker 执行前校验：
 
 ## 七、验证结果
 
-- 142 个默认后端测试通过，21 个外部探针按约定跳过；
+- 144 个默认后端测试通过，22 个外部探针按约定跳过；
 - API 模式上下文不存在 Runner、Dispatcher、Agent、Facade、Vue 构建和旧直连 Controller；
 - Worker 模式上下文包含完整消费链和健康指示器；
 - MySQL 5.7 与 8.4 均通过 V1～V15 和 Job 重试 claim 探针；
@@ -161,6 +163,7 @@ Generation Worker 已通过 `BrowserVerifierPort` 连接独立 Playwright Node W
 
 - Java JVM 只发送当前工作区与三档视口，不创建浏览器进程；
 - Node Worker 执行 DOM/console/network/screenshot/trace；
+- Vue 构建产物与 HTML/MultiFile 使用同一三档验证闭环；
 - 报告、截图、console、network 和 trace 进入 Revision Artifact Graph；
 - Selenium Adapter 保留为 Feature Flag 回退，仅允许 embedded 模式；
 - HTTP 静态源消除 `file://` 对 ES module/fetch 的误报。

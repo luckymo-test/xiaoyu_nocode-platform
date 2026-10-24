@@ -16,7 +16,7 @@
 - 同一全量迁移也在独立 MySQL 5.7.19 空库通过。
 - `GenerationJobPersistenceProbeTest` 与 `ChatHistoryLongMessagePersistenceTest`
   在 MySQL 8.4 和现有 MySQL 5.7.19 上均通过。
-- 默认后端测试 142 个通过，21 个真实模型/浏览器/基础设施探针按约定跳过。
+- 默认后端测试 144 个通过，22 个真实模型/浏览器/基础设施探针按约定跳过。
 
 MySQL 5.7 已超出 Flyway 社区支持范围，启动时会打印支持提示；MySQL 8.4
 在 Flyway 11.20.3 下没有 SQL 兼容警告。
