@@ -113,7 +113,7 @@ runtime/
 - 删除未使用的 `spring-ai-alibaba-agent-framework` 依赖；
 - 用 Maven dependency analysis 检查未声明/未使用依赖；
 - 固定 Spring AI、Spring Boot、MyBatis-Flex、COS SDK 版本；
-- 建立 MySQL 8 测试库，执行现有 V1～V12 Flyway；
+- 建立 MySQL 8 测试库，执行当时已有的全部 Flyway（当前为 V1～V13）；
 - 检查 MySQL 5.7 专有行为：生成列、唯一索引中的 NULL、日期函数、排序规则和大小写；
 - 评估是否将 longtext JSON 字段逐步迁移为原生 JSON；
 - 记录 MySQL 5.7 → 8 的回滚窗口和备份方案。
@@ -121,7 +121,7 @@ runtime/
 验收：
 
 - 后端测试全绿；
-- MySQL 8 上 12 个迁移全部成功；
+- MySQL 8 上全部迁移成功（Phase A 时为 12 个，后续新增 V13）；
 - Job、Revision、Asset、Analytics、Publication 探针全通过；
 - 启动后无 SQL 兼容警告；
 - 依赖树中不再出现未使用的 Agent Framework。
@@ -130,7 +130,7 @@ runtime/
 
 - 已移除未使用的 Agent Framework，并将 Selenium 统一到 Boot BOM 管理的 4.31.0；
 - 已将 Flyway 固定为 11.20.3，MySQL 8.4 启动无 SQL 兼容警告；
-- 全新 MySQL 8.4 与现有 MySQL 5.7 均通过 V1～V12 和真实数据库探针；
+- 全新 MySQL 8.4 与现有 MySQL 5.7 均通过迁移和真实数据库探针；
 - MySQL 5.7 仅保留“社区支持结束”提示，不影响当前兼容基线；
 - 已补齐单活跃 Job、终态 Job 生成列 NULL、长文本与生产切换回滚验证；
 - 原生 JSON、MySQL 8 专有语法暂不引入，保留反向逻辑恢复窗口。

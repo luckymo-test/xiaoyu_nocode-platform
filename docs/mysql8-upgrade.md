@@ -1,7 +1,7 @@
 # MySQL 5.7 → 8.4 升级与回滚手册
 
 > 验证日期：2026-10-24  
-> 适用版本：当前 Flyway V1～V12  
+> 适用版本：当前 Flyway V1～V13
 > 当前生产兼容基线：MySQL 5.7；MySQL 8.4 已完成独立验证，尚未切换生产
 
 ## 一、已验证基线
@@ -10,7 +10,7 @@
 - MySQL Connector/J 9.7.0。
 - Flyway 11.20.3；该版本消除了 Flyway 11.7 对 MySQL 8.4 的“未验证版本”告警。
 - MySQL 8.4.0 Community 发行包位于 `D:\computer tools\mysql-8.4`。
-- 全新 MySQL 8.4 数据库成功执行 V1～V12，创建 20 张表。
+- 全新 MySQL 8.4 数据库成功执行 V1～V13，创建 20 张表。
 - `GenerationJobPersistenceProbeTest` 与 `ChatHistoryLongMessagePersistenceTest`
   在 MySQL 8.4 和现有 MySQL 5.7.19 上均通过。
 - 默认后端测试 99 个通过，16 个真实模型/浏览器/基础设施探针按约定跳过。
@@ -68,7 +68,7 @@ $mysql8 = 'D:\computer tools\mysql-8.4\bin'
 
 1. 在 MySQL 8.4 创建空数据库，显式指定 `utf8mb4` 字符集。
 2. 使用 MySQL 8 客户端导入完整备份。
-3. 启动应用，让 Flyway 校验现有 V1～V12；已有库应显示 schema version 12。
+3. 启动应用，让 Flyway 校验现有 V1～V13；已有库应显示 schema version 13。
 4. 执行以下真实基础设施探针：
 
 ```powershell

@@ -43,6 +43,14 @@ Flux<ModelChunk> stream(ModelRequest request);
   `AgentToolLoop` 维护，Gateway 只负责模型路由和协议转换；
 - 以上调用都保留旧 ChatModel 分支用于灰度回滚。
 
+### 实际模型审计
+
+- `ai_call_log` 新增 `provider` 和 `modelTask`，现有 `model` 改存实际模型名；
+- Prometheus 指标新增低基数 `provider`、`model`、`model_task` 标签；
+- `AgentToolLoop` 成功调用记录 Gateway 返回的实际 provider/model；
+- 失败调用记录任务类型和尝试使用的模型，供应商未知时明确记录 `unknown`；
+- Flyway `V13__ai_call_model_audit.sql` 已在 MySQL 5.7 和 8.4 实测通过。
+
 ## 二、配置
 
 ```yaml
@@ -103,6 +111,7 @@ gateway=false
 - DeepSeek/OpenAI-compatible 参数在 Adapter 内组装；
 - 统一响应映射文本、reasoning、finish reason 和 usage；
 - 压缩、查询规划和 AgentToolLoop 在开关开启时不再直接调用旧 ChatModel。
+- 调用明细与 Prometheus 使用实际 provider/model/task，不再只依赖全局默认模型。
 
 真实模型回归已执行：
 
@@ -117,7 +126,6 @@ gateway=false
 
 - `ImageCuratorAgent` 仍硬编码视觉模型并直接 POST `/chat/completions`；
 - `WebResearchClient` 仍直接使用 DeepSeek Search/Fetch endpoint；
-- AI 明细和 Prometheus 仍按全局模型配置记录，尚未记录实际 provider/model/task；
 - 尚无模型级熔断、限流和真实第二供应商契约测试；
 - 尚无 Generation/Revision 级模型与路由版本快照。
 
