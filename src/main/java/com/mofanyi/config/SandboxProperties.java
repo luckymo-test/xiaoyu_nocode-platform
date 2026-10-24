@@ -18,6 +18,10 @@ import java.util.List;
 public class SandboxProperties {
 
     private boolean enabled = true;
+    /**
+     * 生产 Worker 可设为 true：检测不到容器标记或仍以 root 运行时拒绝启动。
+     */
+    private boolean requireContainer = false;
     private int maxSourceFiles = 2_000;
     private long maxSourceBytes = 50L * 1024 * 1024;
     private int maxOutputFiles = 10_000;

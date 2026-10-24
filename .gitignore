@@ -2,6 +2,7 @@
 # 本机配置：含绝对路径/密钥，不入库
 application-location.yml
 *.local.yml
+sandbox-runtime/.env
 
 # 敏感文件（cookie）
 admin_cookies.txt

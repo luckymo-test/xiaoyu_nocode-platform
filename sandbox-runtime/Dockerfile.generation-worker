@@ -1,0 +1,39 @@
+ARG MAVEN_IMAGE=maven:3.9.9-eclipse-temurin-21
+ARG JRE_IMAGE=eclipse-temurin:21.0.6_7-jre-jammy
+
+FROM ${MAVEN_IMAGE} AS build
+WORKDIR /build
+COPY pom.xml ./
+RUN mvn -B -ntp -DskipTests dependency:go-offline
+COPY src ./src
+RUN mvn -B -ntp -DskipTests package
+
+FROM ${JRE_IMAGE} AS jre
+
+FROM node:22.14.0-bookworm-slim
+
+COPY --from=jre /opt/java/openjdk /opt/java/openjdk
+
+ENV JAVA_HOME=/opt/java/openjdk \
+    PATH=/opt/java/openjdk/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    NODE_ENV=production \
+    HOME=/tmp \
+    CODEGEN_TMP_ROOT=/workspace \
+    CODEGEN_SANDBOX_REQUIRE_CONTAINER=true \
+    CODEGEN_BROWSER_ENGINE=playwright \
+    CODEGEN_PLAYWRIGHT_TRANSPORT=redis
+
+RUN groupadd --gid 10001 app \
+    && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin app \
+    && mkdir -p /app /workspace \
+    && chown -R app:app /app /workspace
+
+WORKDIR /app
+
+COPY --from=build --chown=app:app /build/target/*.jar /app/app.jar
+
+USER app:app
+
+EXPOSE 8126
+
+ENTRYPOINT ["java", "-jar", "/app/app.jar"]

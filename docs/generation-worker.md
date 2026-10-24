@@ -60,6 +60,15 @@ Worker Profile 默认：
 - Worker 内禁止 Selenium；如果开启验证却配置本地 Selenium，启动直接失败。
 - Vue 生成后先在隔离目录完成 npm build，再验证 `dist`，不再跳过浏览器验证。
 
+生产容器镜像与启动门禁：
+
+- 镜像入口：`sandbox-runtime/Dockerfile.generation-worker`；
+- 镜像内以 UID 10001 运行，Node 与 JRE 21 固定在同一制品中；
+- `CODEGEN_SANDBOX_REQUIRE_CONTAINER=true` 时，检测不到容器标记或运行用户为 root
+  会拒绝启动；
+- npm 子进程使用严格环境变量白名单和沙箱内 HOME/cache/TEMP，不继承模型或云密钥；
+- 根文件系统只读、tmpfs `/tmp` 与资源限额需由部署编排提供。
+
 ## 三、进程边界
 
 ### Control API

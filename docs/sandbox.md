@@ -1,7 +1,8 @@
 # Build / Browser Sandbox 安全边界
 
 > 日期：2026-10-24
-> 状态：代码级隔离与配额完成；容器/轻量 VM 强隔离仍需部署环境支持
+> 状态：代码级隔离与配额完成；容器镜像、编排和破坏性探针已准备，
+> 内核级隔离仍需在 Linux 容器环境执行验收
 
 ## 一、当前隔离模型
 
@@ -21,6 +22,10 @@ Browser Node Worker
 
 当前机器没有 Docker、WSL 或 Podman 运行时，因此本轮不伪造“容器已启用”。
 代码级守卫先保证 fail-closed；正式生产仍应放入容器或轻量 VM。
+
+`sandbox-runtime/` 已提供 Browser Worker 与 Generation Worker 镜像、只读 rootfs、
+capability drop、PID/CPU/内存限额、内部网络、Squid 域名 allowlist 和
+`probe-isolation.sh`。这些文件只有在真实 Linux 容器中跑通后才能标记生产隔离完成。
 
 ## 二、Build Sandbox
 
@@ -49,8 +54,8 @@ Browser Node Worker
 - 单条命令默认超时 300 秒；
 - stdout/stderr 各限制 200,000 字符；
 - 超时会递归销毁进程树并 wait/回收；
-- 环境变量只剔除 API Key/Secret/Token/Password/Cloud/DB 类变量，
-  保留 Node/npm 正常运行所需的系统变量；
+- 环境变量使用 fail-closed 白名单，只保留 Node/npm 正常运行所需的系统变量；
+- npm 使用沙箱内空 `.npmrc`、独立 HOME、cache、TEMP/TMP/TMPDIR；
 - `.agent/build-report.json` 记录成功、耗时、原因、源码/产物文件数和大小。
 
 ## 三、Browser Sandbox
@@ -115,8 +120,10 @@ codegen:
 
 因此生产部署必须继续完成：
 
-- 容器镜像与只读 rootfs；
-- CPU/内存/PID/临时盘 cgroup；
-- egress proxy 或网络 namespace；
-- npm registry proxy 与依赖缓存；
-- 超时后强制销毁整个容器。
+- 在 Docker/Podman 主机构建并记录镜像 digest；
+- 用只读 rootfs、CPU/内存/PID/临时盘 cgroup 启动 Generation/Browser Worker；
+- 验证 Browser Worker 只能通过 Squid 出站，不能绕过代理直连公网；
+- 验证 npm registry proxy 与依赖缓存策略；
+- 执行 fork bomb、OOM、无限循环和超时后强制销毁测试。
+
+入口与验收命令见 [sandbox-runtime/README.md](../sandbox-runtime/README.md)。

@@ -311,37 +311,31 @@ public class VueBuildService {
     }
 
     private void sanitizeEnvironment(Map<String, String> environment, Path sandbox) {
-        environment.keySet().removeIf(VueBuildService::sensitiveEnvironmentKey);
+        SandboxEnvironment.retainSafeKeys(environment);
         Path cache = sandbox.resolve(".npm-cache");
         Path temp = sandbox.resolve(".tmp");
+        Path home = sandbox.resolve(".home");
+        Path npmUserConfig = sandbox.resolve(".npmrc");
         try {
             Files.createDirectories(cache);
             Files.createDirectories(temp);
+            Files.createDirectories(home);
+            if (!Files.exists(npmUserConfig)) {
+                Files.writeString(npmUserConfig, "", StandardCharsets.UTF_8);
+            }
         } catch (Exception e) {
             throw new BusinessException(ErrorCode.OPERATION_ERROR,
                     "创建 npm 隔离目录失败：" + e.getMessage());
         }
+        environment.put("HOME", home.toString());
         environment.put("TEMP", temp.toString());
         environment.put("TMP", temp.toString());
+        environment.put("TMPDIR", temp.toString());
         environment.put("NPM_CONFIG_CACHE", cache.toString());
+        environment.put("NPM_CONFIG_USERCONFIG", npmUserConfig.toString());
         environment.put("NPM_CONFIG_REGISTRY", sandboxProperties.getBuild().getRegistry());
+        environment.put("NPM_CONFIG_UPDATE_NOTIFIER", "false");
         environment.put("CI", "1");
-    }
-
-    private static boolean sensitiveEnvironmentKey(String key) {
-        String upper = key == null ? "" : key.toUpperCase();
-        return upper.contains("API_KEY")
-                || upper.contains("SECRET")
-                || upper.contains("TOKEN")
-                || upper.contains("PASSWORD")
-                || upper.contains("CREDENTIAL")
-                || upper.startsWith("DEEPSEEK_")
-                || upper.startsWith("OPENAI_")
-                || upper.startsWith("TENCENT")
-                || upper.startsWith("COS_")
-                || upper.startsWith("MYSQL_")
-                || upper.startsWith("REDIS_")
-                || upper.startsWith("AWS_");
     }
 
     private void killTree(Process process) {

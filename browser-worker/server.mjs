@@ -4,8 +4,41 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { chromium } from "playwright-core";
 import { createClient } from "redis";
+import {
+  assertBindPolicy,
+  assertContainerPolicy,
+  assertProxyPolicy,
+  createConcurrencyGate,
+  detectContainer,
+  parsePositiveInteger,
+  resolveBindAddress,
+  resolveProxyServer
+} from "./security.mjs";
 
 const PORT = Number(process.env.BROWSER_WORKER_PORT || 8090);
+const BIND_ADDRESS = resolveBindAddress(
+  process.env.BROWSER_WORKER_BIND_ADDRESS || "127.0.0.1"
+);
+const IN_CONTAINER = detectContainer();
+const REQUIRE_CONTAINER = String(
+  process.env.BROWSER_WORKER_REQUIRE_CONTAINER || "false"
+).toLowerCase() === "true";
+assertContainerPolicy({ required: REQUIRE_CONTAINER, inContainer: IN_CONTAINER });
+assertBindPolicy({ bindAddress: BIND_ADDRESS, inContainer: IN_CONTAINER });
+const PROXY_SERVER = resolveProxyServer(process.env.BROWSER_WORKER_PROXY_SERVER || "");
+const REQUIRE_PROXY = String(
+  process.env.BROWSER_WORKER_REQUIRE_PROXY || "false"
+).toLowerCase() === "true";
+assertProxyPolicy({ required: REQUIRE_PROXY, proxyServer: PROXY_SERVER });
+const PROXY_BYPASS = String(
+  process.env.BROWSER_WORKER_PROXY_BYPASS || "127.0.0.1,localhost"
+);
+const MAX_CONCURRENCY = parsePositiveInteger(
+  process.env.BROWSER_WORKER_MAX_CONCURRENCY,
+  1,
+  { min: 1, max: 8 }
+);
+const CONCURRENCY_GATE = createConcurrencyGate(MAX_CONCURRENCY);
 const WORKSPACE_ROOT_RAW = path.resolve(
   process.env.BROWSER_WORKER_WORKSPACE_ROOT || path.join(process.cwd(), "..", "tmp")
 );
@@ -174,6 +207,22 @@ async function startStaticServer(root) {
 }
 
 async function verify(request) {
+  const release = CONCURRENCY_GATE.tryAcquire();
+  if (!release) {
+    const error = new Error(
+      `Browser Worker 并发已满：${CONCURRENCY_GATE.snapshot().limit}`
+    );
+    error.statusCode = 429;
+    throw error;
+  }
+  try {
+    return await verifyTask(request);
+  } finally {
+    release();
+  }
+}
+
+async function verifyTask(request) {
   const startedAt = Date.now();
   const sourceDir = await scopedPath(request.sourceDir, "sourceDir");
   const outputCandidate = path.resolve(request.outputDir);
@@ -208,6 +257,12 @@ async function verify(request) {
         { name: "mobile", label: "手机", width: 375, height: 800 }
       ];
   const launchOptions = { headless: true };
+  if (PROXY_SERVER) {
+    launchOptions.proxy = {
+      server: PROXY_SERVER,
+      bypass: PROXY_BYPASS
+    };
+  }
   if (BROWSER_EXECUTABLE) {
     launchOptions.executablePath = BROWSER_EXECUTABLE;
   } else {
@@ -430,7 +485,11 @@ const server = http.createServer(async (req, res) => {
       status: "UP",
       engine: "playwright",
       channel: BROWSER_EXECUTABLE || BROWSER_CHANNEL,
-      workspaceRoot: WORKSPACE_ROOT
+      workspaceRoot: WORKSPACE_ROOT,
+      bindAddress: BIND_ADDRESS,
+      inContainer: IN_CONTAINER,
+      proxyConfigured: Boolean(PROXY_SERVER),
+      concurrency: CONCURRENCY_GATE.snapshot()
     });
     return;
   }
@@ -443,16 +502,18 @@ const server = http.createServer(async (req, res) => {
     const report = await verify(payload);
     json(res, 200, report);
   } catch (error) {
-    json(res, 500, {
+    json(res, Number(error?.statusCode) || 500, {
       status: "ERROR",
       errors: [String(error?.message || error).slice(0, 500)]
     });
   }
 });
 
-server.listen(PORT, "127.0.0.1", () => {
+server.listen(PORT, BIND_ADDRESS, () => {
   console.log(
-    `[playwright-worker] listening=http://127.0.0.1:${PORT} channel=${BROWSER_EXECUTABLE || BROWSER_CHANNEL} root=${WORKSPACE_ROOT}`
+    `[playwright-worker] listening=http://${BIND_ADDRESS}:${PORT} `
+      + `channel=${BROWSER_EXECUTABLE || BROWSER_CHANNEL} root=${WORKSPACE_ROOT} `
+      + `container=${IN_CONTAINER} proxy=${Boolean(PROXY_SERVER)} concurrency=${MAX_CONCURRENCY}`
   );
 });
 

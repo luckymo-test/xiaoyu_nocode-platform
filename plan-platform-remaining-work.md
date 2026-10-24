@@ -2,7 +2,8 @@
 
 > 日期：2026-10-23
 > 状态：Phase A、Phase B、Phase C、Phase C.5、Phase D 完成；
-> Phase E 代码级沙箱完成、容器强隔离待部署环境；Phase F～G 待实施
+> Phase E 代码级沙箱完成，容器镜像/编排/探针已准备，真实强隔离验收待部署环境；
+> Phase F～G 待实施
 > 来源：[plan-platform-rearchitecture.md](plan-platform-rearchitecture.md)
 > 定位：本文件是后续执行和验收的唯一入口；旧计划保留当前架构与实施记录。
 
@@ -578,8 +579,9 @@ codegen.browser.playwright.read-timeout-ms=120000
 
 #### Phase E：隔离 Build / Browser Sandbox（5～10 天）
 
-状态：代码级隔离与配额完成（2026-10-24）；当前机器无 Docker/WSL/Podman，
-容器/轻量 VM 强隔离仍需部署环境支持。执行边界见 [docs/sandbox.md](docs/sandbox.md)。
+状态：代码级隔离与配额完成（2026-10-24）；容器镜像、只读 rootfs 编排、
+Squid egress allowlist 和破坏性探针已准备，尚未在真实容器中执行。当前机器无
+Docker/WSL/Podman。执行边界见 [docs/sandbox.md](docs/sandbox.md)。
 
 目标：防止模型生成代码与 npm 依赖获得宿主机权限。
 
@@ -605,12 +607,20 @@ codegen.browser.playwright.read-timeout-ms=120000
 - Browser Worker 真实路径解析、egress host allowlist、云元数据阻断；
 - Browser 单次硬超时与 source/output/runtime 指标；
 - Build/Browser 执行报告落盘。
+- npm 子进程环境变量升级为严格白名单，并使用沙箱内 HOME、`.npmrc`、cache 与 TEMP；
+- 新增容器标记 + 非 root 启动门禁，未满足时 Generation/Browser Worker 拒绝启动；
+- 新增 Browser Worker 并发闸门、代理模式和容器健康标记；
+- 新增 Browser/Generation Worker 镜像、只读 rootfs Compose 与隔离探针脚本。
 
 未完成：
 
 - cgroup CPU/内存/PID 配额；
 - 容器只读 rootfs 与网络 namespace；
 - npm install script 的内核级隔离。
+
+说明：上述资源与网络边界已写入 `sandbox-runtime/`，但因本机无容器运行时，
+尚未完成真实构建、OOM、fork bomb、无限循环、代理绕过和强制销毁验收，
+因此不能把 Phase E 标记为完成。
 
 验收：
 

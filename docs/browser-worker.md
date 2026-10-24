@@ -68,10 +68,16 @@ Invoke-RestMethod http://127.0.0.1:8090/health
 
 ```text
 BROWSER_WORKER_PORT
+BROWSER_WORKER_BIND_ADDRESS
 BROWSER_WORKER_WORKSPACE_ROOT
 BROWSER_WORKER_CHANNEL
 BROWSER_WORKER_EXECUTABLE
 BROWSER_WORKER_SETTLE_MILLIS
+BROWSER_WORKER_MAX_CONCURRENCY
+BROWSER_WORKER_REQUIRE_CONTAINER
+BROWSER_WORKER_REQUIRE_PROXY
+BROWSER_WORKER_PROXY_SERVER
+BROWSER_WORKER_PROXY_BYPASS
 BROWSER_WORKER_REDIS_URL
 BROWSER_WORKER_REDIS_STREAM
 BROWSER_WORKER_REDIS_GROUP
@@ -125,19 +131,24 @@ Revision 发布时登记：
 当前版本已经实现：
 
 - 只监听 `127.0.0.1`；
+- 容器内可显式监听 `0.0.0.0`；非容器进程拒绝非回环监听；
+- 可启用容器/代理启动门禁，缺少任一生产条件时 fail-closed；
+- HTTP 与 Redis 共享受限并发闸门，超限 HTTP 请求返回 429；
 - 请求体上限 1 MB；
 - `sourceDir/outputDir` 必须位于 `BROWSER_WORKER_WORKSPACE_ROOT`；
 - 只接受带 `index.html` 的明确工作区；
 - 不接受 URL、数据库配置或任意命令；
 - 单次验证最多 5 个视口，报告事件有数量上限。
 
-以下仍属于 Phase E：
+以下属于 Phase E 的部署验收：
 
-- 容器/低权限用户运行；
-- 网络 egress allowlist；
-- CPU、内存、进程数和临时盘配额；
-- 依赖与 npm 构建隔离；
-- 强超时后的进程树回收。
+- 容器/低权限用户的真实镜像构建与启动；
+- Squid egress allowlist 与禁止直连公网；
+- CPU、内存、进程数和临时盘 cgroup 限额；
+- 强超时后的整容器回收；
+- fork bomb、OOM 和无限循环破坏性探针。
+
+镜像、Compose 和探针入口见 [sandbox-runtime/README.md](../sandbox-runtime/README.md)。
 
 Redis Streams 消费组支持多 Worker 竞争消费；超过 60 秒的 pending 消息会通过
 `XAUTOCLAIM` 接管，结果键按 verificationId 覆盖并由 Java 端删除。

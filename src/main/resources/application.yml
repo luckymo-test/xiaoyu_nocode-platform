@@ -139,6 +139,7 @@ codegen:
     cancel-poll-millis: ${CODEGEN_WORKER_CANCEL_POLL_MILLIS:1000}
   sandbox:
     enabled: ${CODEGEN_SANDBOX_ENABLED:true}
+    require-container: ${CODEGEN_SANDBOX_REQUIRE_CONTAINER:false}
     max-source-files: ${CODEGEN_SANDBOX_MAX_SOURCE_FILES:2000}
     max-source-bytes: ${CODEGEN_SANDBOX_MAX_SOURCE_BYTES:52428800}
     max-output-files: ${CODEGEN_SANDBOX_MAX_OUTPUT_FILES:10000}
