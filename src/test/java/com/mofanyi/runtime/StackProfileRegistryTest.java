@@ -42,6 +42,12 @@ class StackProfileRegistryTest {
         assertTrue(react.allowedDependencies().contains("@vitejs/plugin-react"));
         assertTrue(react.allowedBuildScripts().contains("tsc --noEmit && vite build"));
         assertEquals("dist", react.outputDirectory());
+
+        StackProfileRegistry nextEnabledRegistry = new StackProfileRegistry(false, true);
+        StackProfile next = nextEnabledRegistry.require("next-static-export");
+        assertEquals("out", next.outputDirectory());
+        assertTrue(next.allowedDependencies().contains("next"));
+        assertTrue(next.allowedBuildScripts().contains("next build"));
     }
 
     @Test

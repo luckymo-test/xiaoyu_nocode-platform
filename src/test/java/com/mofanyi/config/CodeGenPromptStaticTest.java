@@ -32,6 +32,8 @@ class CodeGenPromptStaticTest {
             "prompt/codegen_vue_fix_prompt.txt",
             "prompt/codegen_react_vite_prompt.txt",
             "prompt/codegen_react_fix_prompt.txt",
+            "prompt/codegen_next_static_prompt.txt",
+            "prompt/codegen_next_fix_prompt.txt",
             "prompt/codegen_modify_prompt.txt",
             "prompt/codegen_render_fix_prompt.txt");
 
@@ -90,6 +92,8 @@ class CodeGenPromptStaticTest {
         assertTrue(config.reactPrompt().contains("createRoot"));
         assertTrue(config.reactPrompt().contains("tsc --noEmit && vite build"));
         assertTrue(config.reactFixPrompt().contains("不得用 `any`"));
+        assertTrue(config.nextPrompt().contains("output: \"export\""));
+        assertTrue(config.nextFixPrompt().contains("images.unoptimized"));
         assertTrue(config.renderFixPrompt().contains("隐藏的灯箱"));
         assertTrue(config.vuePrompt().contains("PROMPT_VERSION: vue-v2"));
         assertTrue(config.singleHtmlPrompt().contains("已有素材清单时不要为了图片重复调用"));

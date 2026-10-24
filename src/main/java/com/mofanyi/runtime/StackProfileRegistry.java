@@ -60,9 +60,14 @@ public class StackProfileRegistry {
                 "next-static-export", "1", "Next.js Static Export", CodeGenTypeEnum.VUE,
                 Set.of("ssg", "routing", "seo", "motion", "typescript"), nextEnabled,
                 nextEnabled ? null : "静态导出脚手架与验证流程尚未完成",
-                List.of(new CommandSpec("install", List.of("npm", "ci"), Duration.ofMinutes(8))),
-                List.of(new CommandSpec("build", List.of("npm", "run", "build"), Duration.ofMinutes(8))),
-                "out", Set.of(), Set.of()));
+                List.of(new CommandSpec("install", List.of("npm", "ci"), Duration.ofMinutes(10))),
+                List.of(new CommandSpec("build", List.of("npm", "run", "build"), Duration.ofMinutes(10))),
+                "out",
+                Set.of("next", "react", "react-dom", "typescript",
+                        "@types/node", "@types/react", "@types/react-dom",
+                        "tailwindcss", "postcss", "autoprefixer",
+                        "gsap", "lucide-react", "clsx", "framer-motion"),
+                Set.of("next build")));
         this.profiles = Collections.unmodifiableMap(new LinkedHashMap<>(values));
     }
 

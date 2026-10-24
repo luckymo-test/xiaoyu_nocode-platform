@@ -1,0 +1,16 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  background: #11100e;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(circle at 15% 15%, rgb(120 76 35 / 45%), transparent 35%),
+    #11100e;
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+}

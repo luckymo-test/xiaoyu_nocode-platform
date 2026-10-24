@@ -280,7 +280,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         App app = this.getById(id);
         ThrowUtils.throwIf(app == null, ErrorCode.NOT_FOUND_ERROR);
         ThrowUtils.throwIf(!CodeGenTypeEnum.VUE.getValue().equals(app.getCodeGenType()),
-                ErrorCode.PARAMS_ERROR, "非 Vue 工程无法预览构建产物");
+                ErrorCode.PARAMS_ERROR, "非前端工程无法预览构建产物");
         VueBuildService vueBuildService = requireVueBuildService();
         String html = vueBuildService.readVueDist(app.getId());
         if (html == null) {
@@ -293,7 +293,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
                 }
             }
         }
-        ThrowUtils.throwIf(html == null, ErrorCode.OPERATION_ERROR, "Vue 工程构建失败，无法预览");
+        ThrowUtils.throwIf(html == null, ErrorCode.OPERATION_ERROR, "前端工程构建失败，无法预览");
         return html;
     }
 

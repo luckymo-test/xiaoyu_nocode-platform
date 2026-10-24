@@ -274,16 +274,25 @@ onMounted(() => {
   loadTab('mine')
   void listRuntimeProfiles().then((res) => {
     runtimeProfiles.value = res.code === 0 ? res.data : []
-    if (runtimeProfiles.value.some((profile) =>
-      profile.id === 'react-vite-ts' && profile.available
-    ) && !generateModes.value.some((mode) => mode.stackProfileId === 'react-vite-ts')) {
-      generateModes.value.push({
-        label: 'React + TypeScript',
-        codeGenType: 'vue',
-        stream: true,
-        stackProfileId: 'react-vite-ts',
-      })
+    const labels: Record<string, string> = {
+      'react-vite-ts': 'React + TypeScript',
+      'next-static-export': 'Next.js 静态工程',
     }
+    runtimeProfiles.value
+      .filter((profile) => profile.available
+        && profile.compatibilityType === 'vue'
+        && profile.id !== 'vue-vite')
+      .forEach((profile) => {
+        if (generateModes.value.some((mode) => mode.stackProfileId === profile.id)) {
+          return
+        }
+        generateModes.value.push({
+          label: labels[profile.id] || profile.displayName,
+          codeGenType: 'vue',
+          stream: true,
+          stackProfileId: profile.id,
+        })
+      })
   }).catch(() => {
     runtimeProfiles.value = []
   })

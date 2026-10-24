@@ -1,0 +1,17 @@
+<!-- PROMPT_VERSION: next-fix-v1 -->
+【任务】
+根据 Next.js 静态导出构建错误修复工程，使 `next build` 成功并生成 `out/`。
+
+【定位重点】
+- 客户端组件是否缺少 `"use client"`，或 Server Component 是否错误使用 hooks/事件。
+- App Router 是否缺少 `app/layout.tsx`、`app/page.tsx` 或 root layout 的 html/body。
+- `next.config.mjs` 是否保留 `output: "export"` 和 `images.unoptimized: true`。
+- TSX、TypeScript、PostCSS 和 Tailwind 4 的导入与语法。
+- 是否使用静态导出不支持的动态请求、Cookie、server action 或图片优化。
+
+【约束】
+- 只做让构建通过所需的最小修改。
+- 不得改成 SSR、启动自定义 server、关闭 TypeScript strict 或绕过类型检查。
+- 不得引入未声明依赖或添加任意 postinstall 脚本。
+- 写入文件时传工程根目录下的完整相对路径。
+- 修复后重新检查客户端边界和静态导出限制，再调用 finish。

@@ -25,6 +25,8 @@ public class CodeGenPromptRegistry {
     private final String vueFixPrompt;
     private final String reactPrompt;
     private final String reactFixPrompt;
+    private final String nextPrompt;
+    private final String nextFixPrompt;
     private final String modifyPrompt;
     private final String renderFixPrompt;
 
@@ -34,6 +36,8 @@ public class CodeGenPromptRegistry {
                                  @Qualifier("vueFixPrompt") String vueFixPrompt,
                                  @Qualifier("reactPrompt") String reactPrompt,
                                  @Qualifier("reactFixPrompt") String reactFixPrompt,
+                                 @Qualifier("nextPrompt") String nextPrompt,
+                                 @Qualifier("nextFixPrompt") String nextFixPrompt,
                                  @Qualifier("modifyPrompt") String modifyPrompt,
                                  @Qualifier("renderFixPrompt") String renderFixPrompt) {
         this.singleHtmlPrompt = singleHtmlPrompt;
@@ -42,6 +46,8 @@ public class CodeGenPromptRegistry {
         this.vueFixPrompt = vueFixPrompt;
         this.reactPrompt = reactPrompt;
         this.reactFixPrompt = reactFixPrompt;
+        this.nextPrompt = nextPrompt;
+        this.nextFixPrompt = nextFixPrompt;
         this.modifyPrompt = modifyPrompt;
         this.renderFixPrompt = renderFixPrompt;
     }
@@ -61,8 +67,11 @@ public class CodeGenPromptRegistry {
      * Runtime profile takes precedence over the legacy compatibility enum.
      */
     public String system(String stackProfileId, CodeGenTypeEnum type) {
-        return "react-vite-ts".equals(stackProfileId)
-                ? reactPrompt : system(type);
+        return switch (stackProfileId) {
+            case "react-vite-ts" -> reactPrompt;
+            case "next-static-export" -> nextPrompt;
+            default -> system(type);
+        };
     }
 
     /**
@@ -73,8 +82,11 @@ public class CodeGenPromptRegistry {
     }
 
     public String buildFix(String stackProfileId) {
-        return "react-vite-ts".equals(stackProfileId)
-                ? reactFixPrompt : vueFixPrompt;
+        return switch (stackProfileId) {
+            case "react-vite-ts" -> reactFixPrompt;
+            case "next-static-export" -> nextFixPrompt;
+            default -> vueFixPrompt;
+        };
     }
 
     /**
@@ -102,6 +114,8 @@ public class CodeGenPromptRegistry {
         versions.put("vue-fix", com.mofanyi.ai.model.ModelExecutionTrace.version(vueFixPrompt));
         versions.put("react", com.mofanyi.ai.model.ModelExecutionTrace.version(reactPrompt));
         versions.put("react-fix", com.mofanyi.ai.model.ModelExecutionTrace.version(reactFixPrompt));
+        versions.put("next-static", com.mofanyi.ai.model.ModelExecutionTrace.version(nextPrompt));
+        versions.put("next-fix", com.mofanyi.ai.model.ModelExecutionTrace.version(nextFixPrompt));
         versions.put("modify", com.mofanyi.ai.model.ModelExecutionTrace.version(modifyPrompt));
         versions.put("render-fix", com.mofanyi.ai.model.ModelExecutionTrace.version(renderFixPrompt));
         return versions;

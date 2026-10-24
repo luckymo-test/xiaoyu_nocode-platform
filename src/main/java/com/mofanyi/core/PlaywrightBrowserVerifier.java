@@ -7,7 +7,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mofanyi.config.SandboxProperties;
 import com.mofanyi.job.GenerationExecutionCondition;
 import com.mofanyi.model.enums.CodeGenTypeEnum;
+import com.mofanyi.runtime.StackProfile;
+import com.mofanyi.runtime.StackProfileContext;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Conditional;
 import org.springframework.stereotype.Service;
@@ -35,16 +38,31 @@ public class PlaywrightBrowserVerifier implements BrowserVerifierPort {
     private final CodeFileWriteService codeFileWriteService;
     private final BrowserVerificationTransport transport;
     private final SandboxProperties sandbox;
+    private final StackProfileContext stackProfileContext;
 
+    @Autowired
+    public PlaywrightBrowserVerifier(
+            ObjectMapper objectMapper,
+            CodeFileWriteService codeFileWriteService,
+            BrowserVerificationTransport transport,
+            SandboxProperties sandbox,
+            StackProfileContext stackProfileContext) {
+        this.objectMapper = objectMapper;
+        this.codeFileWriteService = codeFileWriteService;
+        this.transport = transport;
+        this.sandbox = sandbox;
+        this.stackProfileContext = stackProfileContext;
+    }
+
+    /**
+     * 兼容已有探针的本地构造方式，未激活 Profile 时按 Vue dist 处理。
+     */
     public PlaywrightBrowserVerifier(
             ObjectMapper objectMapper,
             CodeFileWriteService codeFileWriteService,
             BrowserVerificationTransport transport,
             SandboxProperties sandbox) {
-        this.objectMapper = objectMapper;
-        this.codeFileWriteService = codeFileWriteService;
-        this.transport = transport;
-        this.sandbox = sandbox;
+        this(objectMapper, codeFileWriteService, transport, sandbox, null);
     }
 
     @Override
@@ -65,8 +83,17 @@ public class PlaywrightBrowserVerifier implements BrowserVerifierPort {
         }
         Path projectDir = Path.of(codeFileWriteService.getProjectDir(type, appId))
                 .toAbsolutePath().normalize();
-        Path sourceDir = type == CodeGenTypeEnum.VUE
-                ? projectDir.resolve("dist") : projectDir;
+        Path sourceDir = projectDir;
+        if (type == CodeGenTypeEnum.VUE) {
+            StackProfile profile = stackProfileContext == null
+                    ? null : stackProfileContext.get(appId);
+            sourceDir = projectDir.resolve(
+                    profile == null ? "dist" : profile.outputDirectory()).normalize();
+            if (!sourceDir.startsWith(projectDir)) {
+                return new RenderVerifier.RenderReport(
+                        List.of(), List.of("StackProfile 输出目录越界"));
+            }
+        }
         File index = sourceDir.resolve("index.html").toFile();
         if (!FileUtil.exist(index)) {
             return new RenderVerifier.RenderReport(

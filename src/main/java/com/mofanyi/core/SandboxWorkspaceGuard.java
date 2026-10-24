@@ -26,7 +26,7 @@ import java.util.stream.Stream;
 public class SandboxWorkspaceGuard {
 
     private static final Set<String> EXCLUDED_DIRS = Set.of(
-            ".git", "node_modules", "dist", "build", "target", ".agent");
+            ".git", "node_modules", "dist", "out", ".next", "build", "target", ".agent");
     private static final Set<String> ALLOWED_BUILD_SCRIPTS = Set.of(
             "vite build",
             "vue-tsc --noEmit && vite build",

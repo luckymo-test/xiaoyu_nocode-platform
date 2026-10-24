@@ -205,6 +205,7 @@ public class CodeFileWriteService {
         for (File child : children) {
             if (child.isDirectory()) {
                 if ("node_modules".equals(child.getName()) || "dist".equals(child.getName())
+                        || "out".equals(child.getName()) || ".next".equals(child.getName())
                         || ".agent".equals(child.getName())) {
                     continue;
                 }

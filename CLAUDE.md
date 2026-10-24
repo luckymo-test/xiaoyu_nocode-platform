@@ -29,9 +29,10 @@ AI 应用生成平台。用户通过一句话创建网站或前端工程，平�
   查询规划、视觉选片和研究；业务层旧 OpenAI Options 分支已移除；
   Revision Manifest 记录 Prompt/Profile/Tool Schema、路由版本和实际模型调用，
   见 [docs/model-gateway.md](docs/model-gateway.md)。
-- `StackProfile` 是真实运行时选择层；`react-vite-ts` 已完成隔离构建和三档验证，
-  默认由 Feature Flag 关闭。控制台通过 `/v1/runtime-profiles` 获取可用技术栈，
-  见 [docs/stack-runtime.md](docs/stack-runtime.md)。
+- `StackProfile` 是真实运行时选择层；`react-vite-ts` 和 `next-static-export`
+  已完成隔离构建和三档验证，默认由 Feature Flag 关闭。控制台通过
+  `/v1/runtime-profiles` 获取可用技术栈，见
+  [docs/stack-runtime.md](docs/stack-runtime.md)。
 
 ## 必读文档
 

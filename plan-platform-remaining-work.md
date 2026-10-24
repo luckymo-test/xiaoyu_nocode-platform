@@ -3,7 +3,7 @@
 > 日期：2026-10-23
 > 状态：Phase A、Phase B、Phase C、Phase C.5、Phase D 完成；
 > Phase E 代码级沙箱完成，容器镜像/编排/探针已准备，真实强隔离验收待部署环境；
-> Phase F 的 React/Vite/TypeScript 闭环已完成，Next 与 Phase G 待实施
+> Phase F 的 React 与 Next 静态导出闭环已完成，Phase G 待实施
 > 来源：[plan-platform-rearchitecture.md](plan-platform-rearchitecture.md)
 > 定位：本文件是后续执行和验收的唯一入口；旧计划保留当前架构与实施记录。
 
@@ -642,8 +642,8 @@ Docker/WSL/Podman。执行边界见 [docs/sandbox.md](docs/sandbox.md)。
 
 #### Phase F：React / Next 运行时落地（5～8 天）
 
-状态：`react-vite-ts` 已完成（2026-10-24，Feature Flag 默认关闭）；
-`next-static-export` 待实施。运行边界见 [docs/stack-runtime.md](docs/stack-runtime.md)。
+状态：`react-vite-ts`、`next-static-export` 已完成（2026-10-24，
+Feature Flag 默认关闭）。运行边界见 [docs/stack-runtime.md](docs/stack-runtime.md)。
 
 目标：让模型真正选择现代技术栈，而不是只是注册一个不可用 Profile。
 
@@ -657,7 +657,7 @@ Docker/WSL/Podman。执行边界见 [docs/sandbox.md](docs/sandbox.md)。
 - 用固定评估集比较 Vue、React、Next 的 token、耗时、验证通过率和人工评分；
 - 只有通过质量门禁的 Profile 才能从 unavailable 改为 available。
 
-React 已完成：
+StackProfile 基础设施已完成：
 
 - Job 激活 `StackProfileContext`，Prompt、构建和构建修复读取同一快照；
 - React 独立 system prompt、TypeScript 修复 prompt、依赖和 build 脚本 allowlist；
@@ -667,11 +667,16 @@ React 已完成：
 - React dist 完成 desktop/tablet/mobile 三档 Playwright 验证；
 - `build-report.json` 记录实际 StackProfile 和版本。
 
-React 待完成：
+React/Next 已完成：
 
-- 用 20 条固定评估集完成 Vue/React 对照，达到质量门禁后再默认开放；
-- 将 `VueBuildService` 重命名为中性的 StackBuildService，并删除剩余 Vue 命名兼容债务；
-- Next 静态导出、`out` 目录验证和对应 Feature Flag。
+- Next 16.4.3 + App Router + TypeScript + Tailwind 3.4 完成静态 `out/` 导出；
+- Playwright 按 StackProfile 输出目录验证 Next `out/`，三档全部通过；
+- 控制台从 Runtime API 动态追加 React/Next Profile，并保留应用级选择。
+
+Phase F 剩余：
+
+- 用 20 条固定评估集完成 Vue/React/Next 对照，达到质量门禁后再默认开放；
+- 将 `VueBuildService` 重命名为中性的 `StackBuildService`，删除剩余 Vue 命名兼容债务；
 
 Feature Flag：
 
@@ -708,7 +713,7 @@ codegen.runtime.next-static-export.enabled=false
 - 不立即拆微服务；
 - 不立即引入 Kafka；
 - 不在第一阶段实现 Next SSR；
-- 不在没有质量门禁时把 React/Next 标记为 available；
+- 未通过质量门禁前保持 React/Next Feature Flag 关闭，不做默认开放；
 - 不继续把 npm、浏览器和生成代码直接运行在 API 宿主机。
 
 ## 六、关键改造顺序

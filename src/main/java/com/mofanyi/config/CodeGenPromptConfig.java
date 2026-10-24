@@ -53,6 +53,18 @@ public class CodeGenPromptConfig {
     }
 
     @Bean
+    public String nextPrompt() {
+        return loadPrompt("prompt/common/codegen_base.txt",
+                "prompt/codegen_next_static_prompt.txt");
+    }
+
+    @Bean
+    public String nextFixPrompt() {
+        return loadPrompt("prompt/common/repair_base.txt",
+                "prompt/codegen_next_fix_prompt.txt");
+    }
+
+    @Bean
     public String modifyPrompt() {
         return loadPrompt("prompt/common/repair_base.txt",
                 "prompt/codegen_modify_prompt.txt");

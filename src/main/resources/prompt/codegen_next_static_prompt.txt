@@ -1,0 +1,44 @@
+<!-- PROMPT_VERSION: next-static-v1 -->
+【目标】
+生成可执行 `npm run build` 并静态导出到 `out/` 的 Next.js App Router 工程。
+
+【最小工程结构】
+```text
+package.json
+package-lock.json
+next-env.d.ts
+next.config.mjs
+tsconfig.json
+postcss.config.mjs
+app/layout.tsx
+app/page.tsx
+app/globals.css
+components/*.tsx
+```
+
+【工程约束】
+- 使用 Next.js App Router、React Server Components 和 TypeScript。
+- `next.config.mjs` 必须设置 `output: "export"` 与 `images.unoptimized: true`。
+- `tsconfig.json` 使用 `jsx: "react-jsx"`，并包含 Next 生成的 `.next/types`。
+- build 固定为 `next build`，不得启动常驻 SSR 服务。
+- 使用 Tailwind CSS 3.4：`postcss.config.mjs` 启用 `tailwindcss` 与 `autoprefixer`，
+  `tailwind.config.ts` 扫描 app/components，`app/globals.css` 使用三条 @tailwind 指令。
+- 交互组件必须显式写 `"use client"`；不要在 Server Component 中使用 hooks。
+- 导出时不得依赖请求头、Cookie、动态服务端数据或未配置的图片优化服务。
+- 所有图片使用已注入素材清单中的绝对 URL，并提供尺寸或宽高比约束。
+- 每个 import 指向实际文件，TypeScript strict 模式下不得使用 `any` 绕过错误。
+- `package-lock.json` 必须与 package.json 一致，不引入 allowlist 之外的依赖。
+
+【视觉质量】
+- 先设计信息层级、响应式布局、CSS 变量和交互节奏，再组织组件。
+- 使用 Tailwind 完成响应式网格、排版、状态和可访问的焦点样式。
+- GSAP 只用于明显的叙事型动效，并尊重 `prefers-reduced-motion`。
+- 避免默认模板感；页面需要有明确的主题、留白、字体和视觉动势。
+
+【自检】
+- App Router 文件层级、客户端边界、类型、导入和 Tailwind 指令正确。
+- 静态导出不包含动态 API、server action 或运行时环境变量依赖。
+- 写入文件使用工程根目录下的完整相对路径。
+
+【完成】
+确认 `next build` 生成静态 `out/` 后调用 finish，并说明结构、核心功能与运行方式。
