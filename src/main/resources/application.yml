@@ -145,8 +145,13 @@ codegen:
     engine: ${CODEGEN_BROWSER_ENGINE:selenium}
     playwright:
       url: ${CODEGEN_PLAYWRIGHT_WORKER_URL:http://127.0.0.1:8090}
+      transport: ${CODEGEN_PLAYWRIGHT_TRANSPORT:http}
       connect-timeout-ms: ${CODEGEN_PLAYWRIGHT_CONNECT_TIMEOUT_MS:3000}
       read-timeout-ms: ${CODEGEN_PLAYWRIGHT_READ_TIMEOUT_MS:120000}
+      redis:
+        stream: ${CODEGEN_PLAYWRIGHT_REDIS_STREAM:codegen:browser-verify:requests}
+        result-prefix: ${CODEGEN_PLAYWRIGHT_REDIS_RESULT_PREFIX:codegen:browser-verify:result:}
+        poll-millis: ${CODEGEN_PLAYWRIGHT_REDIS_POLL_MILLIS:200}
   # Agent 循环形态（S5）：true=自管循环（逐步预算真正生效）；false=框架内部循环（现状，默认）
   agent:
     self-managed-loop:

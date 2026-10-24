@@ -13,9 +13,7 @@ class PlaywrightBrowserVerifierTest {
     private final PlaywrightBrowserVerifier verifier = new PlaywrightBrowserVerifier(
             new ObjectMapper(),
             mock(CodeFileWriteService.class),
-            "http://127.0.0.1:8090",
-            1_000,
-            5_000);
+            mock(BrowserVerificationTransport.class));
 
     @Test
     @DisplayName("Playwright Worker JSON 映射为统一渲染报告")

@@ -34,7 +34,9 @@ class PlaywrightBrowserVerifierProbeTest {
                 <div class="wide"></div></body></html>
                 """);
         PlaywrightBrowserVerifier verifier = new PlaywrightBrowserVerifier(
-                new ObjectMapper(), files, "http://127.0.0.1:8090", 3_000, 120_000);
+                new ObjectMapper(), files,
+                new HttpBrowserVerificationTransport(
+                        "http://127.0.0.1:8090", 3_000, 120_000));
 
         RenderVerifier.RenderReport report =
                 verifier.verify(CodeGenTypeEnum.HTML, appId, "probe", 99L);

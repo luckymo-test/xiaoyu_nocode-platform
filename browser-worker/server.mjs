@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { chromium } from "playwright-core";
+import { createClient } from "redis";
 
 const PORT = Number(process.env.BROWSER_WORKER_PORT || 8090);
 const WORKSPACE_ROOT = path.resolve(
@@ -13,6 +14,18 @@ const BROWSER_EXECUTABLE = process.env.BROWSER_WORKER_EXECUTABLE || "";
 const MAX_BODY_BYTES = 1024 * 1024;
 const SETTLE_MILLIS = Number(process.env.BROWSER_WORKER_SETTLE_MILLIS || 1200);
 const MAX_EVENTS = 50;
+const REDIS_URL = process.env.BROWSER_WORKER_REDIS_URL || "redis://127.0.0.1:6379";
+const REDIS_STREAM = process.env.BROWSER_WORKER_REDIS_STREAM
+  || "codegen:browser-verify:requests";
+const REDIS_RESULT_PREFIX = process.env.BROWSER_WORKER_REDIS_RESULT_PREFIX
+  || "codegen:browser-verify:result:";
+const REDIS_GROUP = process.env.BROWSER_WORKER_REDIS_GROUP
+  || "codegen-browser-verifiers";
+const REDIS_CONSUMER = process.env.BROWSER_WORKER_REDIS_CONSUMER
+  || `browser-worker-${process.pid}`;
+const REDIS_RESULT_TTL_SECONDS = Number(
+  process.env.BROWSER_WORKER_REDIS_RESULT_TTL_SECONDS || 300
+);
 const MIME_TYPES = new Map([
   [".html", "text/html; charset=utf-8"],
   [".css", "text/css; charset=utf-8"],
@@ -323,9 +336,95 @@ server.listen(PORT, "127.0.0.1", () => {
   );
 });
 
+let redisClient = null;
+
+async function processRedisMessages(messages) {
+  for (const [recordId, fields] of messages) {
+    const values = new Map();
+    for (let index = 0; index < fields.length; index += 2) {
+      values.set(fields[index], fields[index + 1]);
+    }
+    const payloadText = values.get("payload");
+    let task = null;
+    try {
+      task = JSON.parse(payloadText);
+      const report = await verify(task);
+      const resultKey = REDIS_RESULT_PREFIX + task.verificationId;
+      await redisClient.set(resultKey, JSON.stringify(report), {
+        EX: REDIS_RESULT_TTL_SECONDS
+      });
+    } catch (error) {
+      const verificationId = task?.verificationId
+        || values.get("verificationId")
+        || recordId;
+      await redisClient.set(
+        REDIS_RESULT_PREFIX + verificationId,
+        JSON.stringify({
+          viewports: [],
+          errors: [String(error?.message || error).slice(0, 500)]
+        }),
+        { EX: REDIS_RESULT_TTL_SECONDS }
+      );
+    } finally {
+      await redisClient.xAck(REDIS_STREAM, REDIS_GROUP, recordId);
+    }
+  }
+}
+
+async function startRedisConsumer() {
+  // 兼容项目现有 Redis 5.0：不发送 RESP3 HELLO。
+  redisClient = createClient({ url: REDIS_URL, RESP: 2 });
+  redisClient.on("error", (error) => {
+    console.error(`[playwright-worker] redis error: ${error.message}`);
+  });
+  await redisClient.connect();
+  try {
+    await redisClient.sendCommand([
+      "XGROUP", "CREATE", REDIS_STREAM, REDIS_GROUP, "0", "MKSTREAM"
+    ]);
+  } catch (error) {
+    if (!String(error?.message || error).includes("BUSYGROUP")) {
+      throw error;
+    }
+  }
+  console.log(
+    `[playwright-worker] redis stream=${REDIS_STREAM} group=${REDIS_GROUP} consumer=${REDIS_CONSUMER}`
+  );
+  let nextPendingClaimAt = 0;
+  while (redisClient?.isOpen) {
+    try {
+      if (Date.now() >= nextPendingClaimAt) {
+        nextPendingClaimAt = Date.now() + 30000;
+        const claimed = await redisClient.sendCommand([
+          "XAUTOCLAIM", REDIS_STREAM, REDIS_GROUP, REDIS_CONSUMER,
+          "60000", "0-0", "COUNT", "10"
+        ]);
+        await processRedisMessages(claimed?.[1] || []);
+      }
+      const response = await redisClient.sendCommand([
+        "XREADGROUP", "GROUP", REDIS_GROUP, REDIS_CONSUMER,
+        "COUNT", "1", "BLOCK", "5000",
+        "STREAMS", REDIS_STREAM, ">"
+      ]);
+      const messages = response?.[0]?.[1] || [];
+      await processRedisMessages(messages);
+    } catch (error) {
+      if (redisClient?.isOpen) {
+        console.error(`[playwright-worker] redis consume failed: ${error.message}`);
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+    }
+  }
+}
+
+startRedisConsumer().catch((error) => {
+  console.error(`[playwright-worker] redis disabled: ${error.message}`);
+});
+
 function shutdown(signal) {
   console.log(`[playwright-worker] shutting down: ${signal}`);
   server.close(() => process.exit(0));
+  redisClient?.quit().catch(() => {});
   setTimeout(() => process.exit(1), 5000).unref();
 }
 

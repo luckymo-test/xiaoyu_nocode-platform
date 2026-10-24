@@ -7,18 +7,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mofanyi.job.GenerationExecutionCondition;
 import com.mofanyi.model.enums.CodeGenTypeEnum;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Conditional;
-import org.springframework.http.MediaType;
-import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
-import org.springframework.web.client.RestClient;
 
 import java.io.File;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -37,22 +32,15 @@ public class PlaywrightBrowserVerifier implements BrowserVerifierPort {
 
     private final ObjectMapper objectMapper;
     private final CodeFileWriteService codeFileWriteService;
-    private final RestClient restClient;
-    private final String workerUrl;
+    private final BrowserVerificationTransport transport;
 
     public PlaywrightBrowserVerifier(
             ObjectMapper objectMapper,
             CodeFileWriteService codeFileWriteService,
-            @Value("${codegen.browser.playwright.url:http://127.0.0.1:8090}") String workerUrl,
-            @Value("${codegen.browser.playwright.connect-timeout-ms:3000}") int connectTimeoutMs,
-            @Value("${codegen.browser.playwright.read-timeout-ms:120000}") int readTimeoutMs) {
+            BrowserVerificationTransport transport) {
         this.objectMapper = objectMapper;
         this.codeFileWriteService = codeFileWriteService;
-        this.workerUrl = StrUtil.removeSuffix(workerUrl, "/");
-        SimpleClientHttpRequestFactory requestFactory = new SimpleClientHttpRequestFactory();
-        requestFactory.setConnectTimeout(Duration.ofMillis(Math.max(500, connectTimeoutMs)));
-        requestFactory.setReadTimeout(Duration.ofMillis(Math.max(5_000, readTimeoutMs)));
-        this.restClient = RestClient.builder().requestFactory(requestFactory).build();
+        this.transport = transport;
     }
 
     @Override
@@ -97,12 +85,7 @@ public class PlaywrightBrowserVerifier implements BrowserVerifierPort {
         request.put("egressPolicy", "generated-app");
 
         try {
-            String body = restClient.post()
-                    .uri(workerUrl + "/verify")
-                    .contentType(MediaType.APPLICATION_JSON)
-                    .body(request)
-                    .retrieve()
-                    .body(String.class);
+            String body = transport.execute(request);
             RenderVerifier.RenderReport report = parseReport(body);
             persistReport(type, appId, report, safeStage);
             log.info("[verify] Playwright Worker 完成，appId={} stage={} {}",

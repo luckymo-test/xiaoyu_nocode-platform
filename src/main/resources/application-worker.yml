@@ -22,5 +22,7 @@ codegen:
     cancel-poll-millis: ${CODEGEN_WORKER_CANCEL_POLL_MILLIS:1000}
   browser:
     engine: playwright
+    playwright:
+      transport: redis
   verify:
     enabled: ${CODEGEN_WORKER_RENDER_VERIFY_ENABLED:true}
