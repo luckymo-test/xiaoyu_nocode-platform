@@ -20,8 +20,11 @@ Java BrowserVerifierPort
 ```
 
 Playwright Worker 不连接 MySQL，只接收一个位于允许根目录内的工作区和输出目录，
-返回结构化报告并生成 Artifact 文件。当前 Java Adapter 使用同步 HTTP 调用；
-基于 Outbox/Redis Streams 的异步验证任务与结果回调仍属于后续增强。
+返回结构化报告并生成 Artifact 文件。Java Adapter 支持：
+
+- `transport=http`：同步 HTTP，默认用于本地回退；
+- `transport=redis`：Redis Streams 下发任务、Worker 回写结果键，Generation Worker
+  默认使用这一模式。
 
 ## 二、选择引擎
 
@@ -31,8 +34,13 @@ codegen:
     engine: selenium  # selenium / playwright
     playwright:
       url: http://127.0.0.1:8090
+      transport: http  # http / redis
       connect-timeout-ms: 3000
       read-timeout-ms: 120000
+      redis:
+        stream: codegen:browser-verify:requests
+        result-prefix: codegen:browser-verify:result:
+        poll-millis: 200
 ```
 
 - `selenium` 是默认值，保留本地开发和应急回退。
@@ -64,6 +72,12 @@ BROWSER_WORKER_WORKSPACE_ROOT
 BROWSER_WORKER_CHANNEL
 BROWSER_WORKER_EXECUTABLE
 BROWSER_WORKER_SETTLE_MILLIS
+BROWSER_WORKER_REDIS_URL
+BROWSER_WORKER_REDIS_STREAM
+BROWSER_WORKER_REDIS_GROUP
+BROWSER_WORKER_REDIS_CONSUMER
+BROWSER_WORKER_REDIS_RESULT_PREFIX
+BROWSER_WORKER_REDIS_RESULT_TTL_SECONDS
 ```
 
 ## 四、验证内容
@@ -125,10 +139,8 @@ Revision 发布时登记：
 - 依赖与 npm 构建隔离；
 - 强超时后的进程树回收。
 
-以下属于 Phase D 后续增强：
-
-- 将同步 HTTP 请求升级为 Outbox/Redis Streams 异步任务和结果回调；
-- Worker 多实例消费、任务租约与跨实例结果去重。
+Redis Streams 消费组支持多 Worker 竞争消费；超过 60 秒的 pending 消息会通过
+`XAUTOCLAIM` 接管，结果键按 verificationId 覆盖并由 Java 端删除。
 
 ## 七、真实探针结果
 
@@ -137,6 +149,8 @@ Revision 发布时登记：
 - 三张截图、`network-before.json`、`console-before.json`、`trace-before.zip` 均生成；
 - Java `PlaywrightBrowserVerifier` 通过 HTTP 调用真实 Worker，映射为统一
   `RenderReport`，三档全部可用并检出问题；
+- Java `RedisBrowserVerificationTransport` 经 Redis Streams 下发任务，Node Worker
+  消费并回写结果键，端到端探针通过；
 - 普通 PDF/截图文本不作为生成质量判断依据，真实 DOM/console/network 才是报告事实。
 
 ## 八、Vue 说明

@@ -380,7 +380,7 @@ codegen.model.fallback.enabled=false
 
 验收结果：
 
-- 137 个默认后端测试通过，19 个外部探针按约定跳过；
+- 138 个默认后端测试通过，20 个外部探针按约定跳过；
 - MySQL 5.7 与 8.4 均从空库执行 V1～V15，并通过 Job、ChatHistory、Artifact 与
   `ai_call_log.jobId` 持久化探针；
 - 压缩、查询规划和视觉选片都通过 `AiCallListener` 写 Prometheus 与 `ai_call_log`；
@@ -479,7 +479,7 @@ API 内嵌 Runner 保持默认
 
 验收结果：
 
-- 137 个默认后端测试通过，19 个外部探针按约定跳过；
+- 138 个默认后端测试通过，20 个外部探针按约定跳过；
 - API 模式上下文验证不存在 `GenerationJobRunner`、`AgentToolLoop`、
   `AiCodeGeneratorFacade`、`VueBuildService` 和旧直连生成 Controller；
 - Worker 模式上下文验证完整消费链和健康指示器存在；
@@ -545,7 +545,6 @@ trace.zip
 
 尚未完成：
 
-- 当前 Java→Node 使用同步 HTTP；Outbox/Redis Streams 异步下发与回调仍需补齐；
 - Vue 源码的 npm build 与构建产物验证，随 Phase F StackProfile 构建链路完成；
 - 容器/低权限用户、egress allowlist 和资源配额，随 Phase E Sandbox 完成。
 
@@ -554,6 +553,7 @@ Feature Flag：
 ```text
 codegen.browser.engine=selenium | playwright
 codegen.browser.playwright.url=http://127.0.0.1:8090
+codegen.browser.playwright.transport=http | redis
 codegen.browser.playwright.connect-timeout-ms=3000
 codegen.browser.playwright.read-timeout-ms=120000
 ```
@@ -571,6 +571,7 @@ codegen.browser.playwright.read-timeout-ms=120000
 - Selenium/Playwright 返回同一 `RenderReport`，生成修复链路不变；
 - Playwright 真实问题页在 desktop/tablet/mobile 三档均检出图裂和横向溢出；
 - Java Adapter 真实调用 Node Worker 成功，返回截图和 trace；
+- Redis Streams 端到端探针通过：Java 入队、Node 消费、结果键回写、Java 解析；
 - Worker 不可用时返回 unusable report，不阻塞生成发布；
 - API 边界测试确认不装配 `BrowserVerifierPort`；
 - 普通静态 HTML 与 MultiFile 使用同一验证路径；

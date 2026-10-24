@@ -56,6 +56,7 @@ Worker Profile 默认：
 - `server.port=-1`，不暴露业务 Controller；
 - `management.server.port=8126`，只开放健康与指标；
 - `codegen.browser.engine=playwright`，浏览器进程由独立 Node Worker 执行；
+- `codegen.browser.playwright.transport=redis`，通过 Redis Streams 异步下发验证任务；
 - Worker 内禁止 Selenium；如果开启验证却配置本地 Selenium，启动直接失败。
 
 ## 三、进程边界
@@ -122,7 +123,7 @@ Worker 执行前校验：
 
 ## 七、验证结果
 
-- 137 个默认后端测试通过，19 个外部探针按约定跳过；
+- 138 个默认后端测试通过，20 个外部探针按约定跳过；
 - API 模式上下文不存在 Runner、Dispatcher、Agent、Facade、Vue 构建和旧直连 Controller；
 - Worker 模式上下文包含完整消费链和健康指示器；
 - MySQL 5.7 与 8.4 均通过 V1～V15 和 Job 重试 claim 探针；
