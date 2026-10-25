@@ -48,3 +48,10 @@ Spring AI 在反序列化 `WriteFileRequest` 时抛出 `JsonEOFException`，框�
 - 分片保存在 `.agent/chunk-writes`；
 - 只有最后一片到达后才校验总大小并提交正式文件；
 - 失败和取消不会留下半个正式源码文件。
+
+## 模型流中断与时间预算
+
+- 模型流超过 `codegen.agent.stream-idle-timeout-seconds` 没有新 chunk 时主动断开，避免 HTTP/2 长连接静默挂起。
+- `RST_STREAM`、stream reset、连接重置和 429/5xx 按瞬态传输错误处理，采用短退避后重试，不向对话注入无意义的工具恢复提示。
+- Agent 墙钟预算随推理档位配置：fast 10 分钟、eco 15 分钟、standard 20 分钟、max 25 分钟。
+- 任务级异常分类会沿 cause 链识别流重置，因此内层重试耗尽后仍可由 Job 队列按 `max-attempts` 重试。

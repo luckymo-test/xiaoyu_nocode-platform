@@ -17,7 +17,8 @@ class VueProjectAgentBudgetTest {
     @DisplayName("超出墙钟预算 -> 抛业务异常（提示含「时限」）")
     void exceedsWallClock() {
         BusinessException e = assertThrows(BusinessException.class,
-                () -> AgentToolLoop.checkBudget(System.currentTimeMillis() - 700_000L, 0, 0, 200_000L));
+                () -> AgentToolLoop.checkBudget(System.currentTimeMillis() - 700_000L,
+                        0, 0, 200_000L, 600_000L));
         assertTrue(e.getMessage().contains("时限"), "错误信息应说明是超时限：" + e.getMessage());
     }
 
@@ -25,13 +26,22 @@ class VueProjectAgentBudgetTest {
     @DisplayName("超出 token 预算 -> 抛业务异常（提示含「token 预算」）")
     void exceedsTokenBudget() {
         BusinessException e = assertThrows(BusinessException.class,
-                () -> AgentToolLoop.checkBudget(System.currentTimeMillis(), 150_000L, 60_000L, 200_000L));
+                () -> AgentToolLoop.checkBudget(System.currentTimeMillis(),
+                        150_000L, 60_000L, 200_000L, 600_000L));
         assertTrue(e.getMessage().contains("token"), "错误信息应说明是超 token：" + e.getMessage());
     }
 
     @Test
     @DisplayName("预算内放行")
     void withinBudget() {
-        assertDoesNotThrow(() -> AgentToolLoop.checkBudget(System.currentTimeMillis(), 1_000L, 2_000L, 200_000L));
+        assertDoesNotThrow(() -> AgentToolLoop.checkBudget(System.currentTimeMillis(),
+                1_000L, 2_000L, 200_000L, 600_000L));
+    }
+
+    @Test
+    @DisplayName("墙钟预算可由推理档位扩展")
+    void usesConfiguredWallClockBudget() {
+        assertDoesNotThrow(() -> AgentToolLoop.checkBudget(
+                System.currentTimeMillis() - 700_000L, 0, 0, 200_000L, 1_500_000L));
     }
 }

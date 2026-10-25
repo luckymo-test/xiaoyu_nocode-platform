@@ -16,6 +16,10 @@ class GenerationFailureClassifierTest {
         assertTrue(classifier.retryable(new RuntimeException("HTTP 429 rate limit")));
         assertTrue(classifier.retryable(new RuntimeException("request timeout")));
         assertTrue(classifier.retryable(new RuntimeException("Connection reset")));
+        assertTrue(classifier.retryable(new RuntimeException(
+                "response failed", new java.io.IOException("Received RST_STREAM: Internal error"))));
+        assertTrue(classifier.retryable(new RuntimeException(
+                "流式调用失败", new IllegalStateException("stream reset by peer"))));
         assertFalse(classifier.retryable(new IllegalArgumentException("参数错误")));
         assertFalse(classifier.retryable(new IllegalStateException("当前版本已被其他操作更新")));
     }

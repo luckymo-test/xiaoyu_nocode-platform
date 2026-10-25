@@ -42,10 +42,15 @@ import org.springframework.ai.tool.ToolCallback;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Conditional;
 import org.springframework.stereotype.Component;
+import reactor.core.publisher.Flux;
 
+import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -64,7 +69,6 @@ public class AgentToolLoop {
 
     private static final ObjectMapper COMPACT_MAPPER = new ObjectMapper();
     private static final int SLIM_THRESHOLD_CHARS = 300;
-    private static final long MAX_LOOP_MILLIS = 600_000L;
 
     private final ModelGateway modelGateway;
     private final ModelProperties modelProperties;
@@ -87,6 +91,12 @@ public class AgentToolLoop {
 
     @Value("${codegen.agent.context-slim.enabled:false}")
     private boolean contextSlimEnabled;
+
+    @Value("${codegen.agent.stream-idle-timeout-seconds:240}")
+    private long streamIdleTimeoutSeconds;
+
+    @Value("${codegen.agent.retry-base-delay-millis:1000}")
+    private long retryBaseDelayMillis;
 
     public AgentToolLoop(ModelGateway modelGateway,
                          ModelProperties modelProperties,
@@ -189,10 +199,11 @@ public class AgentToolLoop {
                         .map(callback -> callback.getToolDefinition().name()).toList(),
                 allowedTools != null);
 
-        log.info("[agent] reasoning_level={} thinking={} effort={} maxSteps={} maxLoopTokens={} model={}",
+        log.info("[agent] reasoning_level={} thinking={} effort={} maxSteps={} maxLoopTokens={} maxDurationSeconds={} model={}",
                 level.code(), profile.thinkingEnabled() ? "on" : "off",
                 profile.thinkingEnabled() ? profile.effort() : "off",
-                profile.maxSteps(), profile.maxLoopTokens(), profile.model());
+                profile.maxSteps(), profile.maxLoopTokens(),
+                profile.maxDurationSeconds(), profile.model());
         if (selfManagedLoopEnabled) {
             runSelfManaged(request, profile, level, toolCallbacks);
         } else {
@@ -218,18 +229,19 @@ public class AgentToolLoop {
                 long ms = System.currentTimeMillis() - callStart;
                 aiCallListener.onFailure(request.ctx(), e, ms, level.code(),
                         "unknown", profile.model(), modelTask(request.ctx()).name());
-                log.warn("[agent] 模型响应异常（参数截断/解析失败），step={}，提示模型重试", step, e);
-                if (++consecutiveFailures >= 3) {
+                logModelFailure("framework", step, ++consecutiveFailures, e);
+                if (consecutiveFailures >= 3) {
                     log.error("[agent] 连续 3 次模型响应异常，终止生成，step={}", step);
                     break;
                 }
-                request.messages().add(new UserMessage(toolArgumentRecoveryPrompt(e)));
+                prepareModelRetry(request, consecutiveFailures, e);
                 continue;
             }
             consecutiveFailures = 0;
             taskRegistry.checkCancelled(request.appId());
             checkBudget(loopStart, usageValue(request.usage(), true),
-                    usageValue(request.usage(), false), profile.maxLoopTokens());
+                    usageValue(request.usage(), false), profile.maxLoopTokens(),
+                    profile.maxDurationSeconds() * 1000L);
             accumulateUsage(request.usage(), turn);
             logCallResult("framework", stepCount, request.usage(), turn, callStart,
                     beforeIn, beforeOut, request.ctx(), level);
@@ -259,7 +271,8 @@ public class AgentToolLoop {
                 }
             }
             checkBudget(loopStart, usageValue(request.usage(), true),
-                    usageValue(request.usage(), false), profile.maxLoopTokens());
+                    usageValue(request.usage(), false), profile.maxLoopTokens(),
+                    profile.maxDurationSeconds() * 1000L);
             logRoundStart("self", round, request.usage(), profile.maxLoopTokens(), loopStart);
 
             long callStart = System.currentTimeMillis();
@@ -272,10 +285,11 @@ public class AgentToolLoop {
                 aiCallListener.onFailure(request.ctx(), e,
                         System.currentTimeMillis() - callStart, level.code(),
                         "unknown", profile.model(), modelTask(request.ctx()).name());
-                if (++consecutiveFailures >= 3) {
+                logModelFailure("self", round, ++consecutiveFailures, e);
+                if (consecutiveFailures >= 3) {
                     throw e;
                 }
-                request.messages().add(new UserMessage("上一轮调用失败，请重试；内容较大时请拆小后再写。"));
+                prepareModelRetry(request, consecutiveFailures, e);
                 continue;
             }
             consecutiveFailures = 0;
@@ -332,7 +346,11 @@ public class AgentToolLoop {
                 internalToolExecution,
                 modelProperties.getRouting().isEnabled() ? null : profile.model(),
                 request.ctx());
-        List<ModelChunk> chunks = modelGateway.stream(modelRequest)
+        Flux<ModelChunk> response = modelGateway.stream(modelRequest);
+        if (streamIdleTimeoutSeconds > 0) {
+            response = response.timeout(Duration.ofSeconds(streamIdleTimeoutSeconds));
+        }
+        List<ModelChunk> chunks = response
                 .doOnNext(chunk -> {
                     AgentProgressListener listener = request.listener();
                     if (listener != null && StrUtil.isNotBlank(chunk.reasoning())) {
@@ -378,6 +396,61 @@ public class AgentToolLoop {
         }
         return new ModelTurn(text.toString(), reasoning.toString(), toolCalls,
                 finishReason, promptTokens, completionTokens, provider, modelId, modelName);
+    }
+
+    private void prepareModelRetry(ToolLoopRequest request, int consecutiveFailures,
+                                   RuntimeException error) {
+        if (isTransientTransportFailure(error)) {
+            sleepBeforeRetry(consecutiveFailures);
+            return;
+        }
+        request.messages().add(new UserMessage(toolArgumentRecoveryPrompt(error)));
+    }
+
+    private void sleepBeforeRetry(int consecutiveFailures) {
+        long delayMillis = Math.max(0L, retryBaseDelayMillis)
+                * Math.max(1L, Math.min(4L, consecutiveFailures));
+        if (delayMillis <= 0) {
+            return;
+        }
+        try {
+            Thread.sleep(delayMillis);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("模型调用重试等待被中断", e);
+        }
+    }
+
+    private static void logModelFailure(String mode, int round, int failures, RuntimeException error) {
+        log.warn("[agent] 模型调用失败，mode={} round={} failures={}/3 error={}: {}",
+                mode, round, failures, error.getClass().getSimpleName(),
+                StrUtil.maxLength(StrUtil.blankToDefault(error.getMessage(), "unknown"), 500));
+    }
+
+    static boolean isTransientTransportFailure(Throwable error) {
+        Set<Throwable> visited = Collections.newSetFromMap(new IdentityHashMap<>());
+        Throwable current = error;
+        while (current != null && visited.add(current)) {
+            String all = (current.getClass().getName() + " "
+                    + String.valueOf(current.getMessage())).toLowerCase(Locale.ROOT);
+            if (all.contains("rst_stream")
+                    || all.contains("stream reset")
+                    || all.contains("connection reset")
+                    || all.contains("connection refused")
+                    || all.contains("premature close")
+                    || all.contains("unexpected end")
+                    || all.contains("timeout")
+                    || all.contains("timed out")
+                    || all.contains("429")
+                    || all.contains("rate limit")
+                    || all.contains("502")
+                    || all.contains("503")
+                    || all.contains("504")) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     private static ModelTask modelTask(AiCallContext context) {
@@ -465,10 +538,13 @@ public class AgentToolLoop {
      * 预算校验：超出墙钟或累计 token 预算即抛业务异常终止。
      */
     public static void checkBudget(long loopStartMillis, long promptTokens,
-                                   long completionTokens, long limitTokens) {
+                                   long completionTokens, long limitTokens,
+                                   long maxLoopMillis) {
         long elapsed = System.currentTimeMillis() - loopStartMillis;
-        ThrowUtils.throwIf(elapsed > MAX_LOOP_MILLIS, ErrorCode.OPERATION_ERROR,
-                "生成超出时限（已 " + (elapsed / 1000) + "s，上限 " + (MAX_LOOP_MILLIS / 1000) + "s），已终止");
+        long effectiveLimitMillis = Math.max(1_000L, maxLoopMillis);
+        ThrowUtils.throwIf(elapsed > effectiveLimitMillis, ErrorCode.OPERATION_ERROR,
+                "生成超出时限（已 " + (elapsed / 1000) + "s，上限 "
+                        + (effectiveLimitMillis / 1000) + "s），已终止");
         long total = promptTokens + completionTokens;
         ThrowUtils.throwIf(total > limitTokens, ErrorCode.OPERATION_ERROR,
                 "生成超出 token 预算（已 " + total + "，上限 " + limitTokens + "），已终止");

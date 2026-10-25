@@ -187,6 +187,9 @@ codegen:
   agent:
     self-managed-loop:
       enabled: ${CODEGEN_SELF_MANAGED_LOOP:true}
+    # 流式响应超过该时长没有新 chunk 时主动断开并按瞬态模型错误重试。
+    stream-idle-timeout-seconds: ${CODEGEN_AGENT_STREAM_IDLE_TIMEOUT_SECONDS:240}
+    retry-base-delay-millis: ${CODEGEN_AGENT_RETRY_BASE_DELAY_MILLIS:1000}
     # 单次生成的累计 token 预算（prompt+completion），超限在"轮次之间"拦下。
     # 默认 80 万：实测同一 prompt 在框架路径会烧到 46 万（单次调用总量），20 万会把自管循环的大页面提前掐断。
     max-loop-tokens: ${CODEGEN_MAX_LOOP_TOKENS:800000}
@@ -207,6 +210,7 @@ codegen:
         effort:
         max-steps: 8
         max-loop-tokens: 200000
+        max-duration-seconds: 600
         repair-rounds: 1
         max-output-tokens: 32768
         model: deepseek-flash
@@ -215,6 +219,7 @@ codegen:
         effort: low
         max-steps: 12
         max-loop-tokens: 400000
+        max-duration-seconds: 900
         repair-rounds: 1
         max-output-tokens: 32768
         model: deepseek-flash
@@ -223,6 +228,7 @@ codegen:
         effort: high
         max-steps: 20
         max-loop-tokens: 800000
+        max-duration-seconds: 1200
         repair-rounds: 2
         max-output-tokens: 65536
         model: deepseek-flash
@@ -231,6 +237,7 @@ codegen:
         effort: max
         max-steps: 30
         max-loop-tokens: 1200000
+        max-duration-seconds: 1500
         repair-rounds: 3
         max-output-tokens: 65536
         model: deepseek-flash

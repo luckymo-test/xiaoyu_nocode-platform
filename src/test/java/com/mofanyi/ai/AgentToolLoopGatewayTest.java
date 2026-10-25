@@ -46,6 +46,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -182,6 +183,17 @@ class AgentToolLoopGatewayTest {
                 ArgumentCaptor.forClass(ModelRequest.class);
         verify(modelGateway).stream(requestCaptor.capture());
         assertNull(requestCaptor.getValue().preferredModelId());
+    }
+
+    @Test
+    @DisplayName("HTTP/2 流重置和静默超时属于可重试传输错误")
+    void classifiesTransientModelTransportFailures() {
+        assertTrue(AgentToolLoop.isTransientTransportFailure(new RuntimeException(
+                "response failed", new java.io.IOException("Received RST_STREAM: Internal error"))));
+        assertTrue(AgentToolLoop.isTransientTransportFailure(
+                new java.util.concurrent.TimeoutException("Did not observe any item within 240s")));
+        assertFalse(AgentToolLoop.isTransientTransportFailure(
+                new IllegalArgumentException("JSON 参数不完整")));
     }
 
     @Test
