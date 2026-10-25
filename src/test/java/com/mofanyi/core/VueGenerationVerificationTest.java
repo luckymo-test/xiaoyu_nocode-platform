@@ -3,6 +3,7 @@ package com.mofanyi.core;
 import com.mofanyi.ai.SiteModifyAgent;
 import com.mofanyi.ai.SiteRepairAgent;
 import com.mofanyi.ai.VueProjectAgent;
+import com.mofanyi.ai.AestheticReviewService;
 import com.mofanyi.ai.reasoning.ReasoningProfileRegistry;
 import com.mofanyi.ai.task.GenerationTaskRegistry;
 import com.mofanyi.model.enums.CodeGenTypeEnum;
@@ -36,6 +37,7 @@ class VueGenerationVerificationTest {
                 mock(ReasoningProfileRegistry.class),
                 mock(GenerationTaskRegistry.class),
                 verifier,
+                mock(AestheticReviewService.class),
                 mock(ExecutorService.class),
                 mock(ThreadPoolExecutor.class));
         ReflectionTestUtils.setField(facade, "renderVerifyEnabled", true);

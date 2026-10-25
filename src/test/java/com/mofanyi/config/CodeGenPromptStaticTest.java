@@ -37,7 +37,8 @@ class CodeGenPromptStaticTest {
             "prompt/codegen_next_fix_prompt.txt",
             "prompt/codegen_modify_prompt.txt",
             "prompt/codegen_render_fix_prompt.txt",
-            "prompt/page_blueprint_prompt.txt");
+            "prompt/page_blueprint_prompt.txt",
+            "prompt/aesthetic_review_prompt.txt");
 
     /**
      * 疑似动态内容：日期 / 时间 / UUID / 会话变量

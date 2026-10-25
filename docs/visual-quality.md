@@ -1,7 +1,7 @@
 # 视觉质量体系
 
 > 日期：2026-10-25
-> 状态：共享视觉方向、视觉系统模板、页面蓝图已完成；审美评审和固定评估待实施
+> 状态：共享视觉方向、视觉系统模板、页面蓝图和审美评审已完成；固定评估待实施
 
 ## 一、生成前
 
@@ -36,8 +36,24 @@
 CODEGEN_PAGE_BLUEPRINT_ENABLED=true
 ```
 
-## 四、待实施
+## 四、审美评审
 
-- Aesthetic Review Agent：读取三档截图、DOM 报告和源码索引，输出可执行的审美问题；
+页面通过功能/响应式验证后，`AestheticReviewService` 会把三档截图、DOM 指标和源码索引
+交给视觉模型，输出：
+
+- 1～10 分和 weak/usable/good/strong 结论；
+- 按版块列出的具体审美问题；
+- 可直接执行的修复建议；
+- 当前或建议的视觉记忆点。
+
+评审结果写入 `.agent/aesthetic-review-{stage}.json`；模型不可用或输出非法时自动跳过，
+不影响版本发布。开关：
+
+```text
+CODEGEN_AESTHETIC_REVIEW_ENABLED=true
+```
+
+## 五、待实施
+
 - 审美修复：将问题交给独立修复 Prompt，并限制最大修复轮次；
 - 固定 Prompt 评估：至少比较 Vue、React、Next 的视觉完成度、内容匹配、响应式和交互质量。

@@ -4,6 +4,7 @@ import cn.hutool.core.util.StrUtil;
 import com.mofanyi.ai.SiteRepairAgent;
 import com.mofanyi.ai.SiteModifyAgent;
 import com.mofanyi.ai.VueProjectAgent;
+import com.mofanyi.ai.AestheticReviewService;
 import com.mofanyi.ai.reasoning.ReasoningLevel;
 import com.mofanyi.ai.reasoning.ReasoningProfileRegistry;
 import com.mofanyi.ai.task.GenerationCancelledException;
@@ -51,6 +52,7 @@ public class AiCodeGeneratorFacade {
      */
     private final GenerationTaskRegistry taskRegistry;
     private final BrowserVerifierPort renderVerifier;
+    private final AestheticReviewService aestheticReviewService;
 
     /**
      * 渲染修复执行器：交付后异步修复（见 {@link #runRenderFix}）
@@ -85,6 +87,7 @@ public class AiCodeGeneratorFacade {
                                  ReasoningProfileRegistry reasoningProfiles,
                                  GenerationTaskRegistry taskRegistry,
                                  BrowserVerifierPort renderVerifier,
+                                 AestheticReviewService aestheticReviewService,
                                  @Qualifier("renderFixExecutor") ExecutorService renderFixExecutor,
                                  ThreadPoolExecutor vueThreadPoolExecutor) {
         this.codeFileWriteService = codeFileWriteService;
@@ -96,6 +99,7 @@ public class AiCodeGeneratorFacade {
         this.reasoningProfiles = reasoningProfiles;
         this.taskRegistry = taskRegistry;
         this.renderVerifier = renderVerifier;
+        this.aestheticReviewService = aestheticReviewService;
         this.renderFixExecutor = renderFixExecutor;
         this.vueThreadPoolExecutor = vueThreadPoolExecutor;
     }
@@ -411,6 +415,7 @@ public class AiCodeGeneratorFacade {
                     renderVerifier.verify(type, appId, "before", jobId);
             renderVerifier.persistReport(type, appId, report, "before");
             if (!report.isUsable() || !report.hasProblems()) {
+                aestheticReviewService.review(type, appId, report, "before");
                 renderFixStatus.put(appId, "ok");
                 return;
             }

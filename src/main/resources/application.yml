@@ -196,6 +196,8 @@ codegen:
       enabled: ${CODEGEN_CONTEXT_SLIM:false}
   blueprint:
     enabled: ${CODEGEN_PAGE_BLUEPRINT_ENABLED:true}
+  aesthetic-review:
+    enabled: ${CODEGEN_AESTHETIC_REVIEW_ENABLED:true}
   # 四档推理滑杆：UI 只暴露 fast/eco/standard/max，reasoning_effort 只接受 low/high/max
   reasoning:
     default-level: standard
