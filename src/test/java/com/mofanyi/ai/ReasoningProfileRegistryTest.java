@@ -40,9 +40,15 @@ class ReasoningProfileRegistryTest {
         assertEquals(16_384, resolved.maxOutputTokens());
         assertEquals(ReasoningProfile.DEFAULT_MAX_DURATION_SECONDS,
                 resolved.maxDurationSeconds());
-        assertTrue(registry.resolve("max").thinkingEnabled());
-        assertEquals(2_000_000, registry.resolve("max").maxLoopTokens());
-        assertEquals(1_500, registry.resolve("max").maxDurationSeconds());
+        assertEquals(100_000, resolved.maxLoopTokens(), "显式配置必须覆盖代码兜底值");
+
+        ReasoningProfileRegistry fallback = new ReasoningProfileRegistry();
+        assertEquals(300_000, fallback.resolve("fast").maxLoopTokens());
+        assertEquals(600_000, fallback.resolve("eco").maxLoopTokens());
+        assertEquals(1_200_000, fallback.resolve("standard").maxLoopTokens());
+        assertTrue(fallback.resolve("max").thinkingEnabled());
+        assertEquals(2_000_000, fallback.resolve("max").maxLoopTokens());
+        assertEquals(1_500, fallback.resolve("max").maxDurationSeconds());
     }
 
     @Test

@@ -54,5 +54,5 @@ Spring AI 在反序列化 `WriteFileRequest` 时抛出 `JsonEOFException`，框�
 - 模型流超过 `codegen.agent.stream-idle-timeout-seconds` 没有新 chunk 时主动断开，避免 HTTP/2 长连接静默挂起。
 - `RST_STREAM`、stream reset、连接重置和 429/5xx 按瞬态传输错误处理，采用短退避后重试，不向对话注入无意义的工具恢复提示。
 - Agent 墙钟预算随推理档位配置：fast 10 分钟、eco 15 分钟、standard 20 分钟、max 25 分钟。
-- Agent token 预算同样按档位配置；`max` 默认 200 万 token，可用 `CODEGEN_MAX_MAX_LOOP_TOKENS` 覆盖。
+- Agent token 预算同样按档位配置：fast 30 万、eco 60 万、standard 120 万、max 200 万，分别可用 `CODEGEN_FAST_MAX_LOOP_TOKENS`、`CODEGEN_ECO_MAX_LOOP_TOKENS`、`CODEGEN_STANDARD_MAX_LOOP_TOKENS`、`CODEGEN_MAX_MAX_LOOP_TOKENS` 覆盖。
 - 任务级异常分类会沿 cause 链识别流重置，因此内层重试耗尽后仍可由 Job 队列按 `max-attempts` 重试。
