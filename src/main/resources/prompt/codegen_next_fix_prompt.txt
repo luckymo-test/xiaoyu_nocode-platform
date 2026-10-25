@@ -6,7 +6,7 @@
 - 客户端组件是否缺少 `"use client"`，或 Server Component 是否错误使用 hooks/事件。
 - App Router 是否缺少 `app/layout.tsx`、`app/page.tsx` 或 root layout 的 html/body。
 - `next.config.mjs` 是否保留 `output: "export"` 和 `images.unoptimized: true`。
-- TSX、TypeScript、PostCSS 和 Tailwind 4 的导入与语法。
+- TSX、TypeScript、PostCSS 和 Tailwind CSS 3.4 的导入与语法。
 - 是否使用静态导出不支持的动态请求、Cookie、server action 或图片优化。
 
 【约束】

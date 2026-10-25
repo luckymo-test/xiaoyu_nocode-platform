@@ -19,18 +19,21 @@ public class CodeGenPromptConfig {
     @Bean
     public String singleHtmlPrompt() {
         return loadPrompt("prompt/common/codegen_base.txt",
+                "prompt/common/visual_direction.txt",
                 "prompt/codegen_singlehtml_prompt.txt");
     }
 
     @Bean
     public String multiFilePrompt() {
         return loadPrompt("prompt/common/codegen_base.txt",
+                "prompt/common/visual_direction.txt",
                 "prompt/codegen_multifile_prompt.txt");
     }
 
     @Bean
     public String vuePrompt() {
         return loadPrompt("prompt/common/codegen_base.txt",
+                "prompt/common/visual_direction.txt",
                 "prompt/codegen_vue_prompt.txt");
     }
 
@@ -43,6 +46,7 @@ public class CodeGenPromptConfig {
     @Bean
     public String reactPrompt() {
         return loadPrompt("prompt/common/codegen_base.txt",
+                "prompt/common/visual_direction.txt",
                 "prompt/codegen_react_vite_prompt.txt");
     }
 
@@ -55,6 +59,7 @@ public class CodeGenPromptConfig {
     @Bean
     public String nextPrompt() {
         return loadPrompt("prompt/common/codegen_base.txt",
+                "prompt/common/visual_direction.txt",
                 "prompt/codegen_next_static_prompt.txt");
     }
 

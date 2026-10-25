@@ -694,6 +694,15 @@ codegen.runtime.next-static-export.enabled=false
 
 #### Phase G：质量门禁与规模数据（持续）
 
+视觉质量基础设施已完成（2026-10-25）：
+
+- 所有生成栈共享 `visual_direction` Prompt；
+- Template 升级为包含完整设计令牌、Art Direction 和禁止模式的视觉系统包；
+- 新增 SaaS、数据控制台、作品集、电商、活动、编辑故事模板；
+- React/Next 已与模板注册表兼容，Next 生成与修复统一为 Tailwind 3.4；
+- 新增页面蓝图层，编码前生成版块、密度、布局、图片用途和比例，失败时自动降级；
+- 下一步继续 Aesthetic Review Agent 和固定 Prompt 评估。
+
 目标：把“看起来能用”提升为可量化的工程质量。
 
 任务：

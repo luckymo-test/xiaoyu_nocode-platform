@@ -35,6 +35,8 @@ AI 应用生成平台。用户通过一句话创建网站或前端工程，平�
   [docs/stack-runtime.md](docs/stack-runtime.md)。
 - Skill 的 `allowedTools` 已在 AgentToolLoop 注册工具前取交集并真正裁剪；
   模型只能看到当前 Skill 允许的工具，伪造未注册工具返回 `TOOL_NOT_ALLOWED`。
+- 生成前统一注入视觉方向，并通过 8 套视觉系统模板和页面蓝图约束版块、字体、色彩、
+  网格、图片节奏与动效，见 [docs/visual-quality.md](docs/visual-quality.md)。
 
 ## 必读文档
 
@@ -48,6 +50,7 @@ AI 应用生成平台。用户通过一句话创建网站或前端工程，平�
 8. Playwright Browser Worker：[docs/browser-worker.md](docs/browser-worker.md)
 9. Build/Browser Sandbox：[docs/sandbox.md](docs/sandbox.md)
 10. StackProfile 运行时：[docs/stack-runtime.md](docs/stack-runtime.md)
+11. 视觉质量体系：[docs/visual-quality.md](docs/visual-quality.md)
 
 新问题追加到 `development-notes.md` 末尾并保持连续编号，不要把“最新编号”硬编码到其他文档。
 

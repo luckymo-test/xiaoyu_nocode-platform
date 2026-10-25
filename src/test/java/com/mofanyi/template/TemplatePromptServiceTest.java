@@ -18,7 +18,9 @@ class TemplatePromptServiceTest {
         String section = new TemplatePromptService(context).buildSection(7L);
 
         assertTrue(section.contains("photography-editorial"));
-        assertTrue(section.contains("version=1"));
+        assertTrue(section.contains("version=3"));
+        assertTrue(section.contains("type.scale="));
+        assertTrue(section.contains("必须把 designTokens 落实为实际 CSS/Tailwind 设计令牌"));
         assertTrue(section.contains("masonry-gallery"));
         assertTrue(section.contains("#c6a869"));
         context.deactivate(7L, template);

@@ -26,6 +26,7 @@ class CodeGenPromptStaticTest {
     private static final List<String> PROMPTS = List.of(
             "prompt/common/codegen_base.txt",
             "prompt/common/repair_base.txt",
+            "prompt/common/visual_direction.txt",
             "prompt/codegen_singlehtml_prompt.txt",
             "prompt/codegen_multifile_prompt.txt",
             "prompt/codegen_vue_prompt.txt",
@@ -35,7 +36,8 @@ class CodeGenPromptStaticTest {
             "prompt/codegen_next_static_prompt.txt",
             "prompt/codegen_next_fix_prompt.txt",
             "prompt/codegen_modify_prompt.txt",
-            "prompt/codegen_render_fix_prompt.txt");
+            "prompt/codegen_render_fix_prompt.txt",
+            "prompt/page_blueprint_prompt.txt");
 
     /**
      * 疑似动态内容：日期 / 时间 / UUID / 会话变量
@@ -83,7 +85,7 @@ class CodeGenPromptStaticTest {
 
     @Test
     @DisplayName("关键提示词约束与实现保持一致")
-    void promptContractsMatchImplementation() {
+    void promptContractsMatchImplementation() throws IOException {
         CodeGenPromptConfig config = new CodeGenPromptConfig();
         assertTrue(config.singleHtmlPrompt().contains("默认以单个 `index.html`"));
         assertTrue(config.multiFilePrompt().contains("HTML、CSS、JavaScript 必须分离"));
@@ -94,6 +96,11 @@ class CodeGenPromptStaticTest {
         assertTrue(config.reactFixPrompt().contains("不得用 `any`"));
         assertTrue(config.nextPrompt().contains("output: \"export\""));
         assertTrue(config.nextFixPrompt().contains("images.unoptimized"));
+        assertTrue(config.singleHtmlPrompt().contains("视觉记忆点"));
+        assertTrue(config.vuePrompt().contains("60/30/10"));
+        assertTrue(config.reactPrompt().contains("所有容器同样的圆角"));
+        assertTrue(config.nextPrompt().contains("prefers-reduced-motion"));
+        assertTrue(readPrompt("prompt/page_blueprint_prompt.txt").contains("\"sections\""));
         assertTrue(config.renderFixPrompt().contains("隐藏的灯箱"));
         assertTrue(config.vuePrompt().contains("PROMPT_VERSION: vue-v2"));
         assertTrue(config.singleHtmlPrompt().contains("已有素材清单时不要为了图片重复调用"));

@@ -58,6 +58,7 @@ public class VueProjectAgent {
     private final TemplatePromptService templatePromptService;
     private final SkillPromptService skillPromptService;
     private final StackProfileContext stackProfileContext;
+    private final PageBlueprintService pageBlueprintService;
 
     public VueProjectAgent(CodeGenPromptRegistry promptRegistry,
                            AgentToolLoop agentToolLoop,
@@ -71,7 +72,8 @@ public class VueProjectAgent {
                            com.mofanyi.mapper.AppImageMapper appImageMapper,
                            TemplatePromptService templatePromptService,
                            SkillPromptService skillPromptService,
-                           StackProfileContext stackProfileContext) {
+                           StackProfileContext stackProfileContext,
+                           PageBlueprintService pageBlueprintService) {
         this.promptRegistry = promptRegistry;
         this.agentToolLoop = agentToolLoop;
         this.siteRepairAgent = siteRepairAgent;
@@ -85,6 +87,7 @@ public class VueProjectAgent {
         this.templatePromptService = templatePromptService;
         this.skillPromptService = skillPromptService;
         this.stackProfileContext = stackProfileContext;
+        this.pageBlueprintService = pageBlueprintService;
     }
 
     /**
@@ -163,13 +166,18 @@ public class VueProjectAgent {
         if (StrUtil.isNotBlank(materialSection)) {
             messages.add(new SystemMessage(materialSection));
         }
+        TokenUsageAccumulator usage = new TokenUsageAccumulator();
+        PageBlueprintService.Plan blueprint = pageBlueprintService.plan(
+                type, appId, userMessage, templateSection, materialSection, ctx);
+        if (StrUtil.isNotBlank(blueprint.promptSection())) {
+            messages.add(new SystemMessage(blueprint.promptSection()));
+        }
+        usage.accumulate(blueprint.usage().promptTokens(), blueprint.usage().completionTokens());
         // 注入对话记忆作为前置上下文（优先 Redis 热窗口，miss 时从 MySQL 冷启动回灌）
         messages.addAll(agentMemoryService.loadContext(
                 type, appId, userMessage, specSection, ctx));
         messages.add(new UserMessage(userMessage));
 
-        // [promptTokens, completionTokens] 累加器，工具循环各轮模型调用后写入
-        TokenUsageAccumulator usage = new TokenUsageAccumulator();
         // 生成前快照用户手动修改：重新生成是整文件覆盖，会把 @user-edit 标记块一起抹掉（plan-refactor 6.2）
         ManualEditService.UserEditSnapshot userEdits = manualEditService.snapshot(type, appId);
         try {

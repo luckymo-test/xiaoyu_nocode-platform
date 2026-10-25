@@ -194,6 +194,8 @@ codegen:
     # 同 app 连续生成时实测反而更贵（模型改用 readFile 把文件读回来），需用全新 app 做控制变量实验后再定。
     context-slim:
       enabled: ${CODEGEN_CONTEXT_SLIM:false}
+  blueprint:
+    enabled: ${CODEGEN_PAGE_BLUEPRINT_ENABLED:true}
   # 四档推理滑杆：UI 只暴露 fast/eco/standard/max，reasoning_effort 只接受 low/high/max
   reasoning:
     default-level: standard
