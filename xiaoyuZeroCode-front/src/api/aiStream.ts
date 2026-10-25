@@ -86,10 +86,6 @@ function streamGenerationJob(
           typeof value === 'string' ? value : JSON.stringify(value),
         )
       })
-      eventSource.addEventListener('reasoning', (event) => {
-        const value = parsePayload(event)
-        callbacks.onReasoning?.(typeof value === 'string' ? value : String(value ?? ''))
-      })
       eventSource.addEventListener('completed', (event) => {
         const result = parsePayload(event) as API.AiCodeGenResultVO
         callbacks.onDone?.(result)

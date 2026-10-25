@@ -3,8 +3,6 @@ import { BASE_URL } from '@/request'
 export interface SseCallbacks {
   /** 每收到一个 token 增量时触发 */
   onToken?: (token: string) => void
-  /** 模型思考过程增量（reasoning_content），逐段累加即可还原完整思考 */
-  onReasoning?: (text: string) => void
   /** 生成完成，返回最终结果 VO */
   onDone?: (result: API.AiCodeGenResultVO) => void
   /** 后端主动报错 */
@@ -72,10 +70,6 @@ export function createSseConnection(
 
   es.addEventListener('token', (event) => {
     callbacks.onToken?.(event.data)
-  })
-
-  es.addEventListener('reasoning', (event) => {
-    callbacks.onReasoning?.(event.data)
   })
 
   es.addEventListener('agent_progress', (event) => {

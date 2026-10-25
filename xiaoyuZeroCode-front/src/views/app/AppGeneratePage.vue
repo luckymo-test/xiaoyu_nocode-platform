@@ -70,8 +70,6 @@ interface ChatMessage {
   status?: 'streaming' | 'done' | 'error'
   /** 该消息生成的文件清单（气泡里只显示文件名，点击在右侧预览查看完整代码） */
   files?: CodeFile[]
-  /** 模型思考过程（流式增量拼接，可折叠展示） */
-  reasoning?: string
   /** token 元信息（本次生成消耗；历史消息无此字段） */
   usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number }
 }
@@ -453,9 +451,6 @@ const applyModify = async () => {
       } catch {
         // 忽略非关键事件
       }
-    },
-    onReasoning: () => {
-      editStatus.value = 'AI 正在思考定位…'
     },
     onDone: (result) => {
       const files = filesFromResult(result)
@@ -927,7 +922,7 @@ const stopGenerationRecovery = () => {
  * SSE 断开不代表后台生成失败。通过应用状态轮询等待任务结束后重新拉取产物，
  * 避免长任务因代理/浏览器连接上限断开后，页面永久停在“生成中”。
  */
-const startGenerationRecovery = (pendingMessage: ChatMessage, reasoning = '') => {
+const startGenerationRecovery = (pendingMessage: ChatMessage) => {
   stopGenerationRecovery()
   const token = generationRecoveryToken
   let attempts = 0
@@ -941,7 +936,6 @@ const startGenerationRecovery = (pendingMessage: ChatMessage, reasoning = '') =>
   const finishWithError = (text: string) => {
     pendingMessage.status = 'error'
     pendingMessage.content = text
-    pendingMessage.reasoning = reasoning || undefined
     previewLoading.value = false
     generating.value = false
     generationDone.value = true
@@ -981,7 +975,6 @@ const startGenerationRecovery = (pendingMessage: ChatMessage, reasoning = '') =>
         stopGenerationRecovery()
         pendingMessage.status = 'done'
         pendingMessage.content = result.description || '生成已完成，连接中断后已自动恢复结果'
-        pendingMessage.reasoning = reasoning || undefined
         const finalFiles = filesFromResult(result)
         pendingMessage.files = finalFiles
         previewFiles.value = finalFiles
@@ -1032,7 +1025,6 @@ const loadApp = async () => {
           content: '',
           status: 'streaming',
           files: [],
-          reasoning: '',
         })
         messages.value.push(pending)
         startGenerationRecovery(pending)
@@ -1174,7 +1166,7 @@ const sendMessage = async (text?: string, auto = false) => {
   messages.value.push({ role: 'user', content })
   // 必须用 reactive 创建，否则 aiMsg 是普通对象，后续 aiMsg.content = 赋值
   // 不会触发 Vue proxy 的 set，streaming 期间 UI 不会实时刷新
-  const aiMsg = reactive<ChatMessage>({ role: 'ai', content: '', status: 'streaming', files: [], reasoning: '' })
+  const aiMsg = reactive<ChatMessage>({ role: 'ai', content: '', status: 'streaming', files: [] })
   messages.value.push(aiMsg)
   generating.value = true
   genProgress.value = '正在分析需求并生成代码…（可能需要 1-2 分钟）'
@@ -1194,14 +1186,10 @@ const sendMessage = async (text?: string, auto = false) => {
       vueProgress.value = '正在生成 Vue 工程…'
       let donePayload: API.AiCodeGenResultVO | null = null
       let vueFileCount = 0 // 已收到的文件数（进度展示用）
-      // 推理增量先攒在本地（避免每 token 触发 reactive + MarkdownView 全量重渲染卡死），结束再赋值一次
-      let reasoningBuf = ''
-
       // 收尾：description + 最终文件集 + 预览
       const finishVue = () => {
         const result = donePayload ?? ({ files: [] } as API.AiCodeGenResultVO)
         aiMsg.status = 'done'
-        aiMsg.reasoning = reasoningBuf || undefined
         if (donePayload?.description) {
           aiMsg.content = donePayload.description
         }
@@ -1240,15 +1228,11 @@ const sendMessage = async (text?: string, auto = false) => {
             // 解析失败忽略（兼容旧格式）
           }
         },
-        onReasoning: (text) => {
-          reasoningBuf += text
-        },
         onDone: (result) => {
           donePayload = result
           finishVue()
         },
         onError: (errorMsg) => {
-          aiMsg.reasoning = reasoningBuf || undefined
           aiMsg.content = friendlyError(errorMsg)
           aiMsg.status = 'error'
           vueProgress.value = ''
@@ -1258,7 +1242,7 @@ const sendMessage = async (text?: string, auto = false) => {
           generationDone.value = true
         },
         onConnectionLost: () => {
-          startGenerationRecovery(aiMsg, reasoningBuf)
+          startGenerationRecovery(aiMsg)
         },
         onClose: () => {
           generating.value = false
@@ -1278,9 +1262,6 @@ const sendMessage = async (text?: string, auto = false) => {
     // 消息里只显示文件清单，完整代码放右侧预览（分文件文件树），避免大代码块重渲染卡顿。
     let donePayload: API.AiCodeGenResultVO | null = null
     let genFileCount = 0 // 已收到/显示的文件数（进度展示用）
-    // 推理增量先攒在本地，结束再一次性赋值（避免每 token 触发 MarkdownView 全量重渲染卡死）
-    let reasoningBuf = ''
-
     // 交付后渲染修复是异步的：轮询状态，修好了自动刷新预览
     // （生成响应只等到"检测"完成，修复在后台跑；旧的 SSE 已随 done 关闭，故用轮询）
     let renderFixTimer: number | null = null
@@ -1323,7 +1304,6 @@ const sendMessage = async (text?: string, auto = false) => {
       if (donePayload) {
         aiMsg.content = donePayload.description ?? ''
         aiMsg.status = 'done'
-        aiMsg.reasoning = reasoningBuf || undefined
         previewDoc.value = buildPreviewDoc(donePayload)
         const finalFiles = filesFromResult(donePayload)
         aiMsg.files = finalFiles
@@ -1357,15 +1337,11 @@ const sendMessage = async (text?: string, auto = false) => {
           // 解析失败忽略（兼容旧格式）
         }
       },
-      onReasoning: (text) => {
-        reasoningBuf += text
-      },
       onDone: (result) => {
         donePayload = result
         finishAgent()
       },
       onError: (errorMsg) => {
-        aiMsg.reasoning = reasoningBuf || undefined
         aiMsg.content = friendlyError(errorMsg)
         aiMsg.status = 'error'
         previewLoading.value = false
@@ -1374,7 +1350,7 @@ const sendMessage = async (text?: string, auto = false) => {
         generationDone.value = true
       },
       onConnectionLost: () => {
-        startGenerationRecovery(aiMsg, reasoningBuf)
+        startGenerationRecovery(aiMsg)
       },
       onClose: () => {
         generating.value = false
@@ -1845,11 +1821,6 @@ onUnmounted(() => {
             </a-avatar>
             <div class="msg-bubble" :class="{ 'msg-streaming': msg.status === 'streaming' }">
               <template v-if="msg.role === 'ai'">
-                <details v-if="msg.reasoning" class="msg-reasoning">
-                  <summary>💭 思考过程（{{ msg.reasoning.length }}字）</summary>
-                  <!-- 纯文本渲染，避免大段推理走 MarkdownView 全量解析造成卡顿 -->
-                  <pre class="msg-reasoning-text">{{ msg.reasoning }}</pre>
-                </details>
                 <MarkdownView v-if="msg.content" :content="msg.content" />
                 <div v-if="msg.files && msg.files.length" class="msg-file-list">
                   <div
@@ -2639,34 +2610,6 @@ onUnmounted(() => {
   margin-top: 8px;
   font-size: var(--font-xs);
   color: var(--text-3);
-}
-
-/* 思考过程：局部深色块，和浅色界面形成"工作区"对比 */
-.msg-reasoning {
-  margin: 0 0 10px;
-  padding: 8px 12px;
-  background: var(--dark-bg-2);
-  border: 1px solid var(--dark-border);
-  border-radius: var(--radius-md);
-  font-size: var(--font-xs);
-}
-
-.msg-reasoning summary {
-  cursor: pointer;
-  color: var(--dark-text-2);
-  user-select: none;
-  outline: none;
-}
-
-.msg-reasoning-text {
-  margin-top: 8px;
-  max-height: 200px;
-  overflow-y: auto;
-  color: var(--dark-text-2);
-  font-family: 'Consolas', 'Courier New', monospace;
-  line-height: 1.6;
-  white-space: pre-wrap;
-  word-break: break-word;
 }
 
 .stream-text {
