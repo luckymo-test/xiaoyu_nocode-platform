@@ -75,7 +75,7 @@ public class ReasoningProfileRegistry {
                     32_768, "deepseek-flash", 900);
             case STANDARD -> new ReasoningProfile(true, "high", 20, 800_000L, 2,
                     65_536, "deepseek-flash", 1_200);
-            case MAX -> new ReasoningProfile(true, "max", 30, 1_200_000L, 3,
+            case MAX -> new ReasoningProfile(true, "max", 30, 2_000_000L, 3,
                     65_536, "deepseek-flash", 1_500);
         };
     }

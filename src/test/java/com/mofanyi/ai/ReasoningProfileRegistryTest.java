@@ -41,6 +41,7 @@ class ReasoningProfileRegistryTest {
         assertEquals(ReasoningProfile.DEFAULT_MAX_DURATION_SECONDS,
                 resolved.maxDurationSeconds());
         assertTrue(registry.resolve("max").thinkingEnabled());
+        assertEquals(2_000_000, registry.resolve("max").maxLoopTokens());
         assertEquals(1_500, registry.resolve("max").maxDurationSeconds());
     }
 
