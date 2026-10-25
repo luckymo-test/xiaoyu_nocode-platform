@@ -53,6 +53,7 @@ AI 应用生成平台。用户通过一句话创建网站或前端工程，平�
 9. Build/Browser Sandbox：[docs/sandbox.md](docs/sandbox.md)
 10. StackProfile 运行时：[docs/stack-runtime.md](docs/stack-runtime.md)
 11. 视觉质量体系：[docs/visual-quality.md](docs/visual-quality.md)
+12. 固定 Prompt 评估：[docs/evaluation.md](docs/evaluation.md)
 
 新问题追加到 `development-notes.md` 末尾并保持连续编号，不要把“最新编号”硬编码到其他文档。
 

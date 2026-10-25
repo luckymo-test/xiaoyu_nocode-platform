@@ -702,7 +702,8 @@ codegen.runtime.next-static-export.enabled=false
 - React/Next 已与模板注册表兼容，Next 生成与修复统一为 Tailwind 3.4；
 - 新增页面蓝图层，编码前生成版块、密度、布局、图片用途和比例，失败时自动降级；
 - 新增 Aesthetic Review Agent，读取三档截图、DOM 和源码索引生成结构化审美评分与修复建议；
-- 下一步继续审美修复和固定 Prompt 评估。
+- 新增 20 条固定评估集的质量门禁与 JSON/Markdown 报告聚合器；
+- 下一步继续审美修复，并用真实模型运行 20 条基线。
 
 目标：把“看起来能用”提升为可量化的工程质量。
 

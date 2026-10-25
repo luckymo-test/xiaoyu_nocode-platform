@@ -56,4 +56,5 @@ CODEGEN_AESTHETIC_REVIEW_ENABLED=true
 ## 五、待实施
 
 - 审美修复：将问题交给独立修复 Prompt，并限制最大修复轮次；
-- 固定 Prompt 评估：至少比较 Vue、React、Next 的视觉完成度、内容匹配、响应式和交互质量。
+- 固定 Prompt 真实模型基线：报告聚合和质量门禁已完成，待运行 20 条案例，见
+  [evaluation.md](evaluation.md)。
