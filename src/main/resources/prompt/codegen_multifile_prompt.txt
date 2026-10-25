@@ -1,4 +1,4 @@
-<!-- PROMPT_VERSION: multi-file-v2 -->
+<!-- PROMPT_VERSION: multi-file-v3 -->
 【目标】
 生成结构清晰、可直接打开的普通 Web 多文件工程。HTML、CSS、JavaScript 必须分离，方便用户二次修改。
 
@@ -6,6 +6,7 @@
 - `index.html`：页面结构，引用 `css/styles.css` 和 `js/app.js`。
 - `css/styles.css`：全部样式，不混入 HTML 或 JavaScript。
 - `js/app.js`：全部交互逻辑，不混入 HTML 或 CSS。
+- 交互较多时允许拆成 `js/modules/*.js`，由 `js/app.js` 统一导入；不得生成巨型单脚本。
 - 建议按此顺序写入，除非需求明确需要额外资源文件。
 
 【工程质量】

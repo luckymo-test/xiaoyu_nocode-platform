@@ -1,4 +1,4 @@
-<!-- PROMPT_VERSION: react-vite-ts-v1 -->
+<!-- PROMPT_VERSION: react-vite-ts-v2 -->
 【目标】
 生成可直接执行 `npm run build` 的 React + Vite + TypeScript 标准工程，产出可部署的 dist。
 
@@ -22,6 +22,7 @@ src/components/*.tsx
 - `src/main.tsx` 使用 `createRoot` 挂载 `App`，并导入全局样式。
 - TypeScript 开启 `strict`，不得使用 `any` 绕过类型错误。
 - 每个导入都指向实际存在的文件；React 组件文件使用 `.tsx`。
+- 页面区块和复杂交互必须拆成组件或 hooks；单个 `.tsx` 文件超过约 12,000 字符时继续拆分。
 - `package.json` 的 build 固定为 `tsc --noEmit && vite build`，不添加任意 shell 或 postinstall。
 - `package-lock.json` 必须与 `package.json` 的依赖和版本一致，不引用未声明依赖。
 

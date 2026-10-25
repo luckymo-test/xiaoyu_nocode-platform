@@ -1,4 +1,4 @@
-<!-- PROMPT_VERSION: single-html-v2 -->
+<!-- PROMPT_VERSION: single-html-v3 -->
 【目标】
 生成一个浏览器可直接打开的 HTML 项目。默认以单个 `index.html` 承载结构和交互；样式或脚本较多时，可以拆出 `css/styles.css` 和 `js/app.js`，但 `index.html` 始终是入口，不得生成 Vue、React 或其他框架工程。
 
@@ -6,6 +6,7 @@
 - 从 `<!DOCTYPE html>` 开始，声明 UTF-8、viewport 和合适的 `<title>`。
 - 优先使用 `header`、`nav`、`main`、`section`、`footer` 等语义标签。
 - 如果拆分 CSS/JS，使用正确的相对路径 `css/styles.css` 和 `js/app.js`。
+- 交互或样式较多时继续拆成 `css/*.css`、`js/modules/*.js`，入口文件只负责引用和初始化。
 
 【CSS】
 - 使用 CSS 变量管理颜色、间距、圆角和字体等设计令牌。

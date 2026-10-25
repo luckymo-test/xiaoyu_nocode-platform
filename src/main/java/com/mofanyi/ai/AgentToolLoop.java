@@ -23,6 +23,7 @@ import com.mofanyi.ai.tools.ReadFileTool;
 import com.mofanyi.ai.tools.SearchImageTool;
 import com.mofanyi.ai.tools.SearchWebTool;
 import com.mofanyi.ai.tools.WriteFileTool;
+import com.mofanyi.ai.tools.WriteFileChunkTool;
 import com.mofanyi.core.AiCallContext;
 import com.mofanyi.core.AiCallListener;
 import com.mofanyi.core.ImageMaterialPlanner;
@@ -69,6 +70,7 @@ public class AgentToolLoop {
     private final ModelProperties modelProperties;
     private final ModelExecutionTrace modelExecutionTrace;
     private final WriteFileTool writeFileTool;
+    private final WriteFileChunkTool writeFileChunkTool;
     private final ReadFileTool readFileTool;
     private final SearchImageTool searchImageTool;
     private final SearchWebTool searchWebTool;
@@ -90,6 +92,7 @@ public class AgentToolLoop {
                          ModelProperties modelProperties,
                          ModelExecutionTrace modelExecutionTrace,
                          WriteFileTool writeFileTool,
+                         WriteFileChunkTool writeFileChunkTool,
                          ReadFileTool readFileTool,
                          SearchImageTool searchImageTool,
                          SearchWebTool searchWebTool,
@@ -104,6 +107,7 @@ public class AgentToolLoop {
         this.modelProperties = modelProperties;
         this.modelExecutionTrace = modelExecutionTrace;
         this.writeFileTool = writeFileTool;
+        this.writeFileChunkTool = writeFileChunkTool;
         this.readFileTool = readFileTool;
         this.searchImageTool = searchImageTool;
         this.searchWebTool = searchWebTool;
@@ -153,6 +157,8 @@ public class AgentToolLoop {
         List<ToolCallback> callbacks = new ArrayList<>();
         if (toolAllowed("writeFile", allowedTools)) {
             callbacks.add(writeFileTool.build(
+                    request.type(), request.appId(), request.files(), request.listener()));
+            callbacks.add(writeFileChunkTool.build(
                     request.type(), request.appId(), request.files(), request.listener()));
         }
         if (toolAllowed("readFile", allowedTools)) {
@@ -217,10 +223,7 @@ public class AgentToolLoop {
                     log.error("[agent] 连续 3 次模型响应异常，终止生成，step={}", step);
                     break;
                 }
-                request.messages().add(new UserMessage(
-                        "你上一步的返回内容被截断（工具调用参数不完整，解析失败）。"
-                                + "请重新调用工具：若文件内容较大，请拆成多次 writeFile 调用，每次内容控制在 3000 字符以内；"
-                                + "若已完成，直接调用 finish。"));
+                request.messages().add(new UserMessage(toolArgumentRecoveryPrompt(e)));
                 continue;
             }
             consecutiveFailures = 0;
@@ -300,7 +303,7 @@ public class AgentToolLoop {
                             ? toolNotAllowed(toolCall.name())
                             : callback.call(toolCall.arguments());
                 } catch (RuntimeException e) {
-                    result = "工具执行失败: " + e.getMessage();
+                    result = toolFailureResponse(toolCall.name(), e);
                 }
                 responses.add(new ToolResponseMessage.ToolResponse(
                         toolCall.id(), toolCall.name(), result));
@@ -391,6 +394,41 @@ public class AgentToolLoop {
 
     private static boolean toolAllowed(String tool, Set<String> allowedTools) {
         return allowedTools == null || allowedTools.contains(tool);
+    }
+
+    private static String toolArgumentRecoveryPrompt(Throwable error) {
+        if (isToolArgumentsTruncated(error)) {
+            return "TOOL_ARGUMENTS_TRUNCATED：上一条 writeFile 的 JSON 参数被截断。"
+                    + "不要重写已经完成的其他文件。请把当前大文件拆成组件，或改用 writeFileChunk："
+                    + "path 保持不变，chunkIndex 从 0 顺序递增，每片 4000～8000 字符，最后一片 lastChunk=true。";
+        }
+        return "上一条工具调用参数不完整或无法解析。请缩小单次输出，必要时拆分组件或文件后重试。";
+    }
+
+    private static String toolFailureResponse(String tool, Throwable error) {
+        ObjectNode failure = COMPACT_MAPPER.createObjectNode();
+        failure.put("code", isToolArgumentsTruncated(error)
+                ? "TOOL_ARGUMENTS_TRUNCATED" : "TOOL_EXECUTION_FAILED");
+        failure.put("tool", tool == null ? "" : tool);
+        failure.put("message", isToolArgumentsTruncated(error)
+                ? "工具参数 JSON 被截断；请拆成组件或改用 writeFileChunk 顺序分片"
+                : StrUtil.maxLength(error == null ? "unknown" : error.getMessage(), 500));
+        return failure.toString();
+    }
+
+    private static boolean isToolArgumentsTruncated(Throwable error) {
+        Throwable current = error;
+        while (current != null) {
+            String name = current.getClass().getSimpleName();
+            String message = current.getMessage() == null ? "" : current.getMessage();
+            if ("JsonEOFException".equals(name)
+                    || message.contains("Unexpected end-of-input")
+                    || message.contains("Conversion from JSON to")) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     private static String toolNotAllowed(String tool) {

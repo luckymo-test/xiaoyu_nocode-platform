@@ -18,6 +18,7 @@ import com.mofanyi.ai.tools.ReadFileTool;
 import com.mofanyi.ai.tools.SearchImageTool;
 import com.mofanyi.ai.tools.SearchWebTool;
 import com.mofanyi.ai.tools.WriteFileTool;
+import com.mofanyi.ai.tools.WriteFileChunkTool;
 import com.mofanyi.core.AiCallContext;
 import com.mofanyi.core.AiCallListener;
 import com.mofanyi.core.ImageMaterialPlanner;
@@ -63,6 +64,8 @@ class AgentToolLoopGatewayTest {
     private AiCallListener callListener;
     private FinishTool finishTool;
     private ToolCallback finishCallback;
+    private WriteFileTool writeFileTool;
+    private ToolCallback writeFileCallback;
     private SkillContext skillContext;
     private AgentToolLoop loop;
 
@@ -73,8 +76,10 @@ class AgentToolLoopGatewayTest {
         profiles = mock(ReasoningProfileRegistry.class);
         callListener = mock(AiCallListener.class);
         finishTool = mock(FinishTool.class);
+        writeFileTool = mock(WriteFileTool.class);
         skillContext = mock(SkillContext.class);
         finishCallback = callback("finish");
+        writeFileCallback = callback("writeFile");
         when(skillContext.get(7L)).thenReturn(List.of());
         when(skillContext.allowedToolIntersection(7L)).thenReturn(java.util.Optional.empty());
 
@@ -82,6 +87,7 @@ class AgentToolLoopGatewayTest {
                 new ReasoningProfile(true, "high", 4, 20_000, 1,
                         4_096, "deepseek-flash"));
         when(finishTool.build(any(), any())).thenReturn(finishCallback);
+        when(writeFileTool.build(any(), any(), any(), any())).thenReturn(writeFileCallback);
         SearchWebTool searchWeb = mock(SearchWebTool.class);
         FetchWebTool fetchWeb = mock(FetchWebTool.class);
         when(searchWeb.isEnabled()).thenReturn(false);
@@ -91,7 +97,8 @@ class AgentToolLoopGatewayTest {
                 modelGateway,
                 modelProperties,
                 new ModelExecutionTrace(),
-                toolWithCallback(mock(WriteFileTool.class), "writeFile"),
+                writeFileTool,
+                toolWithCallback(mock(WriteFileChunkTool.class), "writeFileChunk"),
                 toolWithCallback(mock(ReadFileTool.class), "readFile"),
                 toolWithCallback(mock(SearchImageTool.class), "searchImage"),
                 searchWeb,
@@ -197,7 +204,7 @@ class AgentToolLoopGatewayTest {
         ArgumentCaptor<ModelRequest> requestCaptor =
                 ArgumentCaptor.forClass(ModelRequest.class);
         verify(modelGateway).stream(requestCaptor.capture());
-        assertEquals(List.of("writeFile", "readFile", "finish"),
+        assertEquals(List.of("writeFile", "writeFileChunk", "readFile", "finish"),
                 requestCaptor.getValue().tools().stream()
                         .map(callback -> callback.getToolDefinition().name()).toList());
     }
@@ -244,6 +251,42 @@ class AgentToolLoopGatewayTest {
         assertTrue(refusal.contains("\"tool\":\"searchImage\""));
     }
 
+    @Test
+    @DisplayName("工具参数截断时返回可执行的分块写入提示")
+    void returnsChunkedWriteHintForTruncatedArguments() {
+        ReflectionTestUtils.setField(loop, "selfManagedLoopEnabled", true);
+        when(modelGateway.stream(any())).thenReturn(
+                Flux.just(new ModelChunk("", "", List.of(new AssistantMessage.ToolCall(
+                        "call-write", "function", "writeFile", "{\"path\":\"index.html\"")),
+                        "tool_calls", new ModelUsage(10, 20), "deepseek",
+                        "deepseek-flash", "deepseek-flash")),
+                Flux.just(new ModelChunk("", "", List.of(new AssistantMessage.ToolCall(
+                        "call-finish", "function", "finish", "{\"description\":\"done\"}")),
+                        "tool_calls", new ModelUsage(1, 1), "deepseek",
+                        "deepseek-flash", "deepseek-flash")));
+        when(writeFileCallback.call(anyString())).thenThrow(new IllegalStateException(
+                "Conversion from JSON failed: Unexpected end-of-input"));
+        AtomicBoolean finished = new AtomicBoolean();
+        when(finishCallback.call(anyString())).thenAnswer(invocation -> {
+            finished.set(true);
+            return "finished";
+        });
+        AgentToolLoop.ToolLoopRequest request = request(
+                new AtomicReference<>(""), finished,
+                new TokenUsageAccumulator(), null);
+
+        loop.run(request);
+
+        String response = request.messages().stream()
+                .filter(ToolResponseMessage.class::isInstance)
+                .map(ToolResponseMessage.class::cast)
+                .flatMap(message -> message.getResponses().stream())
+                .filter(item -> "call-write".equals(item.id()))
+                .findFirst().orElseThrow().responseData();
+        assertTrue(response.contains("\"code\":\"TOOL_ARGUMENTS_TRUNCATED\""));
+        assertTrue(response.contains("writeFileChunk"));
+    }
+
     private AgentToolLoop.ToolLoopRequest request(
             AtomicReference<String> description,
             AtomicBoolean finished,
@@ -272,6 +315,12 @@ class AgentToolLoopGatewayTest {
     }
 
     private static WriteFileTool toolWithCallback(WriteFileTool tool, String name) {
+        ToolCallback callback = callback(name);
+        when(tool.build(any(), any(), any(), any())).thenReturn(callback);
+        return tool;
+    }
+
+    private static WriteFileChunkTool toolWithCallback(WriteFileChunkTool tool, String name) {
         ToolCallback callback = callback(name);
         when(tool.build(any(), any(), any(), any())).thenReturn(callback);
         return tool;

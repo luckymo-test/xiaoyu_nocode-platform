@@ -186,7 +186,7 @@ codegen:
   # Agent 循环形态（S5）：true=自管循环（逐步预算真正生效）；false=框架内部循环（现状，默认）
   agent:
     self-managed-loop:
-      enabled: ${CODEGEN_SELF_MANAGED_LOOP:false}
+      enabled: ${CODEGEN_SELF_MANAGED_LOOP:true}
     # 单次生成的累计 token 预算（prompt+completion），超限在"轮次之间"拦下。
     # 默认 80 万：实测同一 prompt 在框架路径会烧到 46 万（单次调用总量），20 万会把自管循环的大页面提前掐断。
     max-loop-tokens: ${CODEGEN_MAX_LOOP_TOKENS:800000}

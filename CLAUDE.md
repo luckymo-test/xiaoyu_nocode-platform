@@ -39,6 +39,9 @@ AI 应用生成平台。用户通过一句话创建网站或前端工程，平�
   网格、图片节奏与动效，见 [docs/visual-quality.md](docs/visual-quality.md)。
 - 页面通过功能验证后会读取三档截图、DOM 和源码索引生成结构化审美评审；
   评审失败自动跳过，不阻塞版本发布。
+- Tool Calling 默认使用自管循环；工具参数截断返回 `TOOL_ARGUMENTS_TRUNCATED`。
+  大文件使用 `writeFileChunk` 顺序幂等分片，最后一片完成后才替换正式源码，
+  见 [docs/tool-loop-resilience.md](docs/tool-loop-resilience.md)。
 
 ## 必读文档
 
@@ -54,6 +57,7 @@ AI 应用生成平台。用户通过一句话创建网站或前端工程，平�
 10. StackProfile 运行时：[docs/stack-runtime.md](docs/stack-runtime.md)
 11. 视觉质量体系：[docs/visual-quality.md](docs/visual-quality.md)
 12. 固定 Prompt 评估：[docs/evaluation.md](docs/evaluation.md)
+13. Tool Loop 截断与分块写入：[docs/tool-loop-resilience.md](docs/tool-loop-resilience.md)
 
 新问题追加到 `development-notes.md` 末尾并保持连续编号，不要把“最新编号”硬编码到其他文档。
 

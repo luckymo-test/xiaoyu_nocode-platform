@@ -705,6 +705,14 @@ codegen.runtime.next-static-export.enabled=false
 - 新增 20 条固定评估集的质量门禁与 JSON/Markdown 报告聚合器；
 - 下一步继续审美修复，并用真实模型运行 20 条基线。
 
+Tool Calling 稳定性改造已完成（2026-10-25）：
+
+- 默认启用自管 Tool-Calling Loop；
+- 超大 `writeFile` 参数截断返回 `TOOL_ARGUMENTS_TRUNCATED` 结构化错误；
+- 页面按组件和模块拆分，单文件软上限约 12,000 字符；
+- 新增 `writeFileChunk` 顺序、幂等、最终原子提交的分块写入工具；
+- 分片乱序、单片超大、路径穿越和部分文件落盘均有测试。
+
 目标：把“看起来能用”提升为可量化的工程质量。
 
 任务：

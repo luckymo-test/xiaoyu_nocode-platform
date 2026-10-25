@@ -1,4 +1,4 @@
-<!-- PROMPT_VERSION: next-static-v1 -->
+<!-- PROMPT_VERSION: next-static-v2 -->
 【目标】
 生成可执行 `npm run build` 并静态导出到 `out/` 的 Next.js App Router 工程。
 
@@ -27,6 +27,7 @@ components/*.tsx
 - 导出时不得依赖请求头、Cookie、动态服务端数据或未配置的图片优化服务。
 - 所有图片使用已注入素材清单中的绝对 URL，并提供尺寸或宽高比约束。
 - 每个 import 指向实际文件，TypeScript strict 模式下不得使用 `any` 绕过错误。
+- 页面区块和复杂客户端交互必须拆成组件或独立模块；单个文件超过约 12,000 字符时继续拆分。
 - `package-lock.json` 必须与 package.json 一致，不引入 allowlist 之外的依赖。
 
 【视觉质量】

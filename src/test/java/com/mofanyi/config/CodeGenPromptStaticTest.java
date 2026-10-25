@@ -103,7 +103,7 @@ class CodeGenPromptStaticTest {
         assertTrue(config.nextPrompt().contains("prefers-reduced-motion"));
         assertTrue(readPrompt("prompt/page_blueprint_prompt.txt").contains("\"sections\""));
         assertTrue(config.renderFixPrompt().contains("隐藏的灯箱"));
-        assertTrue(config.vuePrompt().contains("PROMPT_VERSION: vue-v2"));
+        assertTrue(config.vuePrompt().contains("PROMPT_VERSION: vue-v3"));
         assertTrue(config.singleHtmlPrompt().contains("已有素材清单时不要为了图片重复调用"));
     }
 

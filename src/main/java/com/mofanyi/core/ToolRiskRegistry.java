@@ -35,6 +35,7 @@ public class ToolRiskRegistry {
      * 单文件写入内容上限（字符）：防止模型一次写入超大内容撑爆磁盘/上下文
      */
     private static final int MAX_WRITE_CHARS = 200_000;
+    private static final int MAX_CHUNK_CHARS = 12_000;
 
     /**
      * 出站白名单：由各图源自己声明（{@link ImageSource#allowedHostSuffixes()}）后汇总。
@@ -66,6 +67,8 @@ public class ToolRiskRegistry {
             new ToolRisk("readFile", Risk.LOW, "仅相对路径（ToolPaths 校验）"),
             new ToolRisk("finish", Risk.LOW, "无副作用"),
             new ToolRisk("writeFile", Risk.MEDIUM, "相对路径 + 单文件 ≤ " + MAX_WRITE_CHARS + " 字符"),
+            new ToolRisk("writeFileChunk", Risk.MEDIUM,
+                    "顺序分片 ≤ " + MAX_CHUNK_CHARS + " 字符/片 + 单文件 ≤ " + MAX_WRITE_CHARS + " 字符"),
             new ToolRisk("searchImage", Risk.HIGH, "出站域名白名单 + 超时 + 大小上限"),
             new ToolRisk("searchWeb", Risk.HIGH, "账号级 QPS + 重试 + 缓存 + 不可信外部数据"),
             new ToolRisk("fetchWeb", Risk.HIGH, "公开 HTTP/HTTPS URL + 正文截断 + 不可信外部数据"),
@@ -85,6 +88,13 @@ public class ToolRiskRegistry {
         int length = content == null ? 0 : content.length();
         ThrowUtils.throwIf(length > MAX_WRITE_CHARS, ErrorCode.PARAMS_ERROR,
                 (tool == null ? "writeFile" : tool) + " 内容过大（" + length + " 字符，上限 " + MAX_WRITE_CHARS + "）");
+    }
+
+    public void checkChunkContent(String content) {
+        int length = content == null ? 0 : content.length();
+        ThrowUtils.throwIf(length == 0, ErrorCode.PARAMS_ERROR, "分块内容不能为空");
+        ThrowUtils.throwIf(length > MAX_CHUNK_CHARS, ErrorCode.PARAMS_ERROR,
+                "分块内容过大（" + length + " 字符，单片上限 " + MAX_CHUNK_CHARS + "）");
     }
 
     /**
