@@ -79,3 +79,6 @@ Squid 和 Preview Gateway。
 - 当前机器没有 Docker，Compose 镜像与容器网络只做了配置解析，未完成真实容器验收。
 - 真实 DeepSeek 三阶段规划、任务 DAG、暂停恢复和客户选片 E2E 尚未作为固定探针执行。
 - Monaco 编辑器是懒加载分包，不会进入生成工作区首屏主包。
+
+仍待完成的详细清单、优先级和发布门禁见
+[platform-mvp-remaining-work.md](platform-mvp-remaining-work.md)。
