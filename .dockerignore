@@ -1,0 +1,10 @@
+.git
+.idea
+target
+tmp
+deploy
+xiaoyuZeroCode-front/node_modules
+xiaoyuZeroCode-front/dist
+src/main/resources/application-location.yml
+*.local.yml
+.env
