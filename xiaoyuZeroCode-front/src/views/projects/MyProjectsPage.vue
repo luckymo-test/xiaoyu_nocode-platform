@@ -12,6 +12,7 @@ import TableSkeleton from '@/components/TableSkeleton.vue'
 import {
   addApp,
   applyFeatured,
+  copyApp,
   deleteApp,
   deleteAppBatch,
   listMyAppVoByPage,
@@ -129,6 +130,26 @@ const handleOpenApp = (id?: number) => {
 const handleEdit = (id?: number) => {
   if (!id) return
   router.push(`/app/edit/${id}`)
+}
+
+const handleOpenDeployed = (app: API.AppVO) => {
+  if (!app.deployUrl) return
+  window.open(app.deployUrl, '_blank', 'noopener,noreferrer')
+}
+
+const handleCopy = async (id?: number) => {
+  if (!id) return
+  try {
+    const res = await copyApp({ id: id as unknown as number })
+    if (res.data.code === 0) {
+      message.success('项目已复制')
+      fetchMyApps()
+    } else {
+      message.error(res.data.message || '复制失败')
+    }
+  } catch {
+    message.error('复制失败')
+  }
 }
 
 /* ---------------- 删除：可逆/不可逆都走同一个确认弹窗 ---------------- */
@@ -271,6 +292,8 @@ const handleTabChange = (key: string) => {
 /** 表格行内「更多」菜单：把次要操作与危险操作收起来，行内只留 1 个主入口 */
 const handleRowMore = ({ key }: { key: string | number }, record: API.AppVO) => {
   if (key === 'edit') handleEdit(record.id)
+  if (key === 'copy') handleCopy(record.id)
+  if (key === 'preview') handleOpenDeployed(record)
   if (key === 'featured') handleApplyFeatured(record.id)
   if (key === 'delete') askDelete([record], 'recycle')
 }
@@ -286,6 +309,7 @@ const myAppColumns = [
   { title: '生成状态', dataIndex: 'generateStatus', key: 'generateStatus', width: 100 },
   { title: '精选状态', dataIndex: 'featuredStatus', key: 'featuredStatus', width: 100 },
   { title: '创建时间', dataIndex: 'createTime', key: 'createTime', width: 180 },
+  { title: '最近编辑', dataIndex: 'editTime', key: 'editTime', width: 180 },
   { title: '操作', key: 'action', width: 190, fixed: 'right' },
 ]
 
@@ -401,7 +425,14 @@ const recycleColumns = [
                     </a-button>
                     <template #overlay>
                       <a-menu @click="(info: any) => handleRowMore(info, record)">
-                        <a-menu-item key="edit">编辑信息</a-menu-item>
+                        <a-menu-item
+                          v-if="record.deployedTime && record.deployUrl"
+                          key="preview"
+                        >
+                          打开已发布页面
+                        </a-menu-item>
+                        <a-menu-item key="edit">重命名/编辑信息</a-menu-item>
+                        <a-menu-item key="copy">复制项目</a-menu-item>
                         <a-menu-item
                           v-if="record.featuredStatus === 0 || record.featuredStatus === 3"
                           key="featured"

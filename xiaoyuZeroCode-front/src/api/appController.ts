@@ -17,6 +17,14 @@ export async function addApp(
   });
 }
 
+export async function copyApp(body: API.DeleteRequest) {
+  return request<API.BaseResponseLong>('/app/copy', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    data: body,
+  })
+}
+
 /** 此处后端没有提供注释 POST /app/admin/delete */
 export async function deleteAppByAdmin(
   body: API.DeleteRequest,

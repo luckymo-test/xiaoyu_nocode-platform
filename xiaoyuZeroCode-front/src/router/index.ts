@@ -51,7 +51,7 @@ const router = createRouter({
     {
       path: '/templates',
       name: 'templates',
-      component: () => import('@/views/ComingSoonPage.vue'),
+      component: () => import('@/views/projects/ProjectTemplatesPage.vue'),
       meta: { title: '模板市场' },
     },
     {

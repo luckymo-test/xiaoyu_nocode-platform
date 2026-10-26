@@ -10,6 +10,7 @@ export const generateStatusMap: Record<string, StatusMeta> = {
   not_generated: { text: '未生成', color: 'default' },
   generating: { text: '生成中', color: 'processing' },
   done: { text: '已完成', color: 'success' },
+  paused: { text: '已暂停', color: 'warning' },
   stopped: { text: '已停止', color: 'warning' },
   failed: { text: '失败', color: 'error' },
 }

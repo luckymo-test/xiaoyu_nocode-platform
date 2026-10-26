@@ -96,10 +96,13 @@ declare namespace API {
     initPrompt?: string;
     deployKey?: string;
     deployUrl?: string;
+    deployedTime?: string;
     codeGenType?: string;
+    projectTemplateId?: string;
     priority?: number;
     userId?: number;
     createTime?: string;
+    editTime?: string;
     updateTime?: string;
   };
 

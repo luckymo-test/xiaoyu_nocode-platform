@@ -32,6 +32,7 @@ function streamGenerationJob(
   callbacks: SseCallbacks,
   reasoningLevel: string,
   stackProfileId = 'auto',
+  projectTemplateId?: string,
 ): SseConnection {
   let closed = false
   let eventSource: EventSource | null = null
@@ -64,8 +65,10 @@ function streamGenerationJob(
           codeGenType,
           stackProfileId,
           templateHint: 'auto',
+          projectTemplateId,
           skills: [],
           requestType: 'generate',
+          workflowVersion: 2,
         }),
       })
       const body = (await response.json()) as BaseResponse<GenerationJobVO>
@@ -77,6 +80,7 @@ function streamGenerationJob(
       if (closed) return
 
       const job = body.data
+      callbacks.onJobCreated?.(job)
       eventSource = new EventSource(`${BASE_URL}${job.eventsUrl}`, { withCredentials: true })
       eventSource.onopen = () => callbacks.onOpen?.()
 
@@ -105,6 +109,20 @@ function streamGenerationJob(
         )
         close()
       })
+      for (const eventType of [
+        'plan_ready',
+        'confirmation_required',
+        'plan_confirmed',
+        'coder_started',
+        'step_completed',
+        'pause_requested',
+        'paused',
+        'resumed',
+      ]) {
+        eventSource.addEventListener(eventType, (event) => {
+          callbacks.onWorkflowEvent?.(eventType, parsePayload(event))
+        })
+      }
       eventSource.onerror = () => {
         // 只读事件接口没有副作用，浏览器原生重连比重新创建 Job 更安全。
         if (eventSource?.readyState === EventSource.CLOSED && !closed) {
@@ -136,6 +154,47 @@ function parsePayload(event: Event): unknown {
   }
 }
 
+export function subscribeJobEvents(
+  eventsUrl: string,
+  callbacks: SseCallbacks,
+): SseConnection {
+  let closed = false
+  const source = new EventSource(`${BASE_URL}${eventsUrl}`, {
+    withCredentials: true,
+  })
+  const close = () => {
+    if (closed) return
+    closed = true
+    source.close()
+    callbacks.onClose?.()
+  }
+  source.onopen = () => callbacks.onOpen?.()
+  source.addEventListener('deployed', (event) => {
+    const payload = parsePayload(event) as { url?: string }
+    if (payload.url) callbacks.onDeployed?.(payload.url)
+  })
+  source.addEventListener('completed', () => close())
+  source.addEventListener('failed', (event) => {
+    const payload = parsePayload(event) as { message?: string } | string
+    callbacks.onError?.(
+      typeof payload === 'string' ? payload : payload?.message || '任务失败',
+    )
+    close()
+  })
+  source.onerror = () => {
+    if (source.readyState === EventSource.CLOSED && !closed) {
+      callbacks.onConnectionLost?.()
+      close()
+    }
+  }
+  return {
+    close,
+    get readyState() {
+      return source.readyState
+    },
+  }
+}
+
 /**
  * 流式生成单文件 HTML 项目
  * 对应后端 GET /ai/chat/stream
@@ -147,8 +206,10 @@ export function streamGenerateHtmlProject(
   message: string | undefined,
   callbacks: SseCallbacks,
   reasoningLevel = 'standard',
+  projectTemplateId?: string,
 ): SseConnection {
-  return streamGenerationJob(appId, message, 'html', callbacks, reasoningLevel)
+  return streamGenerationJob(appId, message, 'html', callbacks, reasoningLevel,
+    'auto', projectTemplateId)
 }
 
 /**
@@ -162,8 +223,10 @@ export function streamGenerateMultiFileProject(
   message: string | undefined,
   callbacks: SseCallbacks,
   reasoningLevel = 'standard',
+  projectTemplateId?: string,
 ): SseConnection {
-  return streamGenerationJob(appId, message, 'multi_file', callbacks, reasoningLevel)
+  return streamGenerationJob(appId, message, 'multi_file', callbacks, reasoningLevel,
+    'auto', projectTemplateId)
 }
 
 /**
@@ -177,8 +240,10 @@ export function streamGenerateVueProject(
   callbacks: SseCallbacks,
   reasoningLevel = 'standard',
   stackProfileId = 'auto',
+  projectTemplateId?: string,
 ): SseConnection {
-  return streamGenerationJob(appId, message, 'vue', callbacks, reasoningLevel, stackProfileId)
+  return streamGenerationJob(appId, message, 'vue', callbacks, reasoningLevel,
+    stackProfileId, projectTemplateId)
 }
 
 /**
@@ -203,4 +268,69 @@ export function streamModifyProject(
     },
     callbacks,
   )
+}
+
+export function streamDeployment(
+  appId: number | string,
+  callbacks: SseCallbacks,
+): SseConnection {
+  let source: EventSource | null = null
+  let closed = false
+  const close = () => {
+    if (closed) return
+    closed = true
+    source?.close()
+    callbacks.onClose?.()
+  }
+  void (async () => {
+    try {
+      await ensureCsrfToken(BASE_URL)
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': newIdempotencyKey(),
+      }
+      const csrf = getCsrfToken()
+      if (csrf) headers[CSRF_HEADER] = csrf
+      const response = await fetch(`${BASE_URL}/v1/apps/${appId}/deployments`, {
+        method: 'POST',
+        credentials: 'include',
+        headers,
+      })
+      const body = (await response.json()) as BaseResponse<GenerationJobVO>
+      if (!response.ok || body.code !== 0 || !body.data) {
+        callbacks.onError?.(body.message || '创建部署任务失败')
+        close()
+        return
+      }
+      callbacks.onJobCreated?.(body.data)
+      source = new EventSource(`${BASE_URL}${body.data.eventsUrl}`, {
+        withCredentials: true,
+      })
+      source.addEventListener('deployed', (event) => {
+        const payload = parsePayload(event) as { url?: string }
+        if (payload.url) callbacks.onDeployed?.(payload.url)
+      })
+      source.addEventListener('completed', () => close())
+      source.addEventListener('failed', (event) => {
+        const payload = parsePayload(event) as { message?: string }
+        callbacks.onError?.(payload.message || '部署失败')
+        close()
+      })
+      source.onerror = () => {
+        if (source?.readyState === EventSource.CLOSED && !closed) {
+          callbacks.onConnectionLost?.()
+          close()
+        }
+      }
+    } catch (error) {
+      callbacks.onError?.(error instanceof Error ? error.message : '部署失败')
+      close()
+    }
+  })()
+  return {
+    close,
+    get readyState() {
+      return source?.readyState ?? EventSource.CONNECTING
+    },
+  }
 }

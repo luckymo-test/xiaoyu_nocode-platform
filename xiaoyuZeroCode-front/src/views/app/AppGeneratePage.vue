@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { ref, reactive, computed, watch, nextTick, onMounted, onUnmounted } from 'vue'
+import {
+  ref, reactive, computed, watch, nextTick, onMounted, onUnmounted, defineAsyncComponent,
+} from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { appMessage as message } from '@/utils/feedback'
 import {
@@ -18,7 +20,7 @@ import {
   UndoOutlined,
   UserOutlined,
 } from '@ant-design/icons-vue'
-import { getAppVoById, getAppCode, getVuePreview, deployApp, unDeployApp, downloadCode } from '@/api/appController'
+import { getAppVoById, getAppCode, getVuePreview, unDeployApp, downloadCode } from '@/api/appController'
 import { chat, chatMulti, stopGenerate, undoAiModify } from '@/api/aiChatController'
 import {
   listManualEdits,
@@ -33,8 +35,9 @@ import {
   streamGenerateMultiFileProject,
   streamGenerateVueProject,
   streamModifyProject,
+  streamDeployment,
+  subscribeJobEvents,
 } from '@/api/aiStream'
-import { createSseConnection } from '@/utils/sse'
 import { getRenderFixStatus } from '@/api/renderFix'
 import { listRuntimeProfiles, type RuntimeProfile } from '@/api/runtimeProfile'
 import {
@@ -49,6 +52,10 @@ import {
 import type { SseCallbacks, SseConnection } from '@/utils/sse'
 import { useUserStore } from '@/stores/user'
 import MarkdownView from '@/components/MarkdownView.vue'
+import WorkflowPanel from '@/components/WorkflowPanel.vue'
+import { cancelGeneration } from '@/api/workflow'
+import { getAppFile, listAppFiles, saveAppFile, type AppFileNode } from '@/api/appFiles'
+import { issuePreviewToken } from '@/api/preview'
 import { generateStatusText } from '@/utils/appStatus'
 import {
   DEFAULT_REASONING_INDEX,
@@ -58,6 +65,8 @@ import {
   reasoningStorageKey as getReasoningStorageKey,
   type ReasoningLevel,
 } from '@/config/reasoning'
+
+const CodeEditor = defineAsyncComponent(() => import('@/components/CodeEditor.vue'))
 
 interface CodeFile {
   path: string
@@ -85,6 +94,8 @@ const loading = ref(true)
 const messages = ref<ChatMessage[]>([])
 const input = ref('')
 const generating = ref(false)
+const currentJobId = ref('')
+const workflowRefreshKey = ref(0)
 
 const routeReasoning = typeof route.query.reasoning === 'string'
   ? route.query.reasoning
@@ -806,6 +817,77 @@ const revisions = ref<AppRevision[]>([])
 const selectedRevision = ref<AppRevision | null>(null)
 const revisionDiff = ref<RevisionDiff | null>(null)
 
+const editorDrawerOpen = ref(false)
+const editorFiles = ref<AppFileNode[]>([])
+const editorPath = ref('')
+const editorCode = ref('')
+const editorHash = ref('')
+const editorLoading = ref(false)
+const editorSaving = ref(false)
+
+const openSourceEditor = async () => {
+  editorDrawerOpen.value = true
+  editorLoading.value = true
+  try {
+    const res = await listAppFiles(appId.value)
+    if (res.data.code === 0) {
+      editorFiles.value = res.data.data ?? []
+      if (editorFiles.value.length) {
+        await selectEditorFile(editorFiles.value[0].path)
+      }
+    }
+  } finally {
+    editorLoading.value = false
+  }
+}
+
+const selectEditorFile = async (filePath: string) => {
+  editorLoading.value = true
+  try {
+    const res = await getAppFile(appId.value, filePath)
+    if (res.data.code === 0 && res.data.data) {
+      editorPath.value = res.data.data.path
+      editorCode.value = res.data.data.content
+      editorHash.value = res.data.data.sha256
+    }
+  } catch {
+    message.error('读取源码失败')
+  } finally {
+    editorLoading.value = false
+  }
+}
+
+const saveEditorFile = async () => {
+  if (!editorPath.value) return
+  editorSaving.value = true
+  try {
+    const res = await saveAppFile(
+      appId.value, editorPath.value, editorCode.value, editorHash.value,
+    )
+    if (res.data.code !== 0) {
+      message.error(res.data.message || '保存失败')
+      return
+    }
+    editorHash.value = res.data.data.sha256
+    message.success('已保存并创建新版本')
+    await tryLoadWebsite()
+    await loadRevisions()
+  } finally {
+    editorSaving.value = false
+  }
+}
+
+const openIsolatedPreview = async () => {
+  try {
+    const res = await issuePreviewToken(appId.value)
+    if (res.data.code === 0 && res.data.data?.url) {
+      window.open(res.data.data.url, '_blank', 'noopener,noreferrer')
+    }
+  } catch {
+    message.error('隔离预览暂不可用，请确认 Preview Gateway 已启动')
+  }
+}
+
 // 是否流式生成：创建时通过 query 传入（?stream=true/false），默认流式
 const useStream = computed(() => route.query.stream !== 'false')
 
@@ -898,9 +980,22 @@ const handlePublishRevision = async (revision: AppRevision) => {
       message.error(res.data.message || '切换版本失败')
       return
     }
-    message.success(`已切换到版本 v${revision.revisionNo}`)
-    await refreshAfterRevisionPublish()
-    await loadRevisions()
+    message.success(`已提交 v${revision.revisionNo} 的版本切换与发布任务`)
+    const job = res.data.data
+    if (job?.eventsUrl) {
+      subscribeJobEvents(job.eventsUrl, {
+        onDeployed: async (url) => {
+          message.success(`版本 v${revision.revisionNo} 已发布`)
+          await refreshAfterRevisionPublish()
+          await loadRevisions()
+          window.open(url, '_blank', 'noopener,noreferrer')
+        },
+        onError: (text) => message.error(text || '版本切换失败'),
+      })
+    } else {
+      await refreshAfterRevisionPublish()
+      await loadRevisions()
+    }
     selectedRevision.value = null
     revisionDiff.value = null
   } catch {
@@ -1169,6 +1264,8 @@ const sendMessage = async (text?: string, auto = false) => {
   const aiMsg = reactive<ChatMessage>({ role: 'ai', content: '', status: 'streaming', files: [] })
   messages.value.push(aiMsg)
   generating.value = true
+  currentJobId.value = ''
+  workflowRefreshKey.value++
   genProgress.value = '正在分析需求并生成代码…（可能需要 1-2 分钟）'
   previewLoading.value = true
   previewDoc.value = ''
@@ -1211,6 +1308,24 @@ const sendMessage = async (text?: string, auto = false) => {
       }
 
       const callbacks: SseCallbacks = {
+        onJobCreated: (job) => {
+          currentJobId.value = job.jobId
+          workflowRefreshKey.value++
+        },
+        onWorkflowEvent: (eventType) => {
+          workflowRefreshKey.value++
+          if (eventType === 'confirmation_required') {
+            genProgress.value = '需求与架构方案已生成，请确认后继续'
+          }
+          if (eventType === 'paused') {
+            generating.value = false
+            genProgress.value = '任务已暂停，可从执行过程面板继续'
+          }
+          if (eventType === 'resumed') {
+            generating.value = true
+            genProgress.value = '任务已继续'
+          }
+        },
         onAgentProgress: (data) => {
           // data 为 {"path":"...","content":"..."} JSON
           try {
@@ -1255,6 +1370,7 @@ const sendMessage = async (text?: string, auto = false) => {
         callbacks,
         reasoningLevel.value,
         selectedStackProfileId.value,
+        app.value?.projectTemplateId,
       )
       return
     }
@@ -1321,6 +1437,24 @@ const sendMessage = async (text?: string, auto = false) => {
       startRenderFixPolling()
     }
     const callbacks: SseCallbacks = {
+      onJobCreated: (job) => {
+        currentJobId.value = job.jobId
+        workflowRefreshKey.value++
+      },
+      onWorkflowEvent: (eventType) => {
+        workflowRefreshKey.value++
+        if (eventType === 'confirmation_required') {
+          genProgress.value = '需求与架构方案已生成，请确认后继续'
+        }
+        if (eventType === 'paused') {
+          generating.value = false
+          genProgress.value = '任务已暂停，可从执行过程面板继续'
+        }
+        if (eventType === 'resumed') {
+          generating.value = true
+          genProgress.value = '任务已继续'
+        }
+      },
       onAgentProgress: (data) => {
         // data 为 {"path":"...","content":"..."} JSON
         try {
@@ -1358,9 +1492,15 @@ const sendMessage = async (text?: string, auto = false) => {
       },
     }
     if (isMultiFile.value) {
-      connection = streamGenerateMultiFileProject(appId.value, content, callbacks, reasoningLevel.value)
+      connection = streamGenerateMultiFileProject(
+        appId.value, content, callbacks, reasoningLevel.value,
+        app.value?.projectTemplateId,
+      )
     } else {
-      connection = streamGenerateHtmlProject(appId.value, content, callbacks, reasoningLevel.value)
+      connection = streamGenerateHtmlProject(
+        appId.value, content, callbacks, reasoningLevel.value,
+        app.value?.projectTemplateId,
+      )
     }
   } else {
     // 非流式：一次性返回完整结果（后端直接返回 AiCodeGenResultVO，无 BaseResponse 包装）
@@ -1555,7 +1695,7 @@ const handleDeploy = async () => {
   if (!app.value?.id) return
   deploying.value = true
   try {
-    if (app.value.deployKey) {
+    if (app.value.deployedTime) {
       // 已部署 → 下线
       const res = await unDeployApp({ id: app.value.id })
       if (res.data.code === 0) {
@@ -1571,66 +1711,30 @@ const handleDeploy = async () => {
       return
     }
     // 未部署 → 上线
-    if (isVue.value) {
-      // vue 模式：流式部署（构建 + 自动修复进度）
-      deployStatus.value = '正在准备部署…'
-      const deployConn = createSseConnection(
-        '/app/deploy/stream',
-        { appId: app.value.id },
-        {
-          onDeployProgress: (text) => {
-            deployStatus.value = deployStatusText(text)
-          },
-          onDone: (result: any) => {
-            deploying.value = false
-            deployStatus.value = '部署成功'
-            message.success('部署成功')
-            loadApp()
-            // done 事件 data 为 {"url":"http://localhost/xxx"}
-            const url = result?.url || ''
-            if (url) {
-              window.open(url, '_blank')
-            }
-          },
-          onError: (errorMsg) => {
-            deploying.value = false
-            deployStatus.value = ''
-            message.error(errorMsg || '部署失败')
-          },
-          onClose: () => {
-            deploying.value = false
-          },
-        },
-      )
-      // 保持引用防 GC；onDone 里完成
-      deployConn
-      return
-    }
-    const res = await deployApp({ appId: app.value.id })
-    if (res.data.code === 0 && res.data.data) {
-      message.success('部署成功')
-      await loadApp()
-      window.open(res.data.data, '_blank')
-    } else {
-      message.error(res.data.message || '部署失败')
-    }
+    deployStatus.value = '已创建部署任务，Worker 正在构建…'
+    const deployConn = streamDeployment(appId.value, {
+      onDeployed: async (url) => {
+        deploying.value = false
+        deployStatus.value = '部署成功'
+        message.success('部署成功')
+        await loadApp()
+        window.open(url, '_blank', 'noopener,noreferrer')
+      },
+      onError: (errorMsg) => {
+        deploying.value = false
+        deployStatus.value = ''
+        message.error(errorMsg || '部署失败')
+      },
+      onClose: () => {
+        deploying.value = false
+      },
+    })
+    deployConn
   } catch {
+    deploying.value = false
+    deployStatus.value = ''
     message.error('操作失败')
-  } finally {
-    if (!isVue.value) deploying.value = false
   }
-}
-
-// 部署进度文本映射
-const deployStatusText = (text: string): string => {
-  if (text === 'START_INSTALL') return '正在安装依赖（npm install）…'
-  if (text === 'START_BUILD') return '正在构建（npm run build）…'
-  if (text === 'BUILD_OK') return '构建完成'
-  if (text.startsWith('BUILD_FAILED')) return '构建失败，正在自动修复…'
-  if (text.startsWith('FIXED|')) return `已修复 ${text.slice(6)}，重新构建…`
-  if (text === 'REBUILDING') return '正在重新构建…'
-  if (text.startsWith('FIX_FAILED')) return '自动修复失败'
-  return text
 }
 
 // 停止生成：断开 SSE + 通知后端中断
@@ -1641,7 +1745,11 @@ const handleStop = async () => {
   generating.value = false
   previewLoading.value = false
   try {
-    await stopGenerate({ appId: appId.value as unknown as number })
+    if (currentJobId.value) {
+      await cancelGeneration(currentJobId.value)
+    } else {
+      await stopGenerate({ appId: appId.value as unknown as number })
+    }
     message.info('已停止生成')
   } catch {
     // 后端已停止或连接断开，忽略
@@ -1712,7 +1820,7 @@ onUnmounted(() => {
             <a-tag v-if="app && isVue" color="green">{{ selectedStackProfileName }}</a-tag>
             <a-tag v-else-if="app && isMultiFile" color="purple">多文件</a-tag>
             <a-tag v-else-if="app" color="blue">单文件</a-tag>
-            <a-tag v-if="app?.deployKey" color="cyan">已部署</a-tag>
+            <a-tag v-if="app?.deployedTime" color="cyan">已部署</a-tag>
             <a-tag
               v-if="app?.generateStatus"
               :color="generateStatusText(app.generateStatus).color"
@@ -1735,7 +1843,7 @@ onUnmounted(() => {
           停止生成
         </a-button>
 
-        <a-button v-if="app?.deployKey" @click="openDeployedSite">
+        <a-button v-if="app?.deployedTime" @click="openDeployedSite">
           <template #icon><LinkOutlined /></template>
           打开网站
         </a-button>
@@ -1751,7 +1859,7 @@ onUnmounted(() => {
         </a-button>
 
         <!-- 已部署时不再让「部署」按钮兼职下线，收进更多菜单 -->
-        <a-dropdown v-if="app?.deployKey" placement="bottomRight">
+        <a-dropdown v-if="app?.deployedTime" placement="bottomRight">
           <a-button>
             更多
             <DownOutlined />
@@ -1776,6 +1884,11 @@ onUnmounted(() => {
       :style="`--chat-ratio: ${splitRatio}`"
     >
       <div class="chat-panel">
+        <WorkflowPanel
+          :job-id="currentJobId"
+          :refresh-key="workflowRefreshKey"
+          @changed="workflowRefreshKey++"
+        />
         <div ref="msgListRef" class="msg-list">
           <a-spin v-if="loading" class="msg-loading" />
           <div v-if="hasMoreHistory" class="load-more-bar">
@@ -1922,6 +2035,8 @@ onUnmounted(() => {
             @change="handlePreviewModeChange"
           />
           <div class="preview-tools">
+            <a-button size="small" @click="openSourceEditor">源码编辑</a-button>
+            <a-button size="small" @click="openIsolatedPreview">隔离预览</a-button>
             <a-button
               v-if="previewMode === 'web' && generationDone && !isVue"
               :type="editMode ? 'primary' : 'default'"
@@ -2153,6 +2268,49 @@ onUnmounted(() => {
     </div>
 
     <a-drawer
+      v-model:open="editorDrawerOpen"
+      title="源码文件"
+      :width="920"
+      placement="right"
+    >
+      <a-spin :spinning="editorLoading">
+        <div class="editor-shell">
+          <aside class="editor-files">
+            <button
+              v-for="file in editorFiles"
+              :key="file.path"
+              type="button"
+              :class="{ active: file.path === editorPath }"
+              @click="selectEditorFile(file.path)"
+            >
+              {{ file.path }}
+            </button>
+          </aside>
+          <section class="editor-main">
+            <div class="editor-toolbar">
+              <code>{{ editorPath || '选择文件' }}</code>
+              <a-button
+                type="primary"
+                size="small"
+                :disabled="!editorPath"
+                :loading="editorSaving"
+                @click="saveEditorFile"
+              >
+                保存并创建版本
+              </a-button>
+            </div>
+            <CodeEditor
+              v-if="editorPath"
+              v-model:value="editorCode"
+              :language="langOfFile(editorPath)"
+            />
+            <a-empty v-else description="暂无源码文件" />
+          </section>
+        </div>
+      </a-spin>
+    </a-drawer>
+
+    <a-drawer
       v-model:open="revisionDrawerOpen"
       title="版本历史与回滚"
       :width="560"
@@ -2240,6 +2398,10 @@ onUnmounted(() => {
                 {{ file.changeType }}
               </a-tag>
               <code :title="file.path">{{ file.path }}</code>
+              <span class="diff-stat">
+                +{{ file.addedLines ?? 0 }} / -{{ file.removedLines ?? 0 }}
+              </span>
+              <pre v-if="file.unifiedDiff" class="unified-diff">{{ file.unifiedDiff }}</pre>
             </div>
           </a-card>
         </div>
@@ -3151,6 +3313,31 @@ onUnmounted(() => {
   padding: 4px 0;
 }
 
+.diff-row {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.diff-stat {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.unified-diff {
+  grid-column: 1 / -1;
+  max-height: 260px;
+  margin: 6px 0 8px;
+  padding: 10px;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--dark-bg);
+  color: var(--dark-text-1);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
 .artifact-row code,
 .diff-row code {
   min-width: 0;
@@ -3161,6 +3348,79 @@ onUnmounted(() => {
 
 .revision-diff-card {
   margin-top: 6px;
+}
+
+.editor-shell {
+  display: grid;
+  grid-template-columns: 230px minmax(0, 1fr);
+  height: calc(100vh - 150px);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--dark-bg);
+}
+
+.editor-files {
+  overflow: auto;
+  padding: 8px;
+  border-right: 1px solid var(--dark-border);
+  background: var(--dark-bg-2);
+}
+
+.editor-files button {
+  display: block;
+  width: 100%;
+  padding: 7px 9px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--dark-text-2);
+  cursor: pointer;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editor-files button:hover,
+.editor-files button.active {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--dark-text-1);
+}
+
+.editor-main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.editor-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--dark-border);
+  color: var(--dark-text-2);
+}
+
+.editor-main :deep(.code-editor) {
+  flex: 1;
+}
+
+@media (max-width: 760px) {
+  .editor-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .editor-files {
+    max-height: 150px;
+    border-right: 0;
+    border-bottom: 1px solid var(--dark-border);
+  }
 }
 
 .diff-row {

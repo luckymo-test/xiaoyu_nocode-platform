@@ -35,12 +35,21 @@ export interface RevisionDiffFile {
   changeType: 'ADDED' | 'MODIFIED' | 'DELETED'
   fromSha256?: string
   toSha256?: string
+  unifiedDiff?: string
+  addedLines?: number
+  removedLines?: number
 }
 
 export interface RevisionDiff {
   fromRevisionId: string
   toRevisionId: string
   files: RevisionDiffFile[]
+}
+
+export interface RevisionPublishJob {
+  jobId: string
+  status: string
+  eventsUrl: string
 }
 
 export function listAppRevisions(appId: string) {
@@ -63,14 +72,14 @@ export function compareAppRevisions(appId: string, from: string, to: string) {
 }
 
 export function publishAppRevision(appId: string, revisionId: string) {
-  return request<BaseResponse<AppRevision>>(
+  return request<BaseResponse<RevisionPublishJob>>(
     `/v1/apps/${appId}/revisions/${revisionId}/publish`,
     { method: 'POST' },
   )
 }
 
 export function rollbackAppRevision(appId: string, revisionId: string) {
-  return request<BaseResponse<AppRevision>>(
+  return request<BaseResponse<RevisionPublishJob>>(
     `/v1/apps/${appId}/revisions/${revisionId}/rollback`,
     { method: 'POST' },
   )

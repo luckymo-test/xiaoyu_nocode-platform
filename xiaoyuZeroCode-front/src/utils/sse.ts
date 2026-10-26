@@ -17,6 +17,9 @@ export interface SseCallbacks {
   onAgentProgress?: (data: string) => void
   /** 部署/构建进度（data 为文本标记，如 START_BUILD / BUILD_FAILED|...） */
   onDeployProgress?: (data: string) => void
+  onJobCreated?: (job: { jobId: string; status: string; eventsUrl: string }) => void
+  onWorkflowEvent?: (eventType: string, payload: unknown) => void
+  onDeployed?: (url: string) => void
 }
 
 export interface SseConnection {
