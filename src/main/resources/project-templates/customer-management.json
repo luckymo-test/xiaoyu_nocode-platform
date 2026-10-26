@@ -1,0 +1,77 @@
+{
+  "id": "customer-management",
+  "displayName": "客户管理",
+  "description": "客户、联系人、标签和跟进记录组成的轻量 CRM。",
+  "initialPrompt": "做一个客户管理应用，支持客户、联系人、标签和跟进记录，管理员可以删除客户，成员可以新增和更新跟进记录。",
+  "visualTemplate": "data-dashboard",
+  "schema": {
+    "projectTemplateId": "customer-management",
+    "backendRuntime": "PLATFORM_DATA_API",
+    "seedDataPolicy": "TEMPLATE_DEMO",
+    "pages": [
+      {"key": "customers", "title": "客户", "purpose": "搜索和维护客户资料"},
+      {"key": "followups", "title": "跟进", "purpose": "记录沟通与下一步动作"}
+    ],
+    "routes": [
+      {"path": "/", "pageKey": "customers", "access": "MEMBER"},
+      {"path": "/followups", "pageKey": "followups", "access": "MEMBER"}
+    ],
+    "models": [
+      {
+        "name": "customers",
+        "fields": [
+          {"name": "name", "type": "string", "required": true, "unique": true},
+          {"name": "industry", "type": "string", "required": false, "unique": false},
+          {"name": "status", "type": "string", "required": true, "unique": false},
+          {"name": "tags", "type": "json", "required": false, "unique": false},
+          {"name": "owner", "type": "string", "required": false, "unique": false}
+        ],
+        "relations": []
+      },
+      {
+        "name": "contacts",
+        "fields": [
+          {"name": "customerId", "type": "reference", "required": true, "unique": false},
+          {"name": "name", "type": "string", "required": true, "unique": false},
+          {"name": "role", "type": "string", "required": false, "unique": false},
+          {"name": "email", "type": "string", "required": false, "unique": false},
+          {"name": "phone", "type": "string", "required": false, "unique": false}
+        ],
+        "relations": [{"type": "many-to-one", "model": "customers", "field": "customerId"}]
+      },
+      {
+        "name": "followups",
+        "fields": [
+          {"name": "customerId", "type": "reference", "required": true, "unique": false},
+          {"name": "content", "type": "string", "required": true, "unique": false},
+          {"name": "nextAction", "type": "string", "required": false, "unique": false},
+          {"name": "followupAt", "type": "datetime", "required": true, "unique": false}
+        ],
+        "relations": [{"type": "many-to-one", "model": "customers", "field": "customerId"}]
+      }
+    ],
+    "roles": [
+      {"name": "OWNER", "description": "所有者"},
+      {"name": "ADMIN", "description": "销售管理员"},
+      {"name": "MEMBER", "description": "销售成员"},
+      {"name": "VIEWER", "description": "只读成员"}
+    ],
+    "permissions": [
+      {"role": "OWNER", "model": "*", "actions": ["READ", "CREATE", "UPDATE", "DELETE"]},
+      {"role": "ADMIN", "model": "*", "actions": ["READ", "CREATE", "UPDATE", "DELETE"]},
+      {"role": "MEMBER", "model": "*", "actions": ["READ", "CREATE", "UPDATE"]},
+      {"role": "VIEWER", "model": "*", "actions": ["READ"]},
+      {"role": "CLIENT", "model": "customers", "actions": ["READ"]},
+      {"role": "CLIENT", "model": "contacts", "actions": ["READ", "UPDATE"]},
+      {"role": "CLIENT", "model": "followups", "actions": ["READ"]}
+    ],
+    "apiActions": [
+      {"model": "customers", "action": "DELETE", "allowedRoles": ["OWNER", "ADMIN"], "ownership": "ANY"}
+    ],
+    "seedData": [
+      {"model": "customers", "data": {"id": "demo-customer-1", "name": "远山影像", "industry": "摄影工作室", "status": "ACTIVE", "tags": ["重点客户", "内容合作"], "owner": "林夏"}},
+      {"model": "contacts", "data": {"id": "demo-contact-1", "customerId": "demo-customer-1", "name": "陈默", "role": "主理人", "email": "chen@example.com", "phone": "13800000000"}},
+      {"model": "followups", "data": {"id": "demo-followup-1", "customerId": "demo-customer-1", "content": "确认秋季作品集合作范围", "nextAction": "发送报价单", "followupAt": "2026-10-28T10:00:00"}}
+    ]
+  }
+}

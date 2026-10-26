@@ -21,6 +21,9 @@ public interface AppMapper extends BaseMapper<App> {
     @Update("UPDATE app SET deployKey = NULL, deployedTime = NULL WHERE id = #{id}")
     int clearDeploy(@Param("id") Long id);
 
+    @Update("UPDATE app SET deployedTime = NULL WHERE id = #{id}")
+    int clearDeployedTime(@Param("id") Long id);
+
     /**
      * 更新封面图 URL（原图 + 压缩图）
      *
@@ -44,7 +47,9 @@ public interface AppMapper extends BaseMapper<App> {
               and not exists (
                   select 1 from generation_job j
                   where j.appId = a.id
-                    and j.status in ('QUEUED', 'RUNNING', 'WAITING_RETRY', 'CANCEL_REQUESTED')
+                    and j.status in ('QUEUED', 'RUNNING', 'WAITING_CONFIRMATION',
+                                     'PAUSE_REQUESTED', 'PAUSED',
+                                     'WAITING_RETRY', 'CANCEL_REQUESTED')
               )
             """)
     int failStaleGeneratingWithoutActiveJob();

@@ -68,7 +68,7 @@ public class GenerationJobEventService {
         long count = jobMapper.selectCountByQuery(QueryWrapper.create()
                 .eq("id", job.getId())
                 .eq("fencingToken", job.getFencingToken())
-                .in("status", "RUNNING", "CANCEL_REQUESTED"));
+                .in("status", "RUNNING", "CANCEL_REQUESTED", "PAUSE_REQUESTED"));
         ThrowUtils.throwIf(count == 0, ErrorCode.OPERATION_ERROR,
                 "Worker fencingToken 已失效");
         return append(job.getId(), eventType, stage, payload);

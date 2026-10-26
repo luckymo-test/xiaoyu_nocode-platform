@@ -69,6 +69,8 @@ public class ToolRiskRegistry {
             new ToolRisk("writeFile", Risk.MEDIUM, "相对路径 + 单文件 ≤ " + MAX_WRITE_CHARS + " 字符"),
             new ToolRisk("writeFileChunk", Risk.MEDIUM,
                     "顺序分片 ≤ " + MAX_CHUNK_CHARS + " 字符/片 + 单文件 ≤ " + MAX_WRITE_CHARS + " 字符"),
+            new ToolRisk("editFile", Risk.MEDIUM,
+                    "相对路径 + expectedSha256 乐观锁 + 单次 ≤ 20 个替换"),
             new ToolRisk("searchImage", Risk.HIGH, "出站域名白名单 + 超时 + 大小上限"),
             new ToolRisk("searchWeb", Risk.HIGH, "账号级 QPS + 重试 + 缓存 + 不可信外部数据"),
             new ToolRisk("fetchWeb", Risk.HIGH, "公开 HTTP/HTTPS URL + 正文截断 + 不可信外部数据"),

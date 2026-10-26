@@ -17,6 +17,7 @@ import com.mofanyi.ai.reasoning.ReasoningProfileRegistry;
 import com.mofanyi.ai.task.GenerationTaskRegistry;
 import com.mofanyi.ai.tools.AgentProgressListener;
 import com.mofanyi.ai.tools.DiagramTool;
+import com.mofanyi.ai.tools.EditFileTool;
 import com.mofanyi.ai.tools.FetchWebTool;
 import com.mofanyi.ai.tools.FinishTool;
 import com.mofanyi.ai.tools.ReadFileTool;
@@ -33,6 +34,8 @@ import com.mofanyi.exception.ThrowUtils;
 import com.mofanyi.job.GenerationExecutionCondition;
 import com.mofanyi.model.enums.CodeGenTypeEnum;
 import com.mofanyi.skill.SkillContext;
+import com.mofanyi.entity.AgentToolCall;
+import com.mofanyi.workflow.AgentToolCallRecorder;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
@@ -75,6 +78,7 @@ public class AgentToolLoop {
     private final ModelExecutionTrace modelExecutionTrace;
     private final WriteFileTool writeFileTool;
     private final WriteFileChunkTool writeFileChunkTool;
+    private final EditFileTool editFileTool;
     private final ReadFileTool readFileTool;
     private final SearchImageTool searchImageTool;
     private final SearchWebTool searchWebTool;
@@ -85,6 +89,7 @@ public class AgentToolLoop {
     private final AiCallListener aiCallListener;
     private final ReasoningProfileRegistry reasoningProfiles;
     private final SkillContext skillContext;
+    private final AgentToolCallRecorder toolCallRecorder;
 
     @Value("${codegen.agent.self-managed-loop.enabled:false}")
     private boolean selfManagedLoopEnabled;
@@ -103,6 +108,7 @@ public class AgentToolLoop {
                          ModelExecutionTrace modelExecutionTrace,
                          WriteFileTool writeFileTool,
                          WriteFileChunkTool writeFileChunkTool,
+                         EditFileTool editFileTool,
                          ReadFileTool readFileTool,
                          SearchImageTool searchImageTool,
                          SearchWebTool searchWebTool,
@@ -112,12 +118,14 @@ public class AgentToolLoop {
                          GenerationTaskRegistry taskRegistry,
                          AiCallListener aiCallListener,
                          ReasoningProfileRegistry reasoningProfiles,
-                         SkillContext skillContext) {
+                          SkillContext skillContext,
+                          AgentToolCallRecorder toolCallRecorder) {
         this.modelGateway = modelGateway;
         this.modelProperties = modelProperties;
         this.modelExecutionTrace = modelExecutionTrace;
         this.writeFileTool = writeFileTool;
         this.writeFileChunkTool = writeFileChunkTool;
+        this.editFileTool = editFileTool;
         this.readFileTool = readFileTool;
         this.searchImageTool = searchImageTool;
         this.searchWebTool = searchWebTool;
@@ -128,6 +136,7 @@ public class AgentToolLoop {
         this.aiCallListener = aiCallListener;
         this.reasoningProfiles = reasoningProfiles;
         this.skillContext = skillContext;
+        this.toolCallRecorder = toolCallRecorder;
     }
 
     /**
@@ -166,6 +175,8 @@ public class AgentToolLoop {
                 .orElse(null);
         List<ToolCallback> callbacks = new ArrayList<>();
         if (toolAllowed("writeFile", allowedTools)) {
+            callbacks.add(editFileTool.build(
+                    request.type(), request.appId(), request.files(), request.listener()));
             callbacks.add(writeFileTool.build(
                     request.type(), request.appId(), request.files(), request.listener()));
             callbacks.add(writeFileChunkTool.build(
@@ -260,6 +271,7 @@ public class AgentToolLoop {
         }
         long loopStart = System.currentTimeMillis();
         int consecutiveFailures = 0;
+        Map<String, Integer> repeatedCalls = new LinkedHashMap<>();
         int lastRoundStart = request.messages().size();
         for (int round = 1; round <= profile.maxSteps(); round++) {
             taskRegistry.checkCancelled(request.appId());
@@ -312,11 +324,27 @@ public class AgentToolLoop {
             for (AssistantMessage.ToolCall toolCall : output.getToolCalls()) {
                 ToolCallback callback = byName.get(toolCall.name());
                 String result;
+                String signature = toolCall.name() + ":" + toolCall.arguments();
+                int repeatCount = repeatedCalls.merge(signature, 1, Integer::sum);
+                AgentToolCall auditedCall = null;
+                long toolStart = System.currentTimeMillis();
                 try {
-                    result = callback == null
-                            ? toolNotAllowed(toolCall.name())
-                            : callback.call(toolCall.arguments());
+                    if (repeatCount > 3) {
+                        result = "LOOP_DETECTED：同一工具和参数已重复调用，请调整方案或调用 finish。";
+                    } else {
+                        auditedCall = toolCallRecorder.start(
+                                request.ctx().jobId(), toolCall.id(), toolCall.name(),
+                                toolCall.arguments(), request.type(), request.appId());
+                        result = callback == null
+                                ? toolNotAllowed(toolCall.name())
+                                : callback.call(toolCall.arguments());
+                    }
+                    toolCallRecorder.success(auditedCall, result,
+                            System.currentTimeMillis() - toolStart,
+                            request.type(), request.appId());
                 } catch (RuntimeException e) {
+                    toolCallRecorder.failure(auditedCall, e,
+                            System.currentTimeMillis() - toolStart);
                     result = toolFailureResponse(toolCall.name(), e);
                 }
                 responses.add(new ToolResponseMessage.ToolResponse(

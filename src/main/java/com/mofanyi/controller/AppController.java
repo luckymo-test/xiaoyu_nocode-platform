@@ -21,6 +21,7 @@ import com.mofanyi.model.vo.AiCodeGenResultVO;
 import com.mofanyi.service.AppService;
 import com.mofanyi.service.UserService;
 import com.mofanyi.service.ProjectDownloadService;
+import com.mofanyi.service.AppAuthService;
 import com.mybatisflex.core.paginate.Page;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -58,6 +59,9 @@ public class AppController {
     @Autowired
     private ProjectDownloadService projectDownloadService;
 
+    @Autowired
+    private AppAuthService appAuthService;
+
     /**
      * 创建应用
      */
@@ -68,6 +72,15 @@ public class AppController {
         User loginUser = userService.getLoginUser(request);
         long newAppId = appService.addApp(appAddRequest, loginUser);
         return ResultUtils.success(newAppId);
+    }
+
+    @PostMapping("/copy")
+    public BaseResponse<Long> copyApp(@RequestBody DeleteRequest body,
+                                      HttpServletRequest request) {
+        ThrowUtils.throwIf(body == null || body.getId() == null || body.getId() <= 0,
+                ErrorCode.PARAMS_ERROR);
+        return ResultUtils.success(appService.copyApp(
+                body.getId(), userService.getLoginUser(request)));
     }
 
     /**
@@ -187,7 +200,8 @@ public class AppController {
     @GetMapping("/get/code")
     public BaseResponse<AiCodeGenResultVO> getAppCode(long id, HttpServletRequest request) {
         ThrowUtils.throwIf(id <= 0, ErrorCode.PARAMS_ERROR);
-        userService.getLoginUser(request);
+        com.mofanyi.entity.User loginUser = userService.getLoginUser(request);
+        appAuthService.requireCanView(id, loginUser);
         AiCodeGenResultVO codeVO = appService.getAppCode(id);
         return ResultUtils.success(codeVO);
     }
@@ -213,7 +227,8 @@ public class AppController {
     @GetMapping("/get/vue-preview")
     public BaseResponse<String> getVuePreview(long id, HttpServletRequest request) {
         ThrowUtils.throwIf(id <= 0, ErrorCode.PARAMS_ERROR);
-        userService.getLoginUser(request);
+        com.mofanyi.entity.User loginUser = userService.getLoginUser(request);
+        appAuthService.requireCanView(id, loginUser);
         String html = appService.getVuePreview(id);
         return ResultUtils.success(html);
     }

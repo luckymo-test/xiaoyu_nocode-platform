@@ -157,7 +157,8 @@ public class ModelRegistry {
         return switch (task) {
             case GENERATE, REPAIR, MODIFY -> Set.of(ModelCapability.TOOLS);
             case VISION_CURATE -> Set.of(ModelCapability.VISION);
-            case QUERY_PLAN, COMPRESS -> Set.of(ModelCapability.STRUCTURED_OUTPUT);
+            case QUERY_PLAN, COMPRESS, REQUIREMENT, ARCHITECT, UI, PLAN ->
+                    Set.of(ModelCapability.STRUCTURED_OUTPUT);
             case RESEARCH -> Set.of(ModelCapability.STREAMING);
         };
     }

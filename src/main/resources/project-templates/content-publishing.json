@@ -1,0 +1,67 @@
+{
+  "id": "content-publishing",
+  "displayName": "内容发布",
+  "description": "文章、分类、封面素材和发布状态组成的内容工作台。",
+  "initialPrompt": "做一个内容发布应用，支持文章、分类、封面素材、草稿和已发布状态，编辑可以写稿，管理员可以发布和删除。",
+  "visualTemplate": "editorial-story",
+  "schema": {
+    "projectTemplateId": "content-publishing",
+    "backendRuntime": "PLATFORM_DATA_API",
+    "seedDataPolicy": "TEMPLATE_DEMO",
+    "pages": [
+      {"key": "articles", "title": "文章", "purpose": "管理和发布文章"},
+      {"key": "categories", "title": "分类", "purpose": "维护内容分类"}
+    ],
+    "routes": [
+      {"path": "/", "pageKey": "articles", "access": "VIEWER"},
+      {"path": "/categories", "pageKey": "categories", "access": "MEMBER"}
+    ],
+    "models": [
+      {
+        "name": "categories",
+        "fields": [
+          {"name": "name", "type": "string", "required": true, "unique": true},
+          {"name": "slug", "type": "string", "required": true, "unique": true}
+        ],
+        "relations": []
+      },
+      {
+        "name": "articles",
+        "fields": [
+          {"name": "title", "type": "string", "required": true, "unique": false},
+          {"name": "summary", "type": "string", "required": false, "unique": false},
+          {"name": "content", "type": "string", "required": true, "unique": false},
+          {"name": "categoryId", "type": "reference", "required": false, "unique": false},
+          {"name": "coverUrl", "type": "string", "required": false, "unique": false},
+          {"name": "status", "type": "string", "required": true, "unique": false},
+          {"name": "publishedAt", "type": "datetime", "required": false, "unique": false}
+        ],
+        "relations": [{"type": "many-to-one", "model": "categories", "field": "categoryId"}]
+      }
+    ],
+    "roles": [
+      {"name": "OWNER", "description": "所有者"},
+      {"name": "ADMIN", "description": "主编"},
+      {"name": "MEMBER", "description": "编辑"},
+      {"name": "VIEWER", "description": "读者"}
+    ],
+    "permissions": [
+      {"role": "OWNER", "model": "*", "actions": ["READ", "CREATE", "UPDATE", "DELETE"]},
+      {"role": "ADMIN", "model": "*", "actions": ["READ", "CREATE", "UPDATE", "DELETE"]},
+      {"role": "MEMBER", "model": "articles", "actions": ["READ", "CREATE", "UPDATE"]},
+      {"role": "MEMBER", "model": "categories", "actions": ["READ"]},
+      {"role": "VIEWER", "model": "articles", "actions": ["READ"]},
+      {"role": "VIEWER", "model": "categories", "actions": ["READ"]},
+      {"role": "CLIENT", "model": "articles", "actions": ["READ"]},
+      {"role": "CLIENT", "model": "categories", "actions": ["READ"]}
+    ],
+    "apiActions": [
+      {"model": "articles", "action": "DELETE", "allowedRoles": ["OWNER", "ADMIN"], "ownership": "ANY"},
+      {"model": "articles", "action": "UPDATE", "allowedRoles": ["OWNER", "ADMIN", "MEMBER"], "ownership": "ANY"}
+    ],
+    "seedData": [
+      {"model": "categories", "data": {"id": "demo-category-1", "name": "产品手记", "slug": "product-notes"}},
+      {"model": "articles", "data": {"id": "demo-article-1", "title": "如何建立稳定的内容节奏", "summary": "从选题、编辑到发布复盘的工作方法。", "content": "内容不是一次性的冲刺，而是可以持续校准的系统。", "categoryId": "demo-category-1", "coverUrl": "", "status": "DRAFT", "publishedAt": null}}
+    ]
+  }
+}

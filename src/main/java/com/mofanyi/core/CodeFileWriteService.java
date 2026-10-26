@@ -279,7 +279,7 @@ public class CodeFileWriteService {
     public void writeFile(String projectDir, String fileName, String content) {
         ThrowUtils.throwIf(StrUtil.isBlank(projectDir), ErrorCode.PARAMS_ERROR);
         ThrowUtils.throwIf(StrUtil.isBlank(fileName), ErrorCode.PARAMS_ERROR);
-        Path file = Paths.get(projectDir, fileName);
+        Path file = ToolPaths.resolveWithin(Paths.get(projectDir), fileName);
         FileUtil.writeString(content, file.toFile(), StandardCharsets.UTF_8);
     }
 
@@ -293,7 +293,7 @@ public class CodeFileWriteService {
     public String readFile(String projectDir, String fileName) {
         ThrowUtils.throwIf(StrUtil.isBlank(projectDir), ErrorCode.PARAMS_ERROR);
         ThrowUtils.throwIf(StrUtil.isBlank(fileName), ErrorCode.PARAMS_ERROR);
-        Path file = Paths.get(projectDir, fileName);
+        Path file = ToolPaths.resolveWithin(Paths.get(projectDir), fileName);
         if (!FileUtil.exist(file.toFile())) {
             return null;
         }
@@ -310,7 +310,7 @@ public class CodeFileWriteService {
     public boolean deleteFile(String projectDir, String fileName) {
         ThrowUtils.throwIf(StrUtil.isBlank(projectDir), ErrorCode.PARAMS_ERROR);
         ThrowUtils.throwIf(StrUtil.isBlank(fileName), ErrorCode.PARAMS_ERROR);
-        return FileUtil.del(Paths.get(projectDir, fileName));
+        return FileUtil.del(ToolPaths.resolveWithin(Paths.get(projectDir), fileName));
     }
 
     /**

@@ -86,10 +86,12 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST,
                                 "/user/login", "/user/register",
                                 "/v1/analytics/events").permitAll()
+                        .requestMatchers("/runtime/**").permitAll()
                         .requestMatchers(HttpMethod.GET,
                                 "/health/", "/error",
                                 "/v1/security/csrf",
                                 "/v1/templates", "/v1/stack-profiles", "/v1/skills",
+                                "/v1/project-templates",
                                 "/v1/evaluation/prompts",
                                 "/v1/community/publications",
                                 "/v1/community/publications/**").permitAll()

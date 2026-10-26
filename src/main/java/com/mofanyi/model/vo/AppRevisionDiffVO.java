@@ -23,6 +23,9 @@ public class AppRevisionDiffVO implements Serializable {
         private String changeType;
         private String fromSha256;
         private String toSha256;
+        private String unifiedDiff;
+        private Integer addedLines;
+        private Integer removedLines;
 
         private static final long serialVersionUID = 1L;
     }

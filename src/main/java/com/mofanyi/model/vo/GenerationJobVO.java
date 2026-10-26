@@ -15,6 +15,10 @@ public class GenerationJobVO implements Serializable {
     private Long appId;
     private Long requestedBy;
     private String requestType;
+    private Integer workflowVersion;
+    private String confirmedPlanHash;
+    private LocalDateTime confirmedAt;
+    private Long confirmedBy;
     private String status;
     private String currentStage;
     private String codeGenType;

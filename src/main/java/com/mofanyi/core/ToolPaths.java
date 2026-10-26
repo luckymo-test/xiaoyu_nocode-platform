@@ -3,6 +3,9 @@ package com.mofanyi.core;
 import com.mofanyi.exception.ErrorCode;
 import com.mofanyi.exception.ThrowUtils;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
+
 /**
  * 生成 agent 工具通用工具：路径安全校验。
  */
@@ -19,5 +22,31 @@ public final class ToolPaths {
         ThrowUtils.throwIf(path.startsWith("/") || path.startsWith("\\") || path.matches("^[a-zA-Z]:.*"),
                 ErrorCode.PARAMS_ERROR, "文件路径必须是相对路径");
         ThrowUtils.throwIf(path.contains(".."), ErrorCode.PARAMS_ERROR, "文件路径非法");
+    }
+
+    public static Path resolveWithin(Path root, String path) {
+        validate(path);
+        Path normalizedRoot = root.toAbsolutePath().normalize();
+        Path target = normalizedRoot.resolve(path).normalize();
+        ThrowUtils.throwIf(!target.startsWith(normalizedRoot),
+                ErrorCode.PARAMS_ERROR, "文件路径越界");
+        if (!Files.exists(normalizedRoot)) {
+            return target;
+        }
+        try {
+            Path parent = target.getParent();
+            while (parent != null && !Files.exists(parent)) {
+                parent = parent.getParent();
+            }
+            if (parent != null) {
+                Path realRoot = normalizedRoot.toRealPath();
+                Path realParent = parent.toRealPath();
+                ThrowUtils.throwIf(!realParent.startsWith(realRoot),
+                        ErrorCode.PARAMS_ERROR, "文件路径通过符号链接越界");
+            }
+        } catch (java.io.IOException e) {
+            throw new IllegalStateException("校验文件真实路径失败", e);
+        }
+        return target;
     }
 }

@@ -19,6 +19,9 @@ import com.mofanyi.runtime.StackProfileContext;
 import com.mofanyi.service.ManualEditService;
 import com.mofanyi.template.TemplatePromptService;
 import com.mofanyi.skill.SkillPromptService;
+import com.mofanyi.workflow.WorkflowPlanService;
+import com.mofanyi.entity.AgentPlan;
+import com.mofanyi.runtime.RuntimeApiPromptService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
@@ -59,6 +62,8 @@ public class VueProjectAgent {
     private final SkillPromptService skillPromptService;
     private final StackProfileContext stackProfileContext;
     private final PageBlueprintService pageBlueprintService;
+    private final WorkflowPlanService workflowPlanService;
+    private final RuntimeApiPromptService runtimeApiPromptService;
 
     public VueProjectAgent(CodeGenPromptRegistry promptRegistry,
                            AgentToolLoop agentToolLoop,
@@ -73,7 +78,9 @@ public class VueProjectAgent {
                            TemplatePromptService templatePromptService,
                            SkillPromptService skillPromptService,
                            StackProfileContext stackProfileContext,
-                           PageBlueprintService pageBlueprintService) {
+                           PageBlueprintService pageBlueprintService,
+                           WorkflowPlanService workflowPlanService,
+                           RuntimeApiPromptService runtimeApiPromptService) {
         this.promptRegistry = promptRegistry;
         this.agentToolLoop = agentToolLoop;
         this.siteRepairAgent = siteRepairAgent;
@@ -88,6 +95,8 @@ public class VueProjectAgent {
         this.skillPromptService = skillPromptService;
         this.stackProfileContext = stackProfileContext;
         this.pageBlueprintService = pageBlueprintService;
+        this.workflowPlanService = workflowPlanService;
+        this.runtimeApiPromptService = runtimeApiPromptService;
     }
 
     /**
@@ -145,6 +154,15 @@ public class VueProjectAgent {
 
         List<Message> messages = new ArrayList<>();
         messages.add(new SystemMessage(promptRegistry.system(stackProfile.id(), type)));
+        if (ctx.jobId() != null) {
+            AgentPlan plan = workflowPlanService.findLatest(ctx.jobId());
+            if (plan != null && "CONFIRMED".equals(plan.getStatus())) {
+                messages.add(new SystemMessage("【已确认需求基线】\n" + plan.getRequirementJson()));
+                messages.add(new SystemMessage("【已确认架构与权限】\n" + plan.getArchitectureJson()));
+                messages.add(new SystemMessage("【已确认页面与视觉规划】\n" + plan.getUiJson()));
+                messages.add(new SystemMessage(runtimeApiPromptService.section(appId)));
+            }
+        }
         String templateSection = templatePromptService.buildSection(appId);
         if (StrUtil.isNotBlank(templateSection)) {
             messages.add(new SystemMessage(templateSection));

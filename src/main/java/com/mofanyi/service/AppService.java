@@ -30,6 +30,11 @@ public interface AppService extends IService<App> {
     long addApp(AppAddRequest appAddRequest, User loginUser);
 
     /**
+     * 复制项目元数据和当前 live 源码，不复制聊天记录。
+     */
+    long copyApp(long sourceAppId, User loginUser);
+
+    /**
      * 更新自己的应用（仅应用名称）
      *
      * @param appUpdateRequest 更新请求

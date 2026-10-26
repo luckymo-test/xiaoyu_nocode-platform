@@ -7,7 +7,12 @@ import com.mofanyi.entity.User;
 import com.mofanyi.exception.ErrorCode;
 import com.mofanyi.exception.ThrowUtils;
 import com.mofanyi.model.dto.job.GenerationJobCreateRequest;
+import com.mofanyi.model.dto.job.PlanConfirmRequest;
+import com.mofanyi.model.dto.job.PlanReviseRequest;
 import com.mofanyi.model.vo.GenerationJobVO;
+import com.mofanyi.entity.AgentPlan;
+import com.mofanyi.entity.AgentStep;
+import com.mofanyi.entity.AgentToolCall;
 import com.mofanyi.service.GenerationJobService;
 import com.mofanyi.service.GenerationJobSseService;
 import com.mofanyi.service.UserService;
@@ -24,6 +29,8 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+
+import java.util.List;
 
 /**
  * 持久化生成任务控制面。创建与订阅分离，SSE 只读。
@@ -87,6 +94,69 @@ public class GenerationJobController {
                                                HttpServletRequest request) {
         User loginUser = userService.getLoginUser(request);
         return ResultUtils.success(jobService.retryFailed(jobId, loginUser));
+    }
+
+    @PostMapping("/generation-jobs/{jobId}/pause")
+    public BaseResponse<GenerationJobVO> pause(@PathVariable Long jobId,
+                                               HttpServletRequest request) {
+        return ResultUtils.success(jobService.pause(jobId, userService.getLoginUser(request)));
+    }
+
+    @PostMapping("/generation-jobs/{jobId}/resume")
+    public BaseResponse<GenerationJobVO> resume(@PathVariable Long jobId,
+                                                HttpServletRequest request) {
+        return ResultUtils.success(jobService.resume(jobId, userService.getLoginUser(request)));
+    }
+
+    @PostMapping("/generation-jobs/{jobId}/confirm")
+    public BaseResponse<GenerationJobVO> confirm(
+            @PathVariable Long jobId,
+            @RequestBody PlanConfirmRequest body,
+            HttpServletRequest request) {
+        ThrowUtils.throwIf(body == null, ErrorCode.PARAMS_ERROR);
+        return ResultUtils.success(jobService.confirmPlan(
+                jobId, body.getPlanHash(), userService.getLoginUser(request)));
+    }
+
+    @PostMapping("/generation-jobs/{jobId}/plan/revise")
+    public BaseResponse<GenerationJobVO> revisePlan(
+            @PathVariable Long jobId,
+            @RequestBody PlanReviseRequest body,
+            HttpServletRequest request) {
+        ThrowUtils.throwIf(body == null, ErrorCode.PARAMS_ERROR);
+        return ResultUtils.success(jobService.revisePlan(
+                jobId, body.getPlanHash(), body.getComment(),
+                userService.getLoginUser(request)));
+    }
+
+    @GetMapping("/generation-jobs/{jobId}/plan")
+    public BaseResponse<AgentPlan> plan(@PathVariable Long jobId,
+                                        HttpServletRequest request) {
+        return ResultUtils.success(jobService.getLatestPlan(
+                jobId, userService.getLoginUser(request)));
+    }
+
+    @GetMapping("/generation-jobs/{jobId}/steps")
+    public BaseResponse<List<AgentStep>> steps(@PathVariable Long jobId,
+                                               HttpServletRequest request) {
+        return ResultUtils.success(jobService.listSteps(
+                jobId, userService.getLoginUser(request)));
+    }
+
+    @GetMapping("/generation-jobs/{jobId}/tools")
+    public BaseResponse<List<AgentToolCall>> tools(@PathVariable Long jobId,
+                                                   HttpServletRequest request) {
+        return ResultUtils.success(jobService.listToolCalls(
+                jobId, userService.getLoginUser(request)));
+    }
+
+    @PostMapping("/generation-jobs/{jobId}/steps/{stepKey}/retry")
+    public BaseResponse<GenerationJobVO> retryStep(
+            @PathVariable Long jobId,
+            @PathVariable String stepKey,
+            HttpServletRequest request) {
+        return ResultUtils.success(jobService.retryStep(
+                jobId, stepKey, userService.getLoginUser(request)));
     }
 
     private long parseSequence(String value) {

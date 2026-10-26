@@ -9,7 +9,11 @@ public enum ModelTask {
     VISION_CURATE,
     QUERY_PLAN,
     COMPRESS,
-    RESEARCH;
+    RESEARCH,
+    REQUIREMENT,
+    ARCHITECT,
+    UI,
+    PLAN;
 
     public String configKey() {
         return name().toLowerCase(Locale.ROOT).replace('_', '-');

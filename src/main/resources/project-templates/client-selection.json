@@ -1,0 +1,86 @@
+{
+  "id": "client-selection",
+  "displayName": "客户选片",
+  "description": "摄影师创建相册、分享给客户，客户标星和留言，管理员管理相册。",
+  "initialPrompt": "做一个面向摄影师的客户选片系统，支持创建相册、上传或引用照片、生成客户分享链接、客户标星和留言，管理员可以删除相册。",
+  "visualTemplate": "photography-editorial",
+  "schema": {
+    "projectTemplateId": "client-selection",
+    "backendRuntime": "PLATFORM_DATA_API",
+    "seedDataPolicy": "TEMPLATE_DEMO",
+    "pages": [
+      {"key": "albums", "title": "相册管理", "purpose": "创建相册并生成客户分享链接"},
+      {"key": "gallery", "title": "客户选片", "purpose": "客户浏览、标星和留言"},
+      {"key": "selections", "title": "选片结果", "purpose": "摄影师查看客户选择"}
+    ],
+    "routes": [
+      {"path": "/", "pageKey": "albums", "access": "MEMBER"},
+      {"path": "/gallery/:albumId", "pageKey": "gallery", "access": "CLIENT"},
+      {"path": "/selections", "pageKey": "selections", "access": "MEMBER"}
+    ],
+    "models": [
+      {
+        "name": "albums",
+        "fields": [
+          {"name": "title", "type": "string", "required": true, "unique": false},
+          {"name": "clientName", "type": "string", "required": false, "unique": false},
+          {"name": "coverUrl", "type": "string", "required": false, "unique": false},
+          {"name": "status", "type": "string", "required": true, "unique": false}
+        ],
+        "relations": []
+      },
+      {
+        "name": "photos",
+        "fields": [
+          {"name": "albumId", "type": "reference", "required": true, "unique": false},
+          {"name": "title", "type": "string", "required": true, "unique": false},
+          {"name": "url", "type": "string", "required": true, "unique": false},
+          {"name": "thumbnailUrl", "type": "string", "required": false, "unique": false},
+          {"name": "width", "type": "number", "required": false, "unique": false},
+          {"name": "height", "type": "number", "required": false, "unique": false}
+        ],
+        "relations": [{"type": "many-to-one", "model": "albums", "field": "albumId"}]
+      },
+      {
+        "name": "selections",
+        "fields": [
+          {"name": "albumId", "type": "reference", "required": true, "unique": false},
+          {"name": "photoId", "type": "reference", "required": true, "unique": false},
+          {"name": "visitorName", "type": "string", "required": false, "unique": false},
+          {"name": "starred", "type": "boolean", "required": true, "unique": false},
+          {"name": "comment", "type": "string", "required": false, "unique": false}
+        ],
+        "relations": [
+          {"type": "many-to-one", "model": "albums", "field": "albumId"},
+          {"type": "many-to-one", "model": "photos", "field": "photoId"}
+        ]
+      }
+    ],
+    "roles": [
+      {"name": "OWNER", "description": "摄影师所有者"},
+      {"name": "ADMIN", "description": "工作室管理员"},
+      {"name": "MEMBER", "description": "摄影助理"},
+      {"name": "CLIENT", "description": "匿名分享客户"}
+    ],
+    "permissions": [
+      {"role": "OWNER", "model": "*", "actions": ["READ", "CREATE", "UPDATE", "DELETE"]},
+      {"role": "ADMIN", "model": "*", "actions": ["READ", "CREATE", "UPDATE", "DELETE"]},
+      {"role": "MEMBER", "model": "albums", "actions": ["READ", "CREATE", "UPDATE"]},
+      {"role": "MEMBER", "model": "photos", "actions": ["READ", "CREATE", "UPDATE"]},
+      {"role": "MEMBER", "model": "selections", "actions": ["READ"]},
+      {"role": "CLIENT", "model": "albums", "actions": ["READ"]},
+      {"role": "CLIENT", "model": "photos", "actions": ["READ"]},
+      {"role": "CLIENT", "model": "selections", "actions": ["READ", "CREATE", "UPDATE"]}
+    ],
+    "apiActions": [
+      {"model": "albums", "action": "DELETE", "allowedRoles": ["OWNER", "ADMIN"], "ownership": "ANY"},
+      {"model": "selections", "action": "UPDATE", "allowedRoles": ["OWNER", "ADMIN", "CLIENT"], "ownership": "OWNER"}
+    ],
+    "seedData": [
+      {"model": "albums", "data": {"id": "demo-album-1", "title": "秋日山野", "clientName": "陈女士", "coverUrl": "", "status": "SHARED"}},
+      {"model": "photos", "data": {"id": "demo-photo-1", "albumId": "demo-album-1", "title": "湖边回望", "url": "https://images.pexels.com/photos/417173/pexels-photo-417173.jpeg", "thumbnailUrl": "", "width": 2048, "height": 1365}},
+      {"model": "photos", "data": {"id": "demo-photo-2", "albumId": "demo-album-1", "title": "雾中松林", "url": "https://images.pexels.com/photos/9754/mountains-clouds-forest-fog.jpg", "thumbnailUrl": "", "width": 2048, "height": 1365}},
+      {"model": "selections", "data": {"id": "demo-selection-1", "albumId": "demo-album-1", "photoId": "demo-photo-1", "visitorName": "陈女士", "starred": true, "comment": "这张很喜欢，保留。"}}
+    ]
+  }
+}

@@ -23,6 +23,9 @@ public class GenerationJobCreateRequest implements Serializable {
     private List<String> skills = new ArrayList<>();
     private String requestType;
     private String visibility;
+    private Integer workflowVersion = 2;
+    private String projectTemplateId;
+    private Long revisionId;
 
     private static final long serialVersionUID = 1L;
 }

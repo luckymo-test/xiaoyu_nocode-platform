@@ -12,6 +12,7 @@ import com.mofanyi.ai.reasoning.ReasoningProfileRegistry;
 import com.mofanyi.ai.task.GenerationTaskRegistry;
 import com.mofanyi.ai.tools.AgentProgressListener;
 import com.mofanyi.ai.tools.DiagramTool;
+import com.mofanyi.ai.tools.EditFileTool;
 import com.mofanyi.ai.tools.FetchWebTool;
 import com.mofanyi.ai.tools.FinishTool;
 import com.mofanyi.ai.tools.ReadFileTool;
@@ -26,6 +27,7 @@ import com.mofanyi.core.TokenUsageAccumulator;
 import com.mofanyi.model.enums.CodeGenTypeEnum;
 import com.mofanyi.skill.SkillContext;
 import com.mofanyi.skill.SkillDefinition;
+import com.mofanyi.workflow.AgentToolCallRecorder;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -100,6 +102,7 @@ class AgentToolLoopGatewayTest {
                 new ModelExecutionTrace(),
                 writeFileTool,
                 toolWithCallback(mock(WriteFileChunkTool.class), "writeFileChunk"),
+                toolWithCallback(mock(EditFileTool.class), "editFile"),
                 toolWithCallback(mock(ReadFileTool.class), "readFile"),
                 toolWithCallback(mock(SearchImageTool.class), "searchImage"),
                 searchWeb,
@@ -109,7 +112,8 @@ class AgentToolLoopGatewayTest {
                 mock(GenerationTaskRegistry.class),
                 callListener,
                 profiles,
-                skillContext);
+                skillContext,
+                mock(AgentToolCallRecorder.class));
     }
 
     @Test
@@ -216,7 +220,7 @@ class AgentToolLoopGatewayTest {
         ArgumentCaptor<ModelRequest> requestCaptor =
                 ArgumentCaptor.forClass(ModelRequest.class);
         verify(modelGateway).stream(requestCaptor.capture());
-        assertEquals(List.of("writeFile", "writeFileChunk", "readFile", "finish"),
+        assertEquals(List.of("editFile", "writeFile", "writeFileChunk", "readFile", "finish"),
                 requestCaptor.getValue().tools().stream()
                         .map(callback -> callback.getToolDefinition().name()).toList());
     }
@@ -333,6 +337,12 @@ class AgentToolLoopGatewayTest {
     }
 
     private static WriteFileChunkTool toolWithCallback(WriteFileChunkTool tool, String name) {
+        ToolCallback callback = callback(name);
+        when(tool.build(any(), any(), any(), any())).thenReturn(callback);
+        return tool;
+    }
+
+    private static EditFileTool toolWithCallback(EditFileTool tool, String name) {
         ToolCallback callback = callback(name);
         when(tool.build(any(), any(), any(), any())).thenReturn(callback);
         return tool;

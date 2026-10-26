@@ -22,6 +22,10 @@ import com.mofanyi.service.GenerationJobEventService;
 import com.mofanyi.service.GenerationJobService;
 import com.mofanyi.service.AppRevisionService;
 import com.mofanyi.workspace.WorkspaceManager;
+import com.mofanyi.workflow.AgentOrchestrator;
+import com.mofanyi.runtime.AppRuntimeSchemaService;
+import com.mofanyi.service.AppService;
+import com.mofanyi.entity.User;
 import com.mofanyi.template.TemplateContext;
 import com.mofanyi.template.TemplateRegistry;
 import com.mofanyi.template.TemplateBundle;
@@ -72,6 +76,9 @@ public class GenerationJobRunner {
     private final ModelExecutionTrace modelExecutionTrace;
     private final GenerationRuntimeSnapshotValidator runtimeSnapshotValidator;
     private final StackProfileContext stackProfileContext;
+    private final AgentOrchestrator agentOrchestrator;
+    private final AppRuntimeSchemaService runtimeSchemaService;
+    private final AppService appService;
     private final ScheduledExecutorService heartbeatExecutor;
 
     @Value("${codegen.jobs.worker-id:${HOSTNAME:local-worker}}")
@@ -101,6 +108,9 @@ public class GenerationJobRunner {
                                ModelExecutionTrace modelExecutionTrace,
                                GenerationRuntimeSnapshotValidator runtimeSnapshotValidator,
                                StackProfileContext stackProfileContext,
+                               AgentOrchestrator agentOrchestrator,
+                               AppRuntimeSchemaService runtimeSchemaService,
+                               AppService appService,
                                @Qualifier("jobHeartbeatExecutor")
                                ScheduledExecutorService heartbeatExecutor) {
         this.jobService = jobService;
@@ -121,6 +131,9 @@ public class GenerationJobRunner {
         this.modelExecutionTrace = modelExecutionTrace;
         this.runtimeSnapshotValidator = runtimeSnapshotValidator;
         this.stackProfileContext = stackProfileContext;
+        this.agentOrchestrator = agentOrchestrator;
+        this.runtimeSchemaService = runtimeSchemaService;
+        this.appService = appService;
         this.heartbeatExecutor = heartbeatExecutor;
     }
 
@@ -136,27 +149,41 @@ public class GenerationJobRunner {
         CountDownLatch finished = new CountDownLatch(1);
         AtomicBoolean callbackFinished = new AtomicBoolean(false);
         AtomicBoolean cancellationSignalled = new AtomicBoolean(false);
+        AtomicBoolean pauseSignalled = new AtomicBoolean(false);
         AtomicReference<Throwable> callbackFailure = new AtomicReference<>();
         AtomicReference<AiCodeGenResultVO> callbackResult = new AtomicReference<>();
         long leaseRenewMillis = Math.max(1_000L, leaseSeconds * 1_000L / 3);
         long monitorMillis = Math.max(250L, cancelPollMillis);
         AtomicLong lastLeaseRenew = new AtomicLong(System.currentTimeMillis());
         ScheduledFuture<?> heartbeat = heartbeatExecutor.scheduleAtFixedRate(
-                () -> monitorJob(job, cancellationSignalled, lastLeaseRenew, leaseRenewMillis),
+                () -> monitorJob(job, cancellationSignalled, pauseSignalled,
+                        lastLeaseRenew, leaseRenewMillis),
                 monitorMillis, Math.min(monitorMillis, leaseRenewMillis), TimeUnit.MILLISECONDS);
 
         try {
             stackProfile = runtimeSnapshotValidator.validateProfile(job);
             stackProfileContext.activate(job.getAppId(), stackProfile);
-            workspace = workspaceManager.begin(job);
-            template = activateTemplate(job);
-            skills = activateSkills(job);
             GenerationJobCreateRequest request = jobService.readCreateRequest(job);
             CodeGenTypeEnum type = CodeGenTypeEnum.getEnumByValue(job.getCodeGenType());
             ReasoningLevel reasoningLevel = reasoningProfiles.parseLevel(request.getReasoningLevel());
+            if ("deploy".equals(request.getRequestType())) {
+                runDeployJob(job);
+                return;
+            }
+            if ("publish-revision".equals(request.getRequestType())) {
+                runPublishRevisionJob(job, request);
+                return;
+            }
+            if (!agentOrchestrator.prepareBeforeWorkspace(job, type, request)) {
+                return;
+            }
+            workspace = workspaceManager.begin(job);
+            template = activateTemplate(job);
+            skills = activateSkills(job);
             ThrowUtils.throwIf(jobService.isCancelRequested(job.getId()),
                     ErrorCode.OPERATION_ERROR, "用户已取消生成");
             emitStage(job, "GENERATE", "RUNNING");
+            agentOrchestrator.startCoder(job);
             generatorFacade.streamGenerate(type, request.getMessage(), job.getAppId(),
                     new com.mofanyi.core.StreamCallback(
                             progress -> appendQuietly(job, "progress", "GENERATE", progress),
@@ -179,15 +206,31 @@ public class GenerationJobRunner {
                 return;
             }
             if (callbackFailure.get() != null) {
+                if (jobService.isPauseRequested(job.getId())) {
+                    agentOrchestrator.markPaused(job, "用户请求暂停，当前步骤将在继续时重跑");
+                    jobService.pauseFromWorker(job, "用户请求暂停");
+                    return;
+                }
                 handleFailure(job, callbackFailure.get());
                 return;
             }
+            if (jobService.isPauseRequested(job.getId())) {
+                agentOrchestrator.markPaused(job, "用户请求暂停，当前步骤将在继续时重跑");
+                jobService.pauseFromWorker(job, "用户请求暂停");
+                return;
+            }
+            agentOrchestrator.completeCoder(job, "源码生成完成");
             complete(job, callbackResult.get(), workspace);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             generatorFacade.stopGenerate(job.getAppId());
             handleFailure(job, e);
         } catch (RuntimeException e) {
+            if (jobService.isPauseRequested(job.getId())) {
+                agentOrchestrator.markPaused(job, "用户请求暂停，当前步骤将在继续时重跑");
+                jobService.pauseFromWorker(job, "用户请求暂停");
+                return;
+            }
             handleFailure(job, e);
         } finally {
             heartbeat.cancel(false);
@@ -214,6 +257,34 @@ public class GenerationJobRunner {
         return bundle;
     }
 
+    private void runDeployJob(GenerationJob job) {
+        emitStage(job, "DEPLOY", "RUNNING");
+        User user = new User();
+        user.setId(job.getRequestedBy());
+        String url = appService.deployApp(job.getAppId(), user);
+        appendQuietly(job, "deployed", "DEPLOY",
+                Map.of("url", url, "revisionId", String.valueOf(job.getBaseRevisionId())));
+        emitStage(job, "COMPLETED", "SUCCEEDED");
+        jobService.finish(job, GenerationJobStatusEnum.SUCCEEDED.getValue(),
+                "COMPLETED", null, null);
+    }
+
+    private void runPublishRevisionJob(GenerationJob job,
+                                       GenerationJobCreateRequest request) {
+        emitStage(job, "PUBLISH", "RUNNING");
+        User user = new User();
+        user.setId(job.getRequestedBy());
+        revisionService.publishExisting(job.getAppId(), request.getRevisionId(),
+                job.getRequestedBy());
+        emitStage(job, "DEPLOY", "RUNNING");
+        String url = appService.deployApp(job.getAppId(), user);
+        appendQuietly(job, "deployed", "DEPLOY",
+                Map.of("url", url, "revisionId", String.valueOf(request.getRevisionId())));
+        emitStage(job, "COMPLETED", "SUCCEEDED");
+        jobService.finish(job, GenerationJobStatusEnum.SUCCEEDED.getValue(),
+                "COMPLETED", null, null);
+    }
+
     private java.util.List<SkillDefinition> activateSkills(GenerationJob job) {
         java.util.List<SkillDefinition> skills =
                 runtimeSnapshotValidator.validateAndLoadSkills(job);
@@ -236,12 +307,18 @@ public class GenerationJobRunner {
             return;
         }
         String validationStatus = awaitRepairAndValidationStatus(job);
+        agentOrchestrator.completeReviewer(job,
+                "{\"validationStatus\":\"" + validationStatus + "\"}");
         latest = jobService.requireJob(job.getId());
         if (GenerationJobStatusEnum.CANCEL_REQUESTED.getValue().equals(latest.getStatus())) {
             handleFailure(job, new GenerationCancelledException(job.getAppId()));
             return;
         }
         var revision = revisionService.publishJob(job, workspace, validationStatus);
+        runtimeSchemaService.registerFromConfirmedPlan(job, revision.getId());
+        agentOrchestrator.completeDeploy(job,
+                "{\"revisionId\":\"" + revision.getId()
+                        + "\",\"revisionNo\":" + revision.getRevisionNo() + "}");
         appendQuietly(job, "artifact_created", "PUBLISH",
                 Map.of("revisionId", String.valueOf(revision.getId()),
                         "revisionNo", revision.getRevisionNo(),
@@ -323,6 +400,7 @@ public class GenerationJobRunner {
     }
 
     private void monitorJob(GenerationJob job, AtomicBoolean cancellationSignalled,
+                            AtomicBoolean pauseSignalled,
                             AtomicLong lastLeaseRenew, long leaseRenewMillis) {
         try {
             if (!cancellationSignalled.get() && jobService.isCancelRequested(job.getId())) {
@@ -333,6 +411,16 @@ public class GenerationJobRunner {
             }
         } catch (RuntimeException e) {
             log.debug("[job] 取消状态轮询失败，jobId={}", job.getId(), e);
+        }
+        try {
+            if (!pauseSignalled.get() && jobService.isPauseRequested(job.getId())) {
+                pauseSignalled.set(true);
+                generatorFacade.stopGenerate(job.getAppId());
+                log.info("[job] Worker 收到暂停请求，jobId={}, appId={}",
+                        job.getId(), job.getAppId());
+            }
+        } catch (RuntimeException e) {
+            log.debug("[job] 暂停状态轮询失败，jobId={}", job.getId(), e);
         }
         long now = System.currentTimeMillis();
         long previous = lastLeaseRenew.get();

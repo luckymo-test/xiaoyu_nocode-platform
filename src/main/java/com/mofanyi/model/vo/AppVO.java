@@ -75,6 +75,7 @@ public class AppVO implements Serializable {
      * 代码生成类型（枚举）
      */
     private String codeGenType;
+    private String projectTemplateId;
 
     /**
      * 优先级

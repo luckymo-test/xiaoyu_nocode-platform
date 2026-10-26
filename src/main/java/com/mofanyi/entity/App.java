@@ -92,6 +92,9 @@ public class App implements Serializable {
     @Column("codeGenType")
     private String codeGenType;
 
+    @Column("projectTemplateId")
+    private String projectTemplateId;
+
     /**
      * 部署标识
      */

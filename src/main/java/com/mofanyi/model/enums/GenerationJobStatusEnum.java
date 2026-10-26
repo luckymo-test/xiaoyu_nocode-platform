@@ -9,6 +9,9 @@ public enum GenerationJobStatusEnum {
 
     QUEUED("QUEUED"),
     RUNNING("RUNNING"),
+    WAITING_CONFIRMATION("WAITING_CONFIRMATION"),
+    PAUSE_REQUESTED("PAUSE_REQUESTED"),
+    PAUSED("PAUSED"),
     WAITING_RETRY("WAITING_RETRY"),
     CANCEL_REQUESTED("CANCEL_REQUESTED"),
     SUCCEEDED("SUCCEEDED"),
@@ -16,7 +19,9 @@ public enum GenerationJobStatusEnum {
     CANCELLED("CANCELLED");
 
     private static final Set<String> ACTIVE = Set.of(
-            QUEUED.value, RUNNING.value, WAITING_RETRY.value, CANCEL_REQUESTED.value);
+            QUEUED.value, RUNNING.value, WAITING_CONFIRMATION.value,
+            PAUSE_REQUESTED.value, PAUSED.value, WAITING_RETRY.value,
+            CANCEL_REQUESTED.value);
     private static final Set<String> TERMINAL = Set.of(
             SUCCEEDED.value, FAILED.value, CANCELLED.value);
 

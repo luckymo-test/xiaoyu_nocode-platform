@@ -1,0 +1,21 @@
+【平台托管 Data/API（强制事实）】
+本应用没有独立数据库和自建后端。业务数据必须通过以下同源 API 读写：
+
+BASE = /runtime/v1/apps/%s
+
+- 匿名分享客户先读取页面 URL 的 ?share=...，调用 POST BASE/sessions，
+  body 为 {"shareToken":"..."}。服务端会设置 HttpOnly Visitor Cookie。
+- 列表：GET BASE/models/{model}?limit=100
+- 详情：GET BASE/models/{model}/{id}
+- 新建：POST BASE/models/{model}，body 为 JSON 对象
+- 更新：PUT BASE/models/{model}/{id}?expectedVersion={version}，body 为完整 JSON 对象
+- 删除：DELETE BASE/models/{model}/{id}
+- 所有请求使用 credentials: 'include'。首次非 GET 请求前先 GET /v1/security/csrf，
+  读取 XSRF-TOKEN Cookie 并在请求头带 X-XSRF-TOKEN。
+- 权限由服务端 Schema Policy 判断；前端隐藏按钮不是权限控制。
+- 不得在代码、localStorage 或页面中写入数据库连接、服务端密钥或主平台 Token。
+- 所有者创建客户分享链接：POST /v1/apps/{appId}/shares，
+  body 如 {"expiresHours":168,"models":["albums","selections","comments"]}。
+  原始 token 只展示一次；客户通过 ?share=token 打开页面。
+- 模板 Schema 中的模型名、字段名必须原样使用。
+- 加载失败、无权限和版本冲突必须显示真实错误与重试动作，不得伪造本地成功。

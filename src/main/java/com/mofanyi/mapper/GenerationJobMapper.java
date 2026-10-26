@@ -65,7 +65,7 @@ public interface GenerationJobMapper extends BaseMapper<GenerationJob> {
                 errorType = #{errorType}, errorMessage = #{errorMessage},
                 updateTime = now()
             where id = #{jobId} and fencingToken = #{fencingToken}
-              and status in ('RUNNING', 'CANCEL_REQUESTED')
+              and status in ('RUNNING', 'CANCEL_REQUESTED', 'PAUSE_REQUESTED')
             """)
     int finish(@Param("jobId") Long jobId,
                @Param("fencingToken") Long fencingToken,
@@ -127,7 +127,67 @@ public interface GenerationJobMapper extends BaseMapper<GenerationJob> {
     @Update("""
             update generation_job
             set status = 'CANCEL_REQUESTED', updateTime = now()
-            where id = #{jobId} and status in ('QUEUED', 'RUNNING', 'WAITING_RETRY')
+            where id = #{jobId} and status in
+                ('QUEUED', 'RUNNING', 'WAITING_CONFIRMATION', 'WAITING_RETRY', 'PAUSED')
             """)
     int requestCancel(@Param("jobId") Long jobId);
+
+    @Update("""
+            update generation_job
+            set status = 'WAITING_CONFIRMATION', currentStage = 'CONFIRMATION',
+                confirmedPlanHash = #{planHash}, confirmedAt = null, confirmedBy = null,
+                updateTime = now()
+            where id = #{jobId} and fencingToken = #{fencingToken} and status = 'RUNNING'
+            """)
+    int waitForConfirmation(@Param("jobId") Long jobId,
+                            @Param("fencingToken") Long fencingToken,
+                            @Param("planHash") String planHash);
+
+    @Update("""
+            update generation_job
+            set status = 'QUEUED', currentStage = 'CONFIRMED',
+                confirmedPlanHash = #{planHash}, confirmedAt = now(), confirmedBy = #{userId},
+                leaseOwner = null, leaseExpiresAt = null, updateTime = now()
+            where id = #{jobId} and status = 'WAITING_CONFIRMATION'
+              and confirmedPlanHash = #{planHash}
+            """)
+    int confirmPlan(@Param("jobId") Long jobId,
+                    @Param("planHash") String planHash,
+                    @Param("userId") Long userId);
+
+    @Update("""
+            update generation_job
+            set confirmedPlanHash = #{planHash}, updateTime = now()
+            where id = #{jobId} and status = 'WAITING_CONFIRMATION'
+            """)
+    int replaceWaitingPlan(@Param("jobId") Long jobId,
+                           @Param("planHash") String planHash);
+
+    @Update("""
+            update generation_job
+            set status = 'PAUSE_REQUESTED', updateTime = now()
+            where id = #{jobId} and status in
+                ('QUEUED', 'RUNNING', 'WAITING_CONFIRMATION', 'WAITING_RETRY')
+            """)
+    int requestPause(@Param("jobId") Long jobId);
+
+    @Update("""
+            update generation_job
+            set status = 'PAUSED', currentStage = 'PAUSED',
+                leaseOwner = null, leaseExpiresAt = null, updateTime = now()
+            where id = #{jobId} and status in
+                ('PAUSE_REQUESTED', 'CANCEL_REQUESTED', 'WAITING_CONFIRMATION')
+                  and (#{fencingToken} is null or fencingToken = #{fencingToken})
+            """)
+    int markPaused(@Param("jobId") Long jobId,
+                   @Param("fencingToken") Long fencingToken);
+
+    @Update("""
+            update generation_job
+            set status = 'QUEUED', currentStage = 'RESUMED',
+                leaseOwner = null, leaseExpiresAt = null,
+                errorType = null, errorMessage = null, updateTime = now()
+            where id = #{jobId} and status = 'PAUSED'
+            """)
+    int resumePaused(@Param("jobId") Long jobId);
 }

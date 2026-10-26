@@ -9,11 +9,17 @@ import com.mofanyi.core.CodeFileWriteService;
 import com.mofanyi.core.CoverImageService;
 import com.mofanyi.core.VueBuildService;
 import com.mofanyi.entity.App;
+import com.mofanyi.entity.AppDeployment;
+import com.mofanyi.entity.AppRuntimeSchema;
 import com.mofanyi.entity.User;
+import com.mofanyi.entity.WorkspaceAuditLog;
 import com.mofanyi.exception.BusinessException;
 import com.mofanyi.exception.ErrorCode;
 import com.mofanyi.exception.ThrowUtils;
 import com.mofanyi.mapper.AppMapper;
+import com.mofanyi.mapper.AppDeploymentMapper;
+import com.mofanyi.mapper.WorkspaceAuditLogMapper;
+import com.mofanyi.mapper.AppRuntimeSchemaMapper;
 import com.mofanyi.service.AppAuthService;
 import com.mofanyi.mapper.AppImageMapper;
 import com.mofanyi.model.dto.app.AppAddRequest;
@@ -41,9 +47,13 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.stereotype.Service;
 
 import java.security.SecureRandom;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
@@ -84,6 +94,9 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
     private final AppAuthService appAuthService;
     private final WorkspaceService workspaceService;
     private final WorkspaceAclService workspaceAclService;
+    private final AppDeploymentMapper deploymentMapper;
+    private final WorkspaceAuditLogMapper auditMapper;
+    private final AppRuntimeSchemaMapper runtimeSchemaMapper;
 
     public AppServiceImpl(CodeFileWriteService codeFileWriteService,
                           ChatHistoryService chatHistoryService,
@@ -93,7 +106,10 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
                           AppImageMapper appImageMapper,
                           AppAuthService appAuthService,
                           WorkspaceService workspaceService,
-                          WorkspaceAclService workspaceAclService) {
+                          WorkspaceAclService workspaceAclService,
+                          AppDeploymentMapper deploymentMapper,
+                          WorkspaceAuditLogMapper auditMapper,
+                          AppRuntimeSchemaMapper runtimeSchemaMapper) {
         this.codeFileWriteService = codeFileWriteService;
         this.chatHistoryService = chatHistoryService;
         this.redisChatMemoryRepository = redisChatMemoryRepository;
@@ -103,6 +119,9 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         this.appAuthService = appAuthService;
         this.workspaceService = workspaceService;
         this.workspaceAclService = workspaceAclService;
+        this.deploymentMapper = deploymentMapper;
+        this.auditMapper = auditMapper;
+        this.runtimeSchemaMapper = runtimeSchemaMapper;
     }
 
     @Override
@@ -124,7 +143,8 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         ThrowUtils.throwIf(loginUser == null || loginUser.getId() == null, ErrorCode.NOT_LOGIN_ERROR);
         App app = this.getById(appId);
         ThrowUtils.throwIf(app == null, ErrorCode.NOT_FOUND_ERROR);
-        checkAppOwnership(app, loginUser);
+        appAuthService.requireCanPublish(app.getId(), loginUser);
+        String sourceDir;
         String deployKey = app.getDeployKey();
         if (StrUtil.isBlank(deployKey)) {
             deployKey = generateUniqueDeployKey();
@@ -134,23 +154,59 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
             ThrowUtils.throwIf(!this.updateById(update), ErrorCode.OPERATION_ERROR);
         }
         if (CodeGenTypeEnum.VUE.getValue().equals(app.getCodeGenType())) {
-            // vue 模式：构建 dist（失败自动修复）→ 拷 dist 到部署目录
             java.io.File distDir = requireVueBuildService().build(app.getId(),
                     text -> { if (progress != null) progress.accept(text); });
-            java.io.File target = java.nio.file.Paths.get(deployRoot(), deployKey).toFile();
-            if (!cn.hutool.core.io.FileUtil.exist(target)) {
-                cn.hutool.core.io.FileUtil.mkdir(target);
-            }
-            cn.hutool.core.io.FileUtil.copyContent(distDir, target, true);
+            sourceDir = distDir.getAbsolutePath();
         } else {
-            codeFileWriteService.deployApp(app.getCodeGenType(), app.getId(), deployKey);
+            sourceDir = codeFileWriteService.getLiveProjectDir(
+                    CodeGenTypeEnum.getEnumByValue(app.getCodeGenType()), app.getId());
+        }
+        Path target = Path.of(deployRoot(), deployKey).toAbsolutePath().normalize();
+        Path stage = Path.of(deployRoot(), ".stage-" + deployKey + "-" + UUID.randomUUID())
+                .toAbsolutePath().normalize();
+        Path backup = Path.of(deployRoot(), ".backup-" + deployKey + "-" + UUID.randomUUID())
+                .toAbsolutePath().normalize();
+        ThrowUtils.throwIf(!target.startsWith(Path.of(deployRoot()).toAbsolutePath().normalize()),
+                ErrorCode.OPERATION_ERROR, "部署路径越界");
+        try {
+            cn.hutool.core.io.FileUtil.del(stage.toFile());
+            cn.hutool.core.io.FileUtil.mkdir(stage.toFile());
+            cn.hutool.core.io.FileUtil.copyContent(new java.io.File(sourceDir), stage.toFile(), true);
+            if (Files.exists(target)) {
+                Files.move(target, backup, StandardCopyOption.REPLACE_EXISTING);
+            }
+            moveDeployDir(stage, target);
+            cn.hutool.core.io.FileUtil.del(backup.toFile());
+        } catch (RuntimeException | java.io.IOException e) {
+            if (!Files.exists(target) && Files.exists(backup)) {
+                try {
+                    Files.move(backup, target, StandardCopyOption.REPLACE_EXISTING);
+                } catch (java.io.IOException restoreError) {
+                    e.addSuppressed(restoreError);
+                }
+            }
+            throw new IllegalStateException("发布目录切换失败", e);
         }
         // 更新部署时间
         App timeUpdate = new App();
         timeUpdate.setId(app.getId());
         timeUpdate.setDeployedTime(LocalDateTime.now());
         this.updateById(timeUpdate);
+        deactivatePreviousDeployments(app.getId());
         String deployUrl = codeFileWriteService.getDomain() + "/" + deployKey;
+        deploymentMapper.insertSelective(AppDeployment.builder()
+                .workspaceId(app.getWorkspaceId())
+                .appId(app.getId())
+                .revisionId(app.getCurrentRevision() == null ? 0L : app.getCurrentRevision())
+                .deployKey(deployKey)
+                .url(deployUrl)
+                .status("ACTIVE")
+                .changeSummary("发布当前 Revision")
+                .createdBy(loginUser.getId())
+                .createTime(LocalDateTime.now())
+                .updateTime(LocalDateTime.now())
+                .build());
+        audit(app, loginUser.getId(), "APP_PUBLISH", deployUrl);
         // 异步生成封面截图：失败仅记日志，不影响部署
         coverImageService.generateCoverAsync(app.getId(), deployUrl);
         return deployUrl;
@@ -281,10 +337,13 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         ThrowUtils.throwIf(app == null, ErrorCode.NOT_FOUND_ERROR);
         ThrowUtils.throwIf(!CodeGenTypeEnum.VUE.getValue().equals(app.getCodeGenType()),
                 ErrorCode.PARAMS_ERROR, "非前端工程无法预览构建产物");
-        VueBuildService vueBuildService = requireVueBuildService();
-        String html = vueBuildService.readVueDist(app.getId());
-        if (html == null) {
-            // dist 未构建：同步构建（含自动修复）后再读
+        VueBuildService vueBuildService = vueBuildServiceProvider.getIfAvailable();
+        String html = vueBuildService == null
+                ? codeFileWriteService.readFile(
+                java.nio.file.Path.of(codeFileWriteService.getLiveProjectDir(
+                        CodeGenTypeEnum.VUE, app.getId()), "dist").toString(), "index.html")
+                : vueBuildService.readVueDist(app.getId());
+        if (html == null && vueBuildService != null) {
             synchronized (String.valueOf(app.getId()).intern()) {
                 html = vueBuildService.readVueDist(app.getId());
                 if (html == null) {
@@ -321,13 +380,13 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         ThrowUtils.throwIf(loginUser == null || loginUser.getId() == null, ErrorCode.NOT_LOGIN_ERROR);
         App app = this.getById(id);
         ThrowUtils.throwIf(app == null, ErrorCode.NOT_FOUND_ERROR);
-        checkAppOwnership(app, loginUser);
+        appAuthService.requireCanPublish(app.getId(), loginUser);
         if (StrUtil.isNotBlank(app.getDeployKey())) {
-            // 删除部署目录
             codeFileWriteService.deleteDeployDir(app.getDeployKey());
-            // 清空部署标识与部署时间（原生 SQL，绕过 updateById 忽略 null 字段的限制）
-            int rows = this.mapper.clearDeploy(app.getId());
+            int rows = this.mapper.clearDeployedTime(app.getId());
             ThrowUtils.throwIf(rows <= 0, ErrorCode.OPERATION_ERROR);
+            deactivatePreviousDeployments(app.getId());
+            audit(app, loginUser.getId(), "APP_UNPUBLISH", app.getDeployKey());
         }
         return true;
     }
@@ -392,6 +451,40 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         throw new BusinessException(ErrorCode.OPERATION_ERROR, "生成部署标识失败，请重试");
     }
 
+    private void moveDeployDir(Path source, Path target) throws java.io.IOException {
+        Files.createDirectories(target.getParent());
+        try {
+            Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
+        } catch (java.nio.file.AtomicMoveNotSupportedException e) {
+            Files.move(source, target);
+        }
+    }
+
+    private void deactivatePreviousDeployments(Long appId) {
+        for (AppDeployment deployment : deploymentMapper.selectListByQuery(QueryWrapper.create()
+                .eq("appId", appId)
+                .eq("status", "ACTIVE"))) {
+            deployment.setStatus("INACTIVE");
+            deployment.setUpdateTime(LocalDateTime.now());
+            deploymentMapper.update(deployment);
+        }
+    }
+
+    private void audit(App app, Long actorId, String action, String detail) {
+        if (app.getWorkspaceId() == null) {
+            return;
+        }
+        auditMapper.insertSelective(WorkspaceAuditLog.builder()
+                .workspaceId(app.getWorkspaceId())
+                .actorId(actorId)
+                .action(action)
+                .resourceType("APP")
+                .resourceId(String.valueOf(app.getId()))
+                .detail(detail)
+                .createTime(LocalDateTime.now())
+                .build());
+    }
+
     @Override
     public long addApp(AppAddRequest appAddRequest, User loginUser) {
         ThrowUtils.throwIf(appAddRequest == null, ErrorCode.PARAMS_ERROR);
@@ -410,7 +503,64 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         app.setFeaturedStatus(AppFeaturedStatusEnum.NONE.getValue());
         boolean result = this.save(app);
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
+        audit(app, loginUser.getId(), "APP_CREATE", app.getAppName());
         return app.getId();
+    }
+
+    @Override
+    public long copyApp(long sourceAppId, User loginUser) {
+        App source = appAuthService.requireCanGenerate(sourceAppId, loginUser);
+        String suffix = " 副本";
+        String baseName = StrUtil.blankToDefault(source.getAppName(), "未命名应用");
+        String copyName = StrUtil.maxLength(baseName, 50 - suffix.length()) + suffix;
+        LocalDateTime now = LocalDateTime.now();
+        App copy = App.builder()
+                .appName(copyName)
+                .cover(source.getCover())
+                .compressPictures(source.getCompressPictures())
+                .description(source.getDescription())
+                .tags(source.getTags())
+                .visibility(AppVisibilityEnum.PRIVATE.getValue())
+                .generateStatus(source.getGenerateStatus())
+                .featuredStatus(AppFeaturedStatusEnum.NONE.getValue())
+                .initPrompt(source.getInitPrompt())
+                .codeGenType(source.getCodeGenType())
+                .priority(0)
+                .userId(loginUser.getId())
+                .workspaceId(workspaceService.ensureDefaultWorkspace(loginUser).getId())
+                .editTime(now)
+                .createTime(now)
+                .updateTime(now)
+                .isDelete(0)
+                .build();
+        ThrowUtils.throwIf(!save(copy), ErrorCode.OPERATION_ERROR, "创建项目副本失败");
+        CodeGenTypeEnum type = CodeGenTypeEnum.getEnumByValue(source.getCodeGenType());
+        if (type != null) {
+            java.io.File from = new java.io.File(codeFileWriteService.getLiveProjectDir(type, sourceAppId));
+            if (from.isDirectory()) {
+                java.io.File to = new java.io.File(codeFileWriteService.getLiveProjectDir(type, copy.getId()));
+                cn.hutool.core.io.FileUtil.mkdir(to);
+                cn.hutool.core.io.FileUtil.copyContent(from, to, true);
+            }
+        }
+        AppRuntimeSchema sourceSchema = runtimeSchemaMapper.selectOneByQuery(
+                QueryWrapper.create()
+                        .eq("appId", sourceAppId)
+                        .orderBy("schemaVersion", false)
+                        .limit(1));
+        if (sourceSchema != null) {
+            runtimeSchemaMapper.insertSelective(AppRuntimeSchema.builder()
+                    .workspaceId(copy.getWorkspaceId())
+                    .appId(copy.getId())
+                    .revisionId(0L)
+                    .schemaVersion(1)
+                    .schemaJson(sourceSchema.getSchemaJson())
+                    .sha256(sourceSchema.getSha256())
+                    .createTime(now)
+                    .build());
+        }
+        audit(copy, loginUser.getId(), "APP_COPY", "source=" + sourceAppId);
+        return copy.getId();
     }
 
     @Override
@@ -431,6 +581,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         app.setVisibility(appUpdateRequest.getVisibility());
         boolean result = this.updateById(app);
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
+        audit(oldApp, loginUser.getId(), "APP_UPDATE", app.getAppName());
         return true;
     }
 
@@ -443,6 +594,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         checkAppOwnership(oldApp, loginUser);
         boolean result = this.removeById(id);
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
+        audit(oldApp, loginUser.getId(), "APP_DELETE", "logical");
         // 级联逻辑删除该应用的全部对话历史与嵌入图片
         chatHistoryService.deleteByAppId(id);
         appImageMapper.deleteByAppId(id);
@@ -488,6 +640,7 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         queryWrapper.eq("featuredStatus", AppFeaturedStatusEnum.APPROVED.getValue());
         queryWrapper.eq("visibility", AppVisibilityEnum.PUBLIC.getValue());
         queryWrapper.isNotNull("deployKey");
+        queryWrapper.isNotNull("deployedTime");
         queryWrapper.orderBy("priority", false);
         queryWrapper.orderBy("createTime", false);
         return pageAppVO(appQueryRequest, queryWrapper);
@@ -498,10 +651,32 @@ public class AppServiceImpl extends ServiceImpl<AppMapper, App> implements AppSe
         ThrowUtils.throwIf(appQueryRequest == null, ErrorCode.PARAMS_ERROR);
         ThrowUtils.throwIf(loginUser == null || loginUser.getId() == null, ErrorCode.NOT_LOGIN_ERROR);
         checkPageSize(appQueryRequest);
-        // 强制查询当前登录用户的应用
         appQueryRequest.setUserId(loginUser.getId());
-        QueryWrapper queryWrapper = getQueryWrapper(appQueryRequest);
-        return pageAppVO(appQueryRequest, queryWrapper);
+        List<App> own = this.list(getQueryWrapper(appQueryRequest));
+        List<Long> workspaceIds = workspaceService.listWorkspaceIds(loginUser.getId());
+        List<App> shared = workspaceIds.isEmpty() ? List.of()
+                : this.list(QueryWrapper.create()
+                .in("workspaceId", workspaceIds)
+                .ne("userId", loginUser.getId()));
+        java.util.LinkedHashMap<Long, App> merged = new java.util.LinkedHashMap<>();
+        own.forEach(app -> merged.put(app.getId(), app));
+        shared.forEach(app -> merged.putIfAbsent(app.getId(), app));
+        List<App> sorted = merged.values().stream()
+                .filter(app -> StrUtil.isBlank(appQueryRequest.getAppName())
+                        || StrUtil.containsIgnoreCase(app.getAppName(),
+                        appQueryRequest.getAppName()))
+                .sorted(java.util.Comparator.comparing(
+                        (App app) -> app.getEditTime() == null
+                                ? app.getUpdateTime() : app.getEditTime(),
+                        java.util.Comparator.nullsLast(java.util.Comparator.reverseOrder())))
+                .toList();
+        long pageSize = appQueryRequest.getPageSize();
+        long pageNum = appQueryRequest.getPageNum();
+        int from = (int) Math.min(sorted.size(), Math.max(0, (pageNum - 1) * pageSize));
+        int to = (int) Math.min(sorted.size(), from + pageSize);
+        Page<AppVO> result = new Page<>(pageNum, pageSize, sorted.size());
+        result.setRecords(getAppVOList(sorted.subList(from, to)));
+        return result;
     }
 
     @Override

@@ -53,6 +53,7 @@ server:
       cookie:
         max-age: 2592000
         http-only: true
+        path: /
         same-site: lax
         secure: ${SESSION_COOKIE_SECURE:false}
 
@@ -107,6 +108,10 @@ codegen:
       query-plan: deepseek-flash
       compress: deepseek-flash
       research: deepseek-flash
+      requirement: deepseek-flash
+      architect: deepseek-flash
+      ui: deepseek-flash
+      plan: deepseek-flash
     fallbacks:
       deepseek-flash: []
   security:
@@ -167,6 +172,10 @@ codegen:
   # 交付前渲染验证（plan-agent-pipeline P0-4）：无头浏览器 3 档视口实拍检查图裂/横向溢出/空白页/console 报错
   verify:
     enabled: ${CODEGEN_VERIFY_ENABLED:true}
+  preview:
+    gateway-url: ${CODEGEN_PREVIEW_GATEWAY_URL:http://localhost:8088}
+    signing-secret: ${CODEGEN_PREVIEW_SIGNING_SECRET:dev-preview-secret-change-me}
+    ttl-seconds: ${CODEGEN_PREVIEW_TTL_SECONDS:900}
   browser:
     engine: ${CODEGEN_BROWSER_ENGINE:selenium}
     playwright:
@@ -249,6 +258,9 @@ codegen:
       min-tokens: ${CODEGEN_CONTEXT_COMPRESSION_MIN_TOKENS:8000}
       keep-recent-rounds: ${CODEGEN_CONTEXT_COMPRESSION_KEEP_ROUNDS:4}
       max-output-tokens: ${CODEGEN_CONTEXT_COMPRESSION_MAX_OUTPUT_TOKENS:1500}
+  usage:
+    input-cost-micros-per-million: ${CODEGEN_USAGE_INPUT_COST_MICROS_PER_MILLION:140000}
+    output-cost-micros-per-million: ${CODEGEN_USAGE_OUTPUT_COST_MICROS_PER_MILLION:280000}
   web-research:
     # 默认关闭；开启后 searchWeb/fetchWeb 才会出现在 Agent 工具列表中
     enabled: ${CODEGEN_WEB_RESEARCH_ENABLED:false}

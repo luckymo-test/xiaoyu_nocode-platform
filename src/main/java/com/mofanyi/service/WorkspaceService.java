@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.List;
 
 /**
  * 工作区基础服务。Phase 0 先提供默认个人工作区，后续 ACL/团队能力在此扩展。
@@ -75,6 +76,16 @@ public class WorkspaceService {
                 .eq("workspaceId", workspaceId)
                 .eq("userId", userId));
         ThrowUtils.throwIf(count == 0, ErrorCode.NO_AUTH_ERROR, "无权访问该工作区");
+    }
+
+    public List<Long> listWorkspaceIds(Long userId) {
+        ThrowUtils.throwIf(userId == null || userId <= 0, ErrorCode.NOT_LOGIN_ERROR);
+        return workspaceMemberMapper.selectListByQuery(QueryWrapper.create()
+                        .eq("userId", userId))
+                .stream()
+                .map(WorkspaceMember::getWorkspaceId)
+                .distinct()
+                .toList();
     }
 
     private void ensureOwnerMember(Workspace workspace, Long userId) {

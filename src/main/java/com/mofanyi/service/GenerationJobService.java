@@ -28,6 +28,11 @@ import com.mofanyi.model.enums.ChatMessageTypeEnum;
 import com.mofanyi.model.enums.CodeGenTypeEnum;
 import com.mofanyi.model.enums.GenerationJobStatusEnum;
 import com.mofanyi.model.vo.GenerationJobVO;
+import com.mofanyi.entity.AgentPlan;
+import com.mofanyi.entity.AgentStep;
+import com.mofanyi.entity.AgentToolCall;
+import com.mofanyi.core.AiCallContext;
+import com.mofanyi.workflow.WorkflowPlanService;
 import com.mybatisflex.core.query.QueryWrapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DuplicateKeyException;
@@ -49,6 +54,8 @@ import java.util.List;
 public class GenerationJobService {
 
     public static final String REQUEST_GENERATE = "generate";
+    public static final String REQUEST_DEPLOY = "deploy";
+    public static final String REQUEST_PUBLISH_REVISION = "publish-revision";
     public static final String STAGE_QUEUED = "QUEUED";
 
     private final GenerationJobMapper jobMapper;
@@ -65,6 +72,7 @@ public class GenerationJobService {
     private final StackProfileRegistry stackProfiles;
     private final TemplateRegistry templateRegistry;
     private final SkillRegistry skillRegistry;
+    private final WorkflowPlanService workflowPlanService;
 
     @Value("${codegen.jobs.max-attempts:3}")
     private int maxAttempts;
@@ -88,6 +96,7 @@ public class GenerationJobService {
                                 StackProfileRegistry stackProfiles,
                                 TemplateRegistry templateRegistry,
                                 SkillRegistry skillRegistry,
+                                WorkflowPlanService workflowPlanService,
                                 ObjectMapper objectMapper) {
         this.jobMapper = jobMapper;
         this.outboxMapper = outboxMapper;
@@ -102,6 +111,7 @@ public class GenerationJobService {
         this.stackProfiles = stackProfiles;
         this.templateRegistry = templateRegistry;
         this.skillRegistry = skillRegistry;
+        this.workflowPlanService = workflowPlanService;
         this.objectMapper = objectMapper;
     }
 
@@ -143,6 +153,9 @@ public class GenerationJobService {
                 .eq("requestedBy", loginUser.getId())
                 .in("status", GenerationJobStatusEnum.QUEUED.getValue(),
                         GenerationJobStatusEnum.RUNNING.getValue(),
+                        GenerationJobStatusEnum.WAITING_CONFIRMATION.getValue(),
+                        GenerationJobStatusEnum.PAUSE_REQUESTED.getValue(),
+                        GenerationJobStatusEnum.PAUSED.getValue(),
                         GenerationJobStatusEnum.WAITING_RETRY.getValue(),
                         GenerationJobStatusEnum.CANCEL_REQUESTED.getValue()));
         ThrowUtils.throwIf(userActiveCount >= Math.max(1, userActiveJobLimit),
@@ -157,6 +170,9 @@ public class GenerationJobService {
                 .eq("appId", appId)
                 .in("status", GenerationJobStatusEnum.QUEUED.getValue(),
                         GenerationJobStatusEnum.RUNNING.getValue(),
+                        GenerationJobStatusEnum.WAITING_CONFIRMATION.getValue(),
+                        GenerationJobStatusEnum.PAUSE_REQUESTED.getValue(),
+                        GenerationJobStatusEnum.PAUSED.getValue(),
                         GenerationJobStatusEnum.WAITING_RETRY.getValue(),
                         GenerationJobStatusEnum.CANCEL_REQUESTED.getValue()));
         ThrowUtils.throwIf(activeCount > 0, ErrorCode.OPERATION_ERROR,
@@ -171,6 +187,7 @@ public class GenerationJobService {
                 .appId(appId)
                 .requestedBy(loginUser.getId())
                 .requestType(REQUEST_GENERATE)
+                .workflowVersion(normalizeWorkflowVersion(request.getWorkflowVersion()))
                 .idempotencyKey(idempotencyKey)
                 .requestHash(requestHash)
                 .requestPayload(writeJson(request))
@@ -225,6 +242,164 @@ public class GenerationJobService {
         return toVO(job);
     }
 
+    @Transactional(rollbackFor = Exception.class)
+    public GenerationJobVO createDeploy(Long appId, String idempotencyKey, User loginUser) {
+        ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
+        App app = appAuthService.requireCanPublish(appId, loginUser);
+        ThrowUtils.throwIf(app.getCurrentRevision() == null,
+                ErrorCode.OPERATION_ERROR, "应用还没有可发布版本");
+        ThrowUtils.throwIf(StrUtil.isBlank(idempotencyKey),
+                ErrorCode.PARAMS_ERROR, "Idempotency-Key 不能为空");
+        long active = jobMapper.selectCountByQuery(QueryWrapper.create()
+                .eq("appId", appId)
+                .in("status", GenerationJobStatusEnum.QUEUED.getValue(),
+                        GenerationJobStatusEnum.RUNNING.getValue(),
+                        GenerationJobStatusEnum.WAITING_CONFIRMATION.getValue(),
+                        GenerationJobStatusEnum.PAUSE_REQUESTED.getValue(),
+                        GenerationJobStatusEnum.PAUSED.getValue(),
+                        GenerationJobStatusEnum.WAITING_RETRY.getValue(),
+                        GenerationJobStatusEnum.CANCEL_REQUESTED.getValue()));
+        ThrowUtils.throwIf(active > 0, ErrorCode.OPERATION_ERROR,
+                "该应用已有活跃任务，请等待结束或先取消");
+        GenerationJobCreateRequest request = new GenerationJobCreateRequest();
+        CodeGenTypeEnum type = CodeGenTypeEnum.getEnumByValue(app.getCodeGenType());
+        ThrowUtils.throwIf(type == null, ErrorCode.OPERATION_ERROR, "未知生成类型");
+        StackProfile profile = stackProfiles.resolve("auto", type);
+        request.setMessage("发布当前应用版本");
+        request.setRequestType(REQUEST_DEPLOY);
+        request.setCodeGenType(app.getCodeGenType());
+        request.setStackProfileId(profile.id());
+        request.setWorkflowVersion(1);
+        String payload = writeJson(request);
+        String hash = hashRequest(request);
+        GenerationJob existing = jobMapper.selectOneByQuery(QueryWrapper.create()
+                .eq("appId", appId)
+                .eq("idempotencyKey", idempotencyKey)
+                .limit(1));
+        if (existing != null) {
+            ThrowUtils.throwIf(!hash.equals(existing.getRequestHash()),
+                    ErrorCode.PARAMS_ERROR, "同一幂等键不能用于不同请求");
+            return toVO(existing);
+        }
+        Long workspaceId = app.getWorkspaceId() == null
+                ? workspaceService.ensureDefaultWorkspace(loginUser).getId()
+                : app.getWorkspaceId();
+        LocalDateTime now = LocalDateTime.now();
+        GenerationJob job = GenerationJob.builder()
+                .workspaceId(workspaceId)
+                .appId(appId)
+                .requestedBy(loginUser.getId())
+                .requestType(REQUEST_DEPLOY)
+                .workflowVersion(1)
+                .idempotencyKey(idempotencyKey)
+                .requestHash(hash)
+                .requestPayload(payload)
+                .status(GenerationJobStatusEnum.QUEUED.getValue())
+                .currentStage("DEPLOY_QUEUED")
+                .codeGenType(app.getCodeGenType())
+                .stackProfileId(profile.id())
+                .stackProfileVersion(profile.version())
+                .baseRevisionId(app.getCurrentRevision())
+                .visibility(app.getVisibility())
+                .priority(0)
+                .attempt(0)
+                .maxAttempts(Math.max(1, maxAttempts))
+                .fencingToken(0L)
+                .nextEventSeq(0L)
+                .createTime(now)
+                .updateTime(now)
+                .build();
+        jobMapper.insertSelective(job);
+        outboxMapper.insertSelective(GenerationOutbox.builder()
+                .jobId(job.getId())
+                .eventType("DISPATCH")
+                .payload(String.valueOf(job.getId()))
+                .status("PENDING")
+                .retryCount(0)
+                .nextAttemptAt(now)
+                .createTime(now)
+                .updateTime(now)
+                .build());
+        return toVO(job);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public GenerationJobVO createRevisionPublish(Long appId, Long revisionId,
+                                                 String idempotencyKey, User loginUser) {
+        ThrowUtils.throwIf(revisionId == null || revisionId <= 0, ErrorCode.PARAMS_ERROR);
+        App app = appAuthService.requireCanPublish(appId, loginUser);
+        long active = jobMapper.selectCountByQuery(QueryWrapper.create()
+                .eq("appId", appId)
+                .in("status", GenerationJobStatusEnum.QUEUED.getValue(),
+                        GenerationJobStatusEnum.RUNNING.getValue(),
+                        GenerationJobStatusEnum.WAITING_CONFIRMATION.getValue(),
+                        GenerationJobStatusEnum.PAUSE_REQUESTED.getValue(),
+                        GenerationJobStatusEnum.PAUSED.getValue(),
+                        GenerationJobStatusEnum.WAITING_RETRY.getValue(),
+                        GenerationJobStatusEnum.CANCEL_REQUESTED.getValue()));
+        ThrowUtils.throwIf(active > 0, ErrorCode.OPERATION_ERROR,
+                "该应用已有活跃任务，无法切换版本");
+        CodeGenTypeEnum type = CodeGenTypeEnum.getEnumByValue(app.getCodeGenType());
+        ThrowUtils.throwIf(type == null, ErrorCode.OPERATION_ERROR, "未知生成类型");
+        StackProfile profile = stackProfiles.resolve("auto", type);
+        GenerationJobCreateRequest request = new GenerationJobCreateRequest();
+        request.setMessage("发布版本 " + revisionId);
+        request.setRequestType(REQUEST_PUBLISH_REVISION);
+        request.setCodeGenType(app.getCodeGenType());
+        request.setStackProfileId(profile.id());
+        request.setRevisionId(revisionId);
+        request.setWorkflowVersion(1);
+        String key = StrUtil.blankToDefault(idempotencyKey,
+                "publish-revision-" + revisionId + "-" + System.currentTimeMillis());
+        String payload = writeJson(request);
+        String hash = hashRequest(request);
+        GenerationJob existing = jobMapper.selectOneByQuery(QueryWrapper.create()
+                .eq("appId", appId).eq("idempotencyKey", key).limit(1));
+        if (existing != null) {
+            ThrowUtils.throwIf(!hash.equals(existing.getRequestHash()),
+                    ErrorCode.PARAMS_ERROR, "同一幂等键不能用于不同请求");
+            return toVO(existing);
+        }
+        LocalDateTime now = LocalDateTime.now();
+        GenerationJob job = GenerationJob.builder()
+                .workspaceId(app.getWorkspaceId())
+                .appId(appId)
+                .requestedBy(loginUser.getId())
+                .requestType(REQUEST_PUBLISH_REVISION)
+                .workflowVersion(1)
+                .idempotencyKey(key)
+                .requestHash(hash)
+                .requestPayload(payload)
+                .status(GenerationJobStatusEnum.QUEUED.getValue())
+                .currentStage("PUBLISH_QUEUED")
+                .codeGenType(app.getCodeGenType())
+                .stackProfileId(profile.id())
+                .stackProfileVersion(profile.version())
+                .baseRevisionId(app.getCurrentRevision())
+                .candidateRevisionId(revisionId)
+                .visibility(app.getVisibility())
+                .priority(0)
+                .attempt(0)
+                .maxAttempts(Math.max(1, maxAttempts))
+                .fencingToken(0L)
+                .nextEventSeq(0L)
+                .createTime(now)
+                .updateTime(now)
+                .build();
+        jobMapper.insertSelective(job);
+        outboxMapper.insertSelective(GenerationOutbox.builder()
+                .jobId(job.getId())
+                .eventType("DISPATCH")
+                .payload(String.valueOf(job.getId()))
+                .status("PENDING")
+                .retryCount(0)
+                .nextAttemptAt(now)
+                .createTime(now)
+                .updateTime(now)
+                .build());
+        return toVO(job);
+    }
+
     public GenerationJob getAuthorized(Long jobId, User loginUser) {
         ThrowUtils.throwIf(jobId == null || jobId <= 0, ErrorCode.PARAMS_ERROR);
         ThrowUtils.throwIf(loginUser == null || loginUser.getId() == null, ErrorCode.NOT_LOGIN_ERROR);
@@ -251,6 +426,13 @@ public class GenerationJobService {
         if (GenerationJobStatusEnum.isTerminal(job.getStatus())) {
             return toVO(job);
         }
+        if (GenerationJobStatusEnum.PAUSED.getValue().equals(job.getStatus())) {
+            if (jobMapper.requestCancel(jobId) == 1) {
+                eventService.append(jobId, "cancel_requested", "CANCEL_REQUESTED",
+                        java.util.Map.of("message", "已请求取消暂停任务"));
+            }
+            return toVO(requireJob(jobId));
+        }
         int queued = jobMapper.cancelQueued(jobId);
         if (queued == 1) {
             eventService.append(jobId, "cancelled", "CANCELLED",
@@ -262,6 +444,128 @@ public class GenerationJobService {
                         java.util.Map.of("message", "已请求取消，Worker 将在下一个工具边界退出"));
             }
         }
+        return toVO(requireJob(jobId));
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public GenerationJobVO pause(Long jobId, User loginUser) {
+        GenerationJob job = getAuthorized(jobId, loginUser);
+        if (GenerationJobStatusEnum.PAUSED.getValue().equals(job.getStatus())) {
+            return toVO(job);
+        }
+        if (GenerationJobStatusEnum.isTerminal(job.getStatus())) {
+            ThrowUtils.throwIf(true, ErrorCode.OPERATION_ERROR, "任务已结束，无法暂停");
+        }
+        boolean workerOwned = GenerationJobStatusEnum.RUNNING.getValue().equals(job.getStatus());
+        if (workerOwned) {
+            jobMapper.requestPause(jobId);
+            eventService.append(jobId, "pause_requested", "PAUSE_REQUESTED",
+                    java.util.Map.of("message", "将在当前安全边界暂停"));
+        } else {
+            jobMapper.markPaused(jobId, null);
+            appService.updateGenerateStatus(job.getAppId(),
+                    AppGenerateStatusEnum.PAUSED.getValue());
+            eventService.append(jobId, "paused", "PAUSED",
+                    java.util.Map.of("message", "任务已暂停"));
+        }
+        return toVO(requireJob(jobId));
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public GenerationJobVO resume(Long jobId, User loginUser) {
+        getAuthorized(jobId, loginUser);
+        ThrowUtils.throwIf(jobMapper.resumePaused(jobId) != 1,
+                ErrorCode.OPERATION_ERROR, "只有已暂停任务可以继续");
+        GenerationJob resumed = requireJob(jobId);
+        appService.updateGenerateStatus(resumed.getAppId(),
+                AppGenerateStatusEnum.GENERATING.getValue());
+        eventService.append(jobId, "resumed", "RESUMED",
+                java.util.Map.of("message", "任务从第一个未成功步骤继续"));
+        jobQueue.schedule(jobId, 0);
+        return toVO(requireJob(jobId));
+    }
+
+    public void pauseFromWorker(GenerationJob job, String reason) {
+        ThrowUtils.throwIf(job == null || job.getFencingToken() == null,
+                ErrorCode.PARAMS_ERROR);
+        if (jobMapper.markPaused(job.getId(), job.getFencingToken()) == 1) {
+            appService.updateGenerateStatus(job.getAppId(),
+                    AppGenerateStatusEnum.PAUSED.getValue());
+            eventService.append(job.getId(), "paused", "PAUSED",
+                    java.util.Map.of("message", StrUtil.blankToDefault(reason, "任务已暂停")));
+        }
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public GenerationJobVO confirmPlan(Long jobId, String planHash, User loginUser) {
+        GenerationJob job = getAuthorized(jobId, loginUser);
+        ThrowUtils.throwIf(!GenerationJobStatusEnum.WAITING_CONFIRMATION.getValue()
+                        .equals(job.getStatus()),
+                ErrorCode.OPERATION_ERROR, "当前任务不在等待确认状态");
+        ThrowUtils.throwIf(StrUtil.isBlank(planHash), ErrorCode.PARAMS_ERROR, "计划确认哈希不能为空");
+        AgentPlan plan = workflowPlanService.confirm(job, planHash, AiCallContext.ofJob(
+                job.getAppId(), loginUser.getId(), "workflow-plan", job.getId()));
+        ThrowUtils.throwIf(jobMapper.confirmPlan(jobId, plan.getPlanHash(), loginUser.getId()) != 1,
+                ErrorCode.OPERATION_ERROR, "计划确认已失效，请刷新后重试");
+        eventService.append(jobId, "plan_confirmed", "CONFIRMED",
+                java.util.Map.of("planHash", plan.getPlanHash(), "confirmedBy", loginUser.getId()));
+        jobQueue.schedule(jobId, 0);
+        return toVO(requireJob(jobId));
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public GenerationJobVO revisePlan(Long jobId, String planHash, String comment,
+                                      User loginUser) {
+        GenerationJob job = getAuthorized(jobId, loginUser);
+        ThrowUtils.throwIf(!GenerationJobStatusEnum.WAITING_CONFIRMATION.getValue()
+                        .equals(job.getStatus()),
+                ErrorCode.OPERATION_ERROR, "当前任务不在等待确认状态");
+        GenerationJobCreateRequest request = readCreateRequest(job);
+        AgentPlan revised = workflowPlanService.revise(job, planHash, comment, request,
+                AiCallContext.ofJob(job.getAppId(), loginUser.getId(),
+                        "workflow-revise", jobId));
+        ThrowUtils.throwIf(jobMapper.replaceWaitingPlan(jobId, revised.getPlanHash()) != 1,
+                ErrorCode.OPERATION_ERROR, "计划修改失败，请重试");
+        eventService.append(jobId, "plan_revised", "CONFIRMATION",
+                java.util.Map.of("planHash", revised.getPlanHash(),
+                        "planVersion", revised.getPlanVersion()));
+        return toVO(requireJob(jobId));
+    }
+
+    public AgentPlan getLatestPlan(Long jobId, User loginUser) {
+        getAuthorized(jobId, loginUser);
+        return workflowPlanService.findLatest(jobId);
+    }
+
+    public List<AgentStep> listSteps(Long jobId, User loginUser) {
+        getAuthorized(jobId, loginUser);
+        return workflowPlanService.listSteps(jobId);
+    }
+
+    public List<AgentToolCall> listToolCalls(Long jobId, User loginUser) {
+        getAuthorized(jobId, loginUser);
+        return workflowPlanService.listToolCalls(jobId);
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    public GenerationJobVO retryStep(Long jobId, String stepKey, User loginUser) {
+        GenerationJob job = getAuthorized(jobId, loginUser);
+        ThrowUtils.throwIf(!GenerationJobStatusEnum.FAILED.getValue().equals(job.getStatus())
+                        && !GenerationJobStatusEnum.PAUSED.getValue().equals(job.getStatus()),
+                ErrorCode.OPERATION_ERROR, "任务未处于失败或暂停状态");
+        workflowPlanService.resetStep(jobId, stepKey);
+        if (GenerationJobStatusEnum.FAILED.getValue().equals(job.getStatus())) {
+            ThrowUtils.throwIf(jobMapper.requeueFailed(jobId) != 1,
+                    ErrorCode.OPERATION_ERROR, "重试任务失败");
+        } else {
+            ThrowUtils.throwIf(jobMapper.resumePaused(jobId) != 1,
+                    ErrorCode.OPERATION_ERROR, "继续任务失败");
+        }
+        eventService.append(jobId, "step_retry_requested", "RETRY_REQUESTED",
+                java.util.Map.of("stepKey", stepKey));
+        appService.updateGenerateStatus(job.getAppId(),
+                AppGenerateStatusEnum.GENERATING.getValue());
+        jobQueue.schedule(jobId, 0);
         return toVO(requireJob(jobId));
     }
 
@@ -296,6 +600,13 @@ public class GenerationJobService {
         return jobMapper.selectCountByQuery(QueryWrapper.create()
                 .eq("id", jobId)
                 .eq("status", GenerationJobStatusEnum.CANCEL_REQUESTED.getValue())) == 1;
+    }
+
+    public boolean isPauseRequested(Long jobId) {
+        ThrowUtils.throwIf(jobId == null || jobId <= 0, ErrorCode.PARAMS_ERROR);
+        return jobMapper.selectCountByQuery(QueryWrapper.create()
+                .eq("id", jobId)
+                .eq("status", GenerationJobStatusEnum.PAUSE_REQUESTED.getValue())) == 1;
     }
 
     @Transactional(rollbackFor = Exception.class)
@@ -381,6 +692,9 @@ public class GenerationJobService {
         ThrowUtils.throwIf(CodeGenTypeEnum.getEnumByValue(type) == null,
                 ErrorCode.PARAMS_ERROR, "不支持的生成类型");
         request.setCodeGenType(type);
+        if (StrUtil.isBlank(request.getProjectTemplateId())) {
+            request.setProjectTemplateId(app.getProjectTemplateId());
+        }
         StackProfile profile = stackProfiles.resolve(request.getStackProfileId(),
                 CodeGenTypeEnum.getEnumByValue(type));
         request.setStackProfileId(profile.id());
@@ -397,6 +711,11 @@ public class GenerationJobService {
         ThrowUtils.throwIf(AppVisibilityEnum.getEnumByValue(visibility) == null,
                 ErrorCode.PARAMS_ERROR, "可见范围不合法");
         request.setVisibility(visibility);
+        request.setWorkflowVersion(normalizeWorkflowVersion(request.getWorkflowVersion()));
+    }
+
+    private int normalizeWorkflowVersion(Integer requested) {
+        return requested != null && requested == 1 ? 1 : 2;
     }
 
     private String hashRequest(GenerationJobCreateRequest request) {
@@ -429,6 +748,10 @@ public class GenerationJobService {
         vo.setAppId(job.getAppId());
         vo.setRequestedBy(job.getRequestedBy());
         vo.setRequestType(job.getRequestType());
+        vo.setWorkflowVersion(job.getWorkflowVersion());
+        vo.setConfirmedPlanHash(job.getConfirmedPlanHash());
+        vo.setConfirmedAt(job.getConfirmedAt());
+        vo.setConfirmedBy(job.getConfirmedBy());
         vo.setStatus(job.getStatus());
         vo.setCurrentStage(job.getCurrentStage());
         vo.setCodeGenType(job.getCodeGenType());

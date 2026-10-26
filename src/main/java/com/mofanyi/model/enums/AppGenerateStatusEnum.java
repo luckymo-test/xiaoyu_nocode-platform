@@ -12,6 +12,7 @@ public enum AppGenerateStatusEnum {
     NOT_GENERATED("未生成", "not_generated"),
     GENERATING("生成中", "generating"),
     DONE("已完成", "done"),
+    PAUSED("已暂停", "paused"),
     STOPPED("已停止", "stopped"),
     FAILED("失败", "failed");
 

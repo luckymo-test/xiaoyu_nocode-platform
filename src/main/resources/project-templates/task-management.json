@@ -1,0 +1,75 @@
+{
+  "id": "task-management",
+  "displayName": "任务管理",
+  "description": "项目、任务、负责人、状态、优先级和评论组成的团队任务板。",
+  "initialPrompt": "做一个任务管理应用，支持项目、任务、负责人、状态、优先级和评论，团队成员可以更新任务，访客只能查看。",
+  "visualTemplate": "saas-product",
+  "schema": {
+    "projectTemplateId": "task-management",
+    "backendRuntime": "PLATFORM_DATA_API",
+    "seedDataPolicy": "TEMPLATE_DEMO",
+    "pages": [
+      {"key": "board", "title": "任务看板", "purpose": "按状态查看和推进任务"},
+      {"key": "projects", "title": "项目", "purpose": "管理项目分组"}
+    ],
+    "routes": [
+      {"path": "/", "pageKey": "board", "access": "VIEWER"},
+      {"path": "/projects", "pageKey": "projects", "access": "MEMBER"}
+    ],
+    "models": [
+      {
+        "name": "projects",
+        "fields": [
+          {"name": "title", "type": "string", "required": true, "unique": false},
+          {"name": "description", "type": "string", "required": false, "unique": false},
+          {"name": "status", "type": "string", "required": true, "unique": false}
+        ],
+        "relations": []
+      },
+      {
+        "name": "tasks",
+        "fields": [
+          {"name": "projectId", "type": "reference", "required": true, "unique": false},
+          {"name": "title", "type": "string", "required": true, "unique": false},
+          {"name": "assignee", "type": "string", "required": false, "unique": false},
+          {"name": "status", "type": "string", "required": true, "unique": false},
+          {"name": "priority", "type": "string", "required": true, "unique": false},
+          {"name": "dueDate", "type": "date", "required": false, "unique": false}
+        ],
+        "relations": [{"type": "many-to-one", "model": "projects", "field": "projectId"}]
+      },
+      {
+        "name": "comments",
+        "fields": [
+          {"name": "taskId", "type": "reference", "required": true, "unique": false},
+          {"name": "author", "type": "string", "required": true, "unique": false},
+          {"name": "content", "type": "string", "required": true, "unique": false}
+        ],
+        "relations": [{"type": "many-to-one", "model": "tasks", "field": "taskId"}]
+      }
+    ],
+    "roles": [
+      {"name": "OWNER", "description": "项目所有者"},
+      {"name": "ADMIN", "description": "管理员"},
+      {"name": "MEMBER", "description": "团队成员"},
+      {"name": "VIEWER", "description": "只读访客"}
+    ],
+    "permissions": [
+      {"role": "OWNER", "model": "*", "actions": ["READ", "CREATE", "UPDATE", "DELETE"]},
+      {"role": "ADMIN", "model": "*", "actions": ["READ", "CREATE", "UPDATE", "DELETE"]},
+      {"role": "MEMBER", "model": "*", "actions": ["READ", "CREATE", "UPDATE"]},
+      {"role": "VIEWER", "model": "*", "actions": ["READ"]},
+      {"role": "CLIENT", "model": "*", "actions": ["READ"]}
+    ],
+    "apiActions": [
+      {"model": "projects", "action": "DELETE", "allowedRoles": ["OWNER", "ADMIN"], "ownership": "ANY"},
+      {"model": "tasks", "action": "DELETE", "allowedRoles": ["OWNER", "ADMIN"], "ownership": "ANY"}
+    ],
+    "seedData": [
+      {"model": "projects", "data": {"id": "demo-project", "title": "官网改版", "description": "整理首页信息架构并完成新版发布", "status": "ACTIVE"}},
+      {"model": "tasks", "data": {"id": "demo-task-1", "projectId": "demo-project", "title": "完成首页视觉稿", "assignee": "林夏", "status": "DOING", "priority": "HIGH", "dueDate": "2026-11-02"}},
+      {"model": "tasks", "data": {"id": "demo-task-2", "projectId": "demo-project", "title": "补充移动端适配", "assignee": "周宁", "status": "TODO", "priority": "MEDIUM", "dueDate": "2026-11-05"}},
+      {"model": "comments", "data": {"id": "demo-comment-1", "taskId": "demo-task-1", "author": "项目经理", "content": "首屏标题需要保留可读性。"}}
+    ]
+  }
+}

@@ -39,6 +39,18 @@ public class GenerationJob implements Serializable {
     @Column("requestType")
     private String requestType;
 
+    @Column("workflowVersion")
+    private Integer workflowVersion;
+
+    @Column("confirmedPlanHash")
+    private String confirmedPlanHash;
+
+    @Column("confirmedAt")
+    private LocalDateTime confirmedAt;
+
+    @Column("confirmedBy")
+    private Long confirmedBy;
+
     @Column("idempotencyKey")
     private String idempotencyKey;
 

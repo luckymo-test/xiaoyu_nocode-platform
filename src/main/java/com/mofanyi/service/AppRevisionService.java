@@ -160,6 +160,75 @@ public class AppRevisionService {
         return toVO(revision, true);
     }
 
+    /**
+     * Creates an immutable revision from the current live tree after a manual
+     * editor save. The caller restores the edited file if this CAS fails.
+     */
+    public AppRevision createManualRevision(App app, Long userId, String summary) {
+        ThrowUtils.throwIf(app == null || app.getId() == null || userId == null,
+                ErrorCode.PARAMS_ERROR);
+        CodeGenTypeEnum type = CodeGenTypeEnum.getEnumByValue(app.getCodeGenType());
+        ThrowUtils.throwIf(type == null, ErrorCode.OPERATION_ERROR, "未知生成类型");
+        long revisionNo = revisionMapper.nextRevisionNo(app.getId()) + 1;
+        LocalDateTime now = LocalDateTime.now();
+        AppRevision revision = AppRevision.builder()
+                .workspaceId(app.getWorkspaceId())
+                .appId(app.getId())
+                .revisionNo(revisionNo)
+                .baseRevisionId(app.getCurrentRevision())
+                .status(STATUS_CREATED)
+                .codeGenType(app.getCodeGenType())
+                .sourceUri("pending://manual-" + app.getId() + "-" + revisionNo)
+                .validationStatus("MANUAL_EDIT")
+                .createdBy(userId)
+                .createTime(now)
+                .updateTime(now)
+                .build();
+        revisionMapper.insertSelective(revision);
+
+        Path live = Path.of(codeFileWriteService.getLiveProjectDir(type, app.getId()));
+        Path source = Path.of(codeFileWriteService.getTmpRoot(), "apps",
+                        String.valueOf(app.getId()), "revisions",
+                        String.valueOf(revision.getId()), "source")
+                .toAbsolutePath().normalize();
+        FileUtil.del(source.toFile());
+        FileUtil.mkdir(source.toFile());
+        workspaceManager.copyTree(live, source, true);
+        revision.setSourceUri(source.toUri().toString());
+
+        ArtifactStore.StoredArtifact tree = artifactStore.treeArtifact(source);
+        artifactMapper.insertSelective(AppArtifact.builder()
+                .revisionId(revision.getId())
+                .appId(app.getId())
+                .workspaceId(app.getWorkspaceId())
+                .artifactType("SOURCE_TREE")
+                .scope("PROJECT")
+                .ownerId(userId)
+                .visibility(app.getVisibility())
+                .uri(tree.uri())
+                .sha256(tree.sha256())
+                .sizeBytes(tree.sizeBytes())
+                .mimeType(tree.mimeType())
+                .metadata("{}")
+                .createTime(now)
+                .build());
+        revision.setManifest("{\"changeSummary\":\"" + escapeJson(summary)
+                + "\",\"artifact\":\"sha256:" + tree.sha256() + "\"}");
+        revisionMapper.update(revision);
+
+        int updated = appMapper.compareAndSetCurrentRevision(
+                app.getId(), app.getCurrentRevision(), revision.getId());
+        if (updated != 1) {
+            artifactMapper.deleteByQuery(QueryWrapper.create()
+                    .eq("revisionId", revision.getId()));
+            revisionMapper.deleteById(revision.getId());
+            FileUtil.del(source.getParent().toFile());
+            throw new IllegalStateException("VERSION_CONFLICT：当前版本已被其他操作更新");
+        }
+        publishMarkers(revision);
+        return revision;
+    }
+
     public List<AppRevisionVO> list(Long appId, boolean includeArtifacts) {
         ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
         return revisionMapper.selectListByQuery(QueryWrapper.create()
@@ -192,17 +261,27 @@ public class AppRevisionService {
         for (Map.Entry<String, String> entry : fromFiles.entrySet()) {
             String targetHash = toFiles.get(entry.getKey());
             if (targetHash == null) {
+                String oldContent = readCapped(from, entry.getKey());
                 changes.put(entry.getKey(), new AppRevisionDiffVO.FileChange(
-                        entry.getKey(), "DELETED", entry.getValue(), null));
+                        entry.getKey(), "DELETED", entry.getValue(), null,
+                        unifiedDiff(entry.getKey(), oldContent, ""),
+                        0, lineCount(oldContent)));
             } else if (!entry.getValue().equals(targetHash)) {
+                String oldContent = readCapped(from, entry.getKey());
+                String newContent = readCapped(to, entry.getKey());
                 changes.put(entry.getKey(), new AppRevisionDiffVO.FileChange(
-                        entry.getKey(), "MODIFIED", entry.getValue(), targetHash));
+                        entry.getKey(), "MODIFIED", entry.getValue(), targetHash,
+                        unifiedDiff(entry.getKey(), oldContent, newContent),
+                        lineCount(newContent), lineCount(oldContent)));
             }
         }
         for (Map.Entry<String, String> entry : toFiles.entrySet()) {
             if (!fromFiles.containsKey(entry.getKey())) {
+                String newContent = readCapped(to, entry.getKey());
                 changes.put(entry.getKey(), new AppRevisionDiffVO.FileChange(
-                        entry.getKey(), "ADDED", null, entry.getValue()));
+                        entry.getKey(), "ADDED", null, entry.getValue(),
+                        unifiedDiff(entry.getKey(), "", newContent),
+                        lineCount(newContent), 0));
             }
         }
         diff.setFiles(new ArrayList<>(changes.values()));
@@ -532,6 +611,40 @@ public class AppRevisionService {
         } catch (IOException e) {
             throw new IllegalStateException("读取版本文件树失败: " + root, e);
         }
+    }
+
+    private String readCapped(AppRevision revision, String path) {
+        try {
+            Path root = Path.of(URI.create(revision.getSourceUri()));
+            Path file = root.resolve(path).normalize();
+            if (!file.startsWith(root) || !Files.isRegularFile(file)) {
+                return "";
+            }
+            return StrUtil.maxLength(Files.readString(file), 20_000);
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    private String unifiedDiff(String path, String before, String after) {
+        StringBuilder diff = new StringBuilder("--- a/").append(path)
+                .append("\n+++ b/").append(path).append('\n');
+        for (String line : before.split("\\R", -1)) {
+            diff.append('-').append(StrUtil.maxLength(line, 1_000)).append('\n');
+        }
+        for (String line : after.split("\\R", -1)) {
+            diff.append('+').append(StrUtil.maxLength(line, 1_000)).append('\n');
+        }
+        return StrUtil.maxLength(diff.toString(), 20_000);
+    }
+
+    private int lineCount(String value) {
+        return value == null || value.isEmpty() ? 0 : value.split("\\R", -1).length;
+    }
+
+    private String escapeJson(String value) {
+        return value == null ? "" : value.replace("\\", "\\\\")
+                .replace("\"", "\\\"").replace("\n", "\\n");
     }
 
     private List<String> readSkillIds(String json) {
