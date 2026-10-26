@@ -144,7 +144,11 @@ public class WorkflowPlanService {
                             + "\n【架构】\n" + plan.getArchitectureJson()
                             + "\n【UI】\n" + plan.getUiJson(),
                     context, 3_000);
-            validateExecutionPlan(execution);
+            try {
+                validateExecutionPlan(execution);
+            } catch (IllegalStateException invalidPlan) {
+                execution = fallbackExecutionPlan();
+            }
             plan.setExecutionPlanJson(execution.toString());
             plan.setStatus("CONFIRMED");
             plan.setConfirmedAt(LocalDateTime.now());
@@ -370,15 +374,54 @@ public class WorkflowPlanService {
 
     private void validateExecutionPlan(JsonNode execution) {
         JsonNode tasks = execution.path("tasks");
-        if (!tasks.isArray() || tasks.isEmpty()) {
+        if (!tasks.isArray() || tasks.size() != 3) {
             throw new IllegalStateException("Planner 未生成任务 DAG");
         }
-        for (JsonNode task : tasks) {
-            String agent = task.path("agentType").asText();
-            if (!List.of("CODER", "REVIEWER", "DEPLOY").contains(agent)) {
-                throw new IllegalStateException("Planner 返回了不支持的 Agent 类型：" + agent);
+        String[] keys = {"code-project", "review-project", "deploy-project"};
+        String[] agents = {"CODER", "REVIEWER", "DEPLOY"};
+        for (int i = 0; i < keys.length; i++) {
+            JsonNode task = tasks.get(i);
+            if (!keys[i].equals(task.path("key").asText())
+                    || !agents[i].equals(task.path("agentType").asText())) {
+                throw new IllegalStateException("Planner DAG 与执行器契约不一致");
+            }
+            if (i > 0) {
+                JsonNode dependencies = task.path("dependencies");
+                if (!dependencies.isArray() || dependencies.size() != 1
+                        || !keys[i - 1].equals(dependencies.get(0).asText())) {
+                    throw new IllegalStateException("Planner DAG 依赖链不完整");
+                }
             }
         }
+    }
+
+    private JsonNode fallbackExecutionPlan() {
+        var root = objectMapper.createObjectNode();
+        var tasks = root.putArray("tasks");
+        tasks.add(executionTask("code-project", "按已确认方案生成项目源码", "CODER",
+                List.of(), List.of("源码写入隔离工作区", "文件引用完整"),
+                List.of("editFile", "writeFile", "writeFileChunk", "readFile", "finish")));
+        tasks.add(executionTask("review-project", "执行构建、渲染与安全检查", "REVIEWER",
+                List.of("code-project"), List.of("构建成功", "三档视口无阻断问题"),
+                List.of("buildProject", "testProject")));
+        tasks.add(executionTask("deploy-project", "建立不可变版本与发布产物", "DEPLOY",
+                List.of("review-project"), List.of("Revision 固化", "发布目录原子切换"),
+                List.of("createPreview", "publishRevision")));
+        return root;
+    }
+
+    private JsonNode executionTask(String key, String title, String agent,
+                                   List<String> dependencies,
+                                   List<String> acceptance,
+                                   List<String> allowedTools) {
+        var task = objectMapper.createObjectNode();
+        task.put("key", key);
+        task.put("title", title);
+        task.put("agentType", agent);
+        task.set("dependencies", objectMapper.valueToTree(dependencies));
+        task.set("acceptanceCriteria", objectMapper.valueToTree(acceptance));
+        task.set("allowedTools", objectMapper.valueToTree(allowedTools));
+        return task;
     }
 
     private String hash(String value) {

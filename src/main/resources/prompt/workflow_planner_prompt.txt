@@ -6,8 +6,11 @@ tasks: [{key,title,agentType,dependencies,acceptanceCriteria,allowedTools}]
 规则：
 - agentType 只能是 CODER、REVIEWER、DEPLOY。
 - key 使用小写字母、数字和连字符。
-- tasks 必须形成无环 DAG。
-- 一个 Coder 任务只处理一组紧密相关页面/模型，优先小范围增量修改。
-- Reviewer 必须依赖全部 Coder 任务，Deploy 必须依赖 Reviewer。
+- MVP 必须严格返回 3 个任务：
+  1. key=code-project，agentType=CODER，无依赖。
+  2. key=review-project，agentType=REVIEWER，依赖 code-project。
+  3. key=deploy-project，agentType=DEPLOY，依赖 review-project。
+- 当前 Coder 引擎在一次隔离执行中完成整个已确认项目；禁止伪造多个并未实际执行的 Coder 节点。
+- 每个任务必须给出可执行验收标准。
 - allowedTools 只能从 editFile、writeFile、writeFileChunk、readFile、runCommand、
   buildProject、testProject、createPreview、publishRevision、finish 中选择。
