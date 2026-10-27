@@ -6,11 +6,15 @@ import com.mofanyi.ai.reasoning.ReasoningProfileRegistry;
 import com.mofanyi.exception.BusinessException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.boot.test.context.runner.ApplicationContextRunner;
+import org.springframework.context.annotation.Configuration;
 
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -60,5 +64,40 @@ class ReasoningProfileRegistryTest {
     void rejectsUnknownLevel() {
         ReasoningProfileRegistry registry = new ReasoningProfileRegistry();
         assertThrows(BusinessException.class, () -> registry.parseLevel("turbo"));
+    }
+
+    @Test
+    @DisplayName("Spring Boot 能绑定 kebab-case 的 thinking-enabled 配置")
+    void bindsKebabCaseProperties() {
+        new ApplicationContextRunner()
+                .withUserConfiguration(PropertiesConfiguration.class)
+                .withPropertyValues(
+                        "codegen.reasoning.default-level=eco",
+                        "codegen.reasoning.profiles.fast.thinking-enabled=false",
+                        "codegen.reasoning.profiles.fast.max-steps=16",
+                        "codegen.reasoning.profiles.fast.max-loop-tokens=1000000",
+                        "codegen.reasoning.profiles.fast.repair-rounds=1",
+                        "codegen.reasoning.profiles.fast.max-output-tokens=32768",
+                        "codegen.reasoning.profiles.fast.model=deepseek-flash",
+                        "codegen.reasoning.profiles.fast.max-duration-seconds=600")
+                .run(context -> {
+                    ReasoningProfileRegistry registry =
+                            context.getBean(ReasoningProfileRegistry.class);
+                    ReasoningProfile fast = registry.resolve(ReasoningLevel.FAST);
+                    assertEquals(ReasoningLevel.ECO, registry.defaultReasoningLevel());
+                    assertFalse(fast.thinkingEnabled());
+                    assertFalse(fast.isThinkingEnabled());
+                    assertNull(fast.effort());
+                    assertNull(fast.getEffort());
+                    assertEquals(16, fast.maxSteps());
+                    assertEquals(16, fast.getMaxSteps());
+                    assertEquals(1_000_000, fast.maxLoopTokens());
+                    assertEquals(1_000_000, fast.getMaxLoopTokens());
+                });
+    }
+
+    @Configuration(proxyBeanMethods = false)
+    @EnableConfigurationProperties(ReasoningProfileRegistry.class)
+    static class PropertiesConfiguration {
     }
 }
