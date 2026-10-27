@@ -199,6 +199,31 @@ class GenerationJobServiceTest {
         assertTrue(service.isCancelRequested(9003L));
     }
 
+    @Test
+    @DisplayName("按 App 返回最近 Job，供刷新和断线后恢复失败态")
+    void returnsLatestJobForAuthorizedApp() {
+        GenerationJob latest = GenerationJob.builder()
+                .id(9010L)
+                .workspaceId(WORKSPACE_ID)
+                .appId(APP_ID)
+                .requestedBy(USER_ID)
+                .status("FAILED")
+                .currentStage("FAILED")
+                .errorType("BUSINESS")
+                .errorMessage("build failed")
+                .createTime(LocalDateTime.now())
+                .updateTime(LocalDateTime.now())
+                .build();
+        when(jobMapper.selectOneByQuery(any())).thenReturn(latest);
+
+        GenerationJobVO result = service.getLatestForApp(APP_ID, user);
+
+        assertEquals(9010L, result.getJobId());
+        assertEquals("FAILED", result.getStatus());
+        assertEquals("build failed", result.getErrorMessage());
+        verify(workspaceService).requireMember(WORKSPACE_ID, USER_ID);
+    }
+
     private GenerationJobCreateRequest request() {
         GenerationJobCreateRequest request = new GenerationJobCreateRequest();
         request.setMessage("生成一个摄影网站");

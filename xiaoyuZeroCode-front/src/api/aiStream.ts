@@ -92,11 +92,13 @@ function streamGenerationJob(
       })
       eventSource.addEventListener('completed', (event) => {
         const result = parsePayload(event) as API.AiCodeGenResultVO
+        callbacks.onWorkflowEvent?.('completed', result)
         callbacks.onDone?.(result)
         close()
       })
       eventSource.addEventListener('failed', (event) => {
         const payload = parsePayload(event) as { message?: string } | string
+        callbacks.onWorkflowEvent?.('failed', payload)
         callbacks.onError?.(
           typeof payload === 'string' ? payload : payload?.message || '生成失败',
         )
@@ -104,6 +106,7 @@ function streamGenerationJob(
       })
       eventSource.addEventListener('cancelled', (event) => {
         const payload = parsePayload(event) as { message?: string } | string
+        callbacks.onWorkflowEvent?.('cancelled', payload)
         callbacks.onError?.(
           typeof payload === 'string' ? payload : payload?.message || '用户取消生成',
         )
@@ -173,11 +176,23 @@ export function subscribeJobEvents(
     const payload = parsePayload(event) as { url?: string }
     if (payload.url) callbacks.onDeployed?.(payload.url)
   })
-  source.addEventListener('completed', () => close())
+  source.addEventListener('completed', () => {
+    callbacks.onWorkflowEvent?.('completed', null)
+    close()
+  })
   source.addEventListener('failed', (event) => {
     const payload = parsePayload(event) as { message?: string } | string
+    callbacks.onWorkflowEvent?.('failed', payload)
     callbacks.onError?.(
       typeof payload === 'string' ? payload : payload?.message || '任务失败',
+    )
+    close()
+  })
+  source.addEventListener('cancelled', (event) => {
+    const payload = parsePayload(event) as { message?: string } | string
+    callbacks.onWorkflowEvent?.('cancelled', payload)
+    callbacks.onError?.(
+      typeof payload === 'string' ? payload : payload?.message || '任务已取消',
     )
     close()
   })

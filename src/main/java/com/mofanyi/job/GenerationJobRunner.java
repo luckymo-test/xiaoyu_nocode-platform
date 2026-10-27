@@ -394,8 +394,10 @@ public class GenerationJobRunner {
         appendQuietly(job, "failed", "FAILED", payload);
         deadLetterService.record(job, errorType, errorMessage);
         metrics.failed();
-        jobService.finish(job, GenerationJobStatusEnum.FAILED.getValue(),
-                "FAILED", errorType, errorMessage);
+        if (jobService.finish(job, GenerationJobStatusEnum.FAILED.getValue(),
+                "FAILED", errorType, errorMessage)) {
+            agentOrchestrator.markFailed(job, errorType, errorMessage);
+        }
         modelExecutionTrace.clear(job.getId());
     }
 

@@ -413,6 +413,21 @@ public class GenerationJobService {
         return toVO(getAuthorized(jobId, loginUser));
     }
 
+    public GenerationJobVO getLatestForApp(Long appId, User loginUser) {
+        ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
+        ThrowUtils.throwIf(loginUser == null || loginUser.getId() == null,
+                ErrorCode.NOT_LOGIN_ERROR);
+        App app = appAuthService.requireCanGenerate(appId, loginUser);
+        workspaceService.requireMember(app.getWorkspaceId(), loginUser.getId());
+        GenerationJob latest = jobMapper.selectOneByQuery(QueryWrapper.create()
+                .eq("appId", appId)
+                .eq("requestType", REQUEST_GENERATE)
+                .orderBy("createTime", false)
+                .orderBy("id", false)
+                .limit(1));
+        return latest == null ? null : toVO(latest);
+    }
+
     public GenerationJob requireJob(Long jobId) {
         ThrowUtils.throwIf(jobId == null || jobId <= 0, ErrorCode.PARAMS_ERROR);
         GenerationJob job = jobMapper.selectOneById(jobId);

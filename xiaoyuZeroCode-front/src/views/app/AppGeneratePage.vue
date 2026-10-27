@@ -53,7 +53,11 @@ import type { SseCallbacks, SseConnection } from '@/utils/sse'
 import { useUserStore } from '@/stores/user'
 import MarkdownView from '@/components/MarkdownView.vue'
 import WorkflowPanel from '@/components/WorkflowPanel.vue'
-import { cancelGeneration } from '@/api/workflow'
+import {
+  cancelGeneration,
+  getGenerationJob,
+  getLatestGenerationJob,
+} from '@/api/workflow'
 import { getAppFile, listAppFiles, saveAppFile, type AppFileNode } from '@/api/appFiles'
 import { issuePreviewToken } from '@/api/preview'
 import { generateStatusText } from '@/utils/appStatus'
@@ -201,6 +205,9 @@ const msgListRef = ref<HTMLElement | null>(null)
 let connection: SseConnection | null = null
 let generationRecoveryTimer: number | null = null
 let generationRecoveryToken = 0
+let jobStatusWatchTimer: number | null = null
+let jobStatusWatchToken = 0
+let watchedJobId = ''
 
 const isMultiFile = computed(() => app.value?.codeGenType === 'multi_file')
 const isVue = computed(() => app.value?.codeGenType === 'vue')
@@ -1013,6 +1020,61 @@ const stopGenerationRecovery = () => {
   }
 }
 
+const stopJobStatusWatch = () => {
+  jobStatusWatchToken++
+  watchedJobId = ''
+  if (jobStatusWatchTimer !== null) {
+    window.clearInterval(jobStatusWatchTimer)
+    jobStatusWatchTimer = null
+  }
+}
+
+const isActiveJobStatus = (status?: string) =>
+  ['QUEUED', 'RUNNING', 'WAITING_RETRY', 'WAITING_CONFIRMATION',
+    'PAUSE_REQUESTED', 'PAUSED'].includes(status ?? '')
+
+const finishGenerationFromJob = (
+  pendingMessage: ChatMessage,
+  status: string,
+  errorMessage?: string,
+) => {
+  pendingMessage.status = 'error'
+  pendingMessage.content = friendlyError(
+    errorMessage || (status === 'CANCELLED' ? '生成已取消' : '后台生成失败，请重试'),
+  )
+  previewLoading.value = false
+  generating.value = false
+  generationDone.value = true
+  genProgress.value = ''
+  stopGenerationRecovery()
+  stopJobStatusWatch()
+}
+
+const startJobStatusWatch = (jobId: string, pendingMessage: ChatMessage) => {
+  stopJobStatusWatch()
+  watchedJobId = jobId
+  const token = jobStatusWatchToken
+  jobStatusWatchTimer = window.setInterval(async () => {
+    if (token !== jobStatusWatchToken || watchedJobId !== jobId) return
+    try {
+      const res = await getGenerationJob(jobId)
+      const snapshot = res.data?.code === 0 ? res.data.data : null
+      if (!snapshot || isActiveJobStatus(snapshot.status)) return
+      workflowRefreshKey.value++
+      if (snapshot.status === 'SUCCEEDED') {
+        stopJobStatusWatch()
+        startGenerationRecovery(pendingMessage)
+        return
+      }
+      if (snapshot.status === 'FAILED' || snapshot.status === 'CANCELLED') {
+        finishGenerationFromJob(pendingMessage, snapshot.status, snapshot.errorMessage)
+      }
+    } catch {
+      // Retry on the next tick; recovery also polls the persisted Job.
+    }
+  }, 5000)
+}
+
 /**
  * SSE 断开不代表后台生成失败。通过应用状态轮询等待任务结束后重新拉取产物，
  * 避免长任务因代理/浏览器连接上限断开后，页面永久停在“生成中”。
@@ -1037,6 +1099,34 @@ const startGenerationRecovery = (pendingMessage: ChatMessage) => {
     genProgress.value = ''
   }
 
+  const recoverResult = async () => {
+    const codeRes = await getAppCode({ id: appId.value as unknown as number })
+    const result = codeRes.data?.data
+    if (!result) return false
+    stopGenerationRecovery()
+    pendingMessage.status = 'done'
+    pendingMessage.content = result.description || '生成已完成，连接中断后已自动恢复结果'
+    const finalFiles = filesFromResult(result)
+    pendingMessage.files = finalFiles
+    previewFiles.value = finalFiles
+    if (finalFiles.length > 0) {
+      selectedFilePath.value = finalFiles[0].path
+    }
+    previewLoading.value = false
+    generating.value = false
+    genProgress.value = ''
+    generationDone.value = true
+    if (isVue.value) {
+      vueProgress.value = `已生成 ${finalFiles.length} 个文件`
+      await loadVuePreview()
+    } else {
+      previewDoc.value = buildPreviewDoc(result)
+      previewMode.value = 'web'
+    }
+    message.success('后台生成已完成，结果已恢复')
+    return true
+  }
+
   const schedule = () => {
     if (token !== generationRecoveryToken || attempts >= maxAttempts) return
     generationRecoveryTimer = window.setTimeout(checkStatus, 3000)
@@ -1051,6 +1141,37 @@ const startGenerationRecovery = (pendingMessage: ChatMessage) => {
     }
     attempts++
     try {
+      let activeJobId = currentJobId.value
+      if (!activeJobId) {
+        const latestRes = await getLatestGenerationJob(appId.value)
+        const latestJob = latestRes.data?.code === 0 ? latestRes.data.data : null
+        if (latestJob) {
+          currentJobId.value = latestJob.jobId
+          workflowRefreshKey.value++
+          activeJobId = latestJob.jobId
+        }
+      }
+      if (activeJobId) {
+        const jobRes = await getGenerationJob(activeJobId)
+        const snapshot = jobRes.data?.code === 0 ? jobRes.data.data : null
+        if (snapshot && isActiveJobStatus(snapshot.status)) {
+          schedule()
+          return
+        }
+        if (snapshot?.status === 'SUCCEEDED') {
+          if (await recoverResult()) return
+          schedule()
+          return
+        }
+        if (snapshot?.status === 'FAILED' || snapshot?.status === 'CANCELLED') {
+          stopGenerationRecovery()
+          finishWithError(snapshot.errorMessage
+            || (snapshot.status === 'CANCELLED' ? '生成已取消' : '后台生成失败，请重试'))
+          workflowRefreshKey.value++
+          return
+        }
+      }
+
       const latestRes = await getAppVoById({ id: appId.value as unknown as number })
       const latestApp = latestRes.data?.data
       if (latestApp) app.value = latestApp
@@ -1101,6 +1222,19 @@ const startGenerationRecovery = (pendingMessage: ChatMessage) => {
   schedule()
 }
 
+const restoreLatestJob = async () => {
+  try {
+    const res = await getLatestGenerationJob(appId.value)
+    const latestJob = res.data?.code === 0 ? res.data.data : null
+    if (latestJob) {
+      currentJobId.value = latestJob.jobId
+      workflowRefreshKey.value++
+    }
+  } catch {
+    // Older deployments may not expose the latest-job endpoint.
+  }
+}
+
 const loadApp = async () => {
   loading.value = true
   try {
@@ -1108,6 +1242,7 @@ const loadApp = async () => {
     if (res.data.code === 0 && res.data.data) {
       app.value = res.data.data
       const isOwner = app.value.userId === userStore.loginUser?.id
+      await restoreLatestJob()
       const records = await loadChatHistory()
       // 已有生成结果就加载产物：只按对话条数判断会让"已生成但只剩 1 条记录"的应用打开后工作区是空的
       const hasGeneratedCode = app.value?.generateStatus === 'done' || records.length >= 2
@@ -1311,6 +1446,7 @@ const sendMessage = async (text?: string, auto = false) => {
         onJobCreated: (job) => {
           currentJobId.value = job.jobId
           workflowRefreshKey.value++
+          startJobStatusWatch(job.jobId, aiMsg)
         },
         onWorkflowEvent: (eventType) => {
           workflowRefreshKey.value++
@@ -1348,6 +1484,7 @@ const sendMessage = async (text?: string, auto = false) => {
           finishVue()
         },
         onError: (errorMsg) => {
+          stopJobStatusWatch()
           aiMsg.content = friendlyError(errorMsg)
           aiMsg.status = 'error'
           vueProgress.value = ''
@@ -1357,9 +1494,11 @@ const sendMessage = async (text?: string, auto = false) => {
           generationDone.value = true
         },
         onConnectionLost: () => {
+          stopJobStatusWatch()
           startGenerationRecovery(aiMsg)
         },
         onClose: () => {
+          stopJobStatusWatch()
           generating.value = false
           genProgress.value = ''
         },
@@ -1440,6 +1579,7 @@ const sendMessage = async (text?: string, auto = false) => {
       onJobCreated: (job) => {
         currentJobId.value = job.jobId
         workflowRefreshKey.value++
+        startJobStatusWatch(job.jobId, aiMsg)
       },
       onWorkflowEvent: (eventType) => {
         workflowRefreshKey.value++
@@ -1476,6 +1616,7 @@ const sendMessage = async (text?: string, auto = false) => {
         finishAgent()
       },
       onError: (errorMsg) => {
+        stopJobStatusWatch()
         aiMsg.content = friendlyError(errorMsg)
         aiMsg.status = 'error'
         previewLoading.value = false
@@ -1484,9 +1625,11 @@ const sendMessage = async (text?: string, auto = false) => {
         generationDone.value = true
       },
       onConnectionLost: () => {
+        stopJobStatusWatch()
         startGenerationRecovery(aiMsg)
       },
       onClose: () => {
+        stopJobStatusWatch()
         generating.value = false
         genProgress.value = ''
       },
@@ -1802,6 +1945,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   stopGenerationRecovery()
+  stopJobStatusWatch()
   connection?.close()
   exitVisualEdit()
 })

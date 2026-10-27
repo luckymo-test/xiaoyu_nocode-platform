@@ -33,6 +33,10 @@ export interface GenerationJob {
   currentStage?: string
   workflowVersion?: number
   confirmedPlanHash?: string
+  errorType?: string
+  errorMessage?: string
+  createTime?: string
+  updateTime?: string
 }
 
 export interface AgentToolCall {
@@ -49,6 +53,13 @@ export interface AgentToolCall {
 export function getGenerationJob(jobId: string) {
   return request<{ code: number; data: GenerationJob; message: string }>(
     `/v1/generation-jobs/${jobId}`,
+    { method: 'GET' },
+  )
+}
+
+export function getLatestGenerationJob(appId: number | string) {
+  return request<{ code: number; data: GenerationJob | null; message: string }>(
+    `/v1/apps/${appId}/generation-jobs/latest`,
     { method: 'GET' },
   )
 }
@@ -98,6 +109,10 @@ export function resumeGeneration(jobId: string) {
 
 export function cancelGeneration(jobId: string) {
   return request(`/v1/generation-jobs/${jobId}/cancel`, { method: 'POST' })
+}
+
+export function retryGeneration(jobId: string) {
+  return request(`/v1/generation-jobs/${jobId}/retry`, { method: 'POST' })
 }
 
 export function retryGenerationStep(jobId: string, stepKey: string) {

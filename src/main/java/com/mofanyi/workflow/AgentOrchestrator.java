@@ -7,6 +7,7 @@ import com.mofanyi.mapper.GenerationJobMapper;
 import com.mofanyi.model.dto.job.GenerationJobCreateRequest;
 import com.mofanyi.model.enums.CodeGenTypeEnum;
 import com.mofanyi.service.GenerationJobEventService;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.util.Map;
@@ -16,6 +17,7 @@ import java.util.Map;
  * the existing Coder implementation remains shared with legacy jobs.
  */
 @Service
+@Slf4j
 public class AgentOrchestrator {
 
     private final WorkflowPlanService plans;
@@ -89,6 +91,18 @@ public class AgentOrchestrator {
     public void markPaused(GenerationJob job, String reason) {
         if (isWorkflow(job)) {
             plans.failRunning(job.getId(), "PAUSED", reason, true);
+        }
+    }
+
+    public void markFailed(GenerationJob job, String errorType, String errorMessage) {
+        if (!isWorkflow(job)) {
+            return;
+        }
+        try {
+            plans.failRunning(job.getId(), errorType, errorMessage, false);
+        } catch (RuntimeException e) {
+            // Job status is authoritative; a step audit failure must not keep it RUNNING.
+            log.warn("[workflow] 标记失败步骤异常，jobId={}", job.getId(), e);
         }
     }
 

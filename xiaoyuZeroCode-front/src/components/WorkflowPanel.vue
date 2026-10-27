@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import {
   PauseCircleOutlined,
   PlayCircleOutlined,
@@ -14,6 +14,7 @@ import {
   getGenerationTools,
   pauseGeneration,
   resumeGeneration,
+  retryGeneration,
   retryGenerationStep,
   reviseGenerationPlan,
   type AgentPlan,
@@ -53,11 +54,32 @@ const architecture = computed(() => parse(plan.value?.architectureJson))
 const ui = computed(() => parse(plan.value?.uiJson))
 const waiting = computed(() => job.value?.status === 'WAITING_CONFIRMATION')
 const paused = computed(() => job.value?.status === 'PAUSED')
+const failed = computed(() => job.value?.status === 'FAILED')
 const active = computed(() =>
-  ['RUNNING', 'PAUSE_REQUESTED', 'PAUSED', 'WAITING_CONFIRMATION'].includes(
+  ['QUEUED', 'RUNNING', 'WAITING_RETRY', 'PAUSE_REQUESTED', 'PAUSED', 'WAITING_CONFIRMATION'].includes(
     job.value?.status ?? '',
   ),
 )
+const terminal = computed(() =>
+  ['SUCCEEDED', 'FAILED', 'CANCELLED'].includes(job.value?.status ?? ''),
+)
+
+let pollTimer: number | null = null
+
+const stopPolling = () => {
+  if (pollTimer !== null) {
+    window.clearTimeout(pollTimer)
+    pollTimer = null
+  }
+}
+
+const schedulePolling = () => {
+  stopPolling()
+  if (!props.jobId || terminal.value) return
+  pollTimer = window.setTimeout(() => {
+    void load()
+  }, 3000)
+}
 
 const stringList = (value: unknown): string[] =>
   Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
@@ -76,24 +98,36 @@ const load = async () => {
     steps.value = []
     toolCalls.value = []
     job.value = null
+    stopPolling()
     return
   }
   loading.value = true
   try {
-    const [jobRes, planRes, stepsRes, toolsRes] = await Promise.all([
-      getGenerationJob(props.jobId),
+    try {
+      const jobRes = await getGenerationJob(props.jobId)
+      if (jobRes.data.code === 0) job.value = jobRes.data.data
+    } catch {
+      // Keep the last known Job; auxiliary endpoints must not hide its terminal state.
+    }
+    const [planResult, stepsResult, toolsResult] = await Promise.allSettled([
       getGenerationPlan(props.jobId),
       getGenerationSteps(props.jobId),
       getGenerationTools(props.jobId),
     ])
-    if (jobRes.data.code === 0) job.value = jobRes.data.data
-    if (planRes.data.code === 0) plan.value = planRes.data.data
-    if (stepsRes.data.code === 0) steps.value = stepsRes.data.data ?? []
-    if (toolsRes.data.code === 0) toolCalls.value = toolsRes.data.data ?? []
+    if (planResult.status === 'fulfilled' && planResult.value.data.code === 0) {
+      plan.value = planResult.value.data.data
+    }
+    if (stepsResult.status === 'fulfilled' && stepsResult.value.data.code === 0) {
+      steps.value = stepsResult.value.data.data ?? []
+    }
+    if (toolsResult.status === 'fulfilled' && toolsResult.value.data.code === 0) {
+      toolCalls.value = toolsResult.value.data.data ?? []
+    }
   } catch {
-    plan.value = null
+    // The Job request itself failed; retain any previously loaded terminal state.
   } finally {
     loading.value = false
+    schedulePolling()
   }
 }
 
@@ -178,15 +212,33 @@ const retryStep = async (step: AgentStep) => {
   }
 }
 
+const retryJob = async () => {
+  if (!props.jobId) return
+  action.value = 'retry-job'
+  try {
+    const res = await retryGeneration(props.jobId)
+    if (res.data.code !== 0) {
+      message.error(res.data.message || '任务重试失败')
+      return
+    }
+    message.success('已重新提交失败任务')
+    await load()
+    emit('changed')
+  } finally {
+    action.value = ''
+  }
+}
+
 watch(() => [props.jobId, props.refreshKey], load, { immediate: true })
+onUnmounted(stopPolling)
 </script>
 
 <template>
-  <section v-if="jobId && plan" class="workflow-panel">
+  <section v-if="jobId" class="workflow-panel">
     <div class="workflow-head">
       <div>
         <span class="workflow-kicker">AGENT WORKFLOW</span>
-        <strong>{{ waiting ? '等待确认' : paused ? '已暂停' : job?.status }}</strong>
+        <strong>{{ waiting ? '等待确认' : paused ? '已暂停' : failed ? '执行失败' : job?.status }}</strong>
       </div>
       <a-space>
         <a-button
@@ -207,6 +259,26 @@ watch(() => [props.jobId, props.refreshKey], load, { immediate: true })
           <PlayCircleOutlined /> 继续
         </a-button>
       </a-space>
+    </div>
+
+    <div v-if="failed" class="job-error-card">
+      <div>
+        <strong>任务执行失败</strong>
+        <span v-if="job?.currentStage">阶段：{{ job.currentStage }}</span>
+      </div>
+      <p>{{ job?.errorMessage || '后台任务已终止，请重试或查看执行日志。' }}</p>
+      <div class="job-error-actions">
+        <code v-if="job?.errorType">{{ job.errorType }}</code>
+        <a-button
+          type="primary"
+          size="small"
+          danger
+          :loading="action === 'retry-job'"
+          @click="retryJob"
+        >
+          重新执行任务
+        </a-button>
+      </div>
     </div>
 
     <div v-if="waiting" class="confirmation-card">
@@ -275,6 +347,7 @@ watch(() => [props.jobId, props.refreshKey], load, { immediate: true })
         <div>
           <strong>{{ step.title }}</strong>
           <span>{{ step.agentType }} · {{ step.status }}</span>
+          <small v-if="step.errorMessage" class="step-error">{{ step.errorMessage }}</small>
         </div>
         <a-button
           v-if="step.status === 'FAILED' || step.status === 'PAUSED'"
@@ -338,6 +411,46 @@ watch(() => [props.jobId, props.refreshKey], load, { immediate: true })
   border: 1px solid color-mix(in srgb, var(--brand-500) 30%, var(--border));
   border-radius: var(--radius-md);
   background: var(--bg-container);
+}
+
+.job-error-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  border: 1px solid color-mix(in srgb, var(--error) 45%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--error) 7%, var(--bg-surface));
+}
+
+.job-error-card > div:first-child,
+.job-error-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.job-error-card strong {
+  color: var(--error);
+}
+
+.job-error-card span,
+.job-error-card p {
+  color: var(--text-2);
+  font-size: 12px;
+}
+
+.job-error-card p {
+  margin: 0;
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.job-error-actions code {
+  color: var(--text-3);
+  font-size: 11px;
 }
 
 .confirmation-title {
@@ -436,6 +549,17 @@ watch(() => [props.jobId, props.refreshKey], load, { immediate: true })
   justify-content: space-between;
   gap: 8px;
   font-size: 12px;
+}
+
+.step-row > div {
+  flex-wrap: wrap;
+}
+
+.step-row .step-error {
+  flex-basis: 100%;
+  color: var(--error);
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .step-row span {

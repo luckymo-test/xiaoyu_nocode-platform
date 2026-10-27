@@ -70,6 +70,13 @@ public class GenerationJobController {
         return ResultUtils.success(jobService.getVO(jobId, loginUser));
     }
 
+    @GetMapping("/apps/{appId}/generation-jobs/latest")
+    public BaseResponse<GenerationJobVO> latest(@PathVariable Long appId,
+                                                HttpServletRequest request) {
+        User loginUser = userService.getLoginUser(request);
+        return ResultUtils.success(jobService.getLatestForApp(appId, loginUser));
+    }
+
     @GetMapping(value = "/generation-jobs/{jobId}/events",
             produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter events(@PathVariable Long jobId,
