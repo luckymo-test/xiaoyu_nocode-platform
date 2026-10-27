@@ -23,7 +23,7 @@ public class SandboxProperties {
      */
     private boolean requireContainer = false;
     private int maxSourceFiles = 2_000;
-    private long maxSourceBytes = 50L * 1024 * 1024;
+    private long maxSourceBytes = 100L * 1024 * 1024;
     private int maxOutputFiles = 10_000;
     private long maxOutputBytes = 200L * 1024 * 1024;
     private long commandTimeoutSeconds = 300;

@@ -148,7 +148,7 @@ codegen:
     enabled: ${CODEGEN_SANDBOX_ENABLED:true}
     require-container: ${CODEGEN_SANDBOX_REQUIRE_CONTAINER:false}
     max-source-files: ${CODEGEN_SANDBOX_MAX_SOURCE_FILES:2000}
-    max-source-bytes: ${CODEGEN_SANDBOX_MAX_SOURCE_BYTES:52428800}
+    max-source-bytes: ${CODEGEN_SANDBOX_MAX_SOURCE_BYTES:104857600}
     max-output-files: ${CODEGEN_SANDBOX_MAX_OUTPUT_FILES:10000}
     max-output-bytes: ${CODEGEN_SANDBOX_MAX_OUTPUT_BYTES:209715200}
     command-timeout-seconds: ${CODEGEN_SANDBOX_COMMAND_TIMEOUT_SECONDS:300}

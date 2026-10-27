@@ -80,7 +80,7 @@ codegen:
   sandbox:
     enabled: true
     max-source-files: 2000
-    max-source-bytes: 52428800
+    max-source-bytes: 104857600
     max-output-files: 10000
     max-output-bytes: 209715200
     command-timeout-seconds: 300
