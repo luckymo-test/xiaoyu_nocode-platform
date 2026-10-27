@@ -43,15 +43,15 @@ class ReasoningProfileRegistryTest {
         assertEquals(100_000, resolved.maxLoopTokens(), "显式配置必须覆盖代码兜底值");
 
         ReasoningProfileRegistry fallback = new ReasoningProfileRegistry();
-        assertEquals(10, fallback.resolve("fast").maxSteps());
-        assertEquals(400_000, fallback.resolve("fast").maxLoopTokens());
-        assertEquals(16, fallback.resolve("eco").maxSteps());
-        assertEquals(900_000, fallback.resolve("eco").maxLoopTokens());
-        assertEquals(28, fallback.resolve("standard").maxSteps());
-        assertEquals(2_000_000, fallback.resolve("standard").maxLoopTokens());
+        assertEquals(16, fallback.resolve("fast").maxSteps());
+        assertEquals(1_000_000, fallback.resolve("fast").maxLoopTokens());
+        assertEquals(24, fallback.resolve("eco").maxSteps());
+        assertEquals(2_000_000, fallback.resolve("eco").maxLoopTokens());
+        assertEquals(48, fallback.resolve("standard").maxSteps());
+        assertEquals(4_000_000, fallback.resolve("standard").maxLoopTokens());
         assertTrue(fallback.resolve("max").thinkingEnabled());
-        assertEquals(40, fallback.resolve("max").maxSteps());
-        assertEquals(3_500_000, fallback.resolve("max").maxLoopTokens());
+        assertEquals(64, fallback.resolve("max").maxSteps());
+        assertEquals(6_000_000, fallback.resolve("max").maxLoopTokens());
         assertEquals(1_500, fallback.resolve("max").maxDurationSeconds());
     }
 
