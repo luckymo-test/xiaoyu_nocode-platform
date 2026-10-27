@@ -68,6 +68,20 @@ class SandboxWorkspaceGuardTest {
     }
 
     @Test
+    @DisplayName("首次生成允许先校验依赖，再在沙箱内生成 lockfile")
+    void allowsBootstrapValidationWithoutLockfile() throws Exception {
+        SandboxProperties properties = new SandboxProperties();
+        SandboxWorkspaceGuard guard = new SandboxWorkspaceGuard(properties, new ObjectMapper());
+        writeProject("""
+                {"scripts":{"build":"vite build"},"dependencies":{"vue":"3.5.13"}}
+                """);
+        Files.delete(tempDir.resolve("package-lock.json"));
+
+        assertDoesNotThrow(() -> guard.validateSourceForLockfileGeneration(tempDir, null));
+        assertThrows(BusinessException.class, () -> guard.validateSource(tempDir));
+    }
+
+    @Test
     @DisplayName("React Profile 接受声明内依赖并拒绝任意包")
     void validatesReactProfilePolicy() throws Exception {
         SandboxWorkspaceGuard guard = new SandboxWorkspaceGuard(

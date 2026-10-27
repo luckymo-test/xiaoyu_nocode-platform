@@ -46,10 +46,20 @@ public class SandboxWorkspaceGuard {
     }
 
     /**
+     * Initial generated projects do not contain a lockfile yet. Validate the
+     * dependency and command contract first, generate the lockfile inside the
+     * sandbox, then call {@link #validateSource(Path, StackProfile)} again.
+     */
+    public Stats validateSourceForLockfileGeneration(Path source, StackProfile profile) {
+        validatePackage(source, profile, false);
+        return stats(source, properties.getMaxSourceFiles(), properties.getMaxSourceBytes(), true);
+    }
+
+    /**
      * 按当前 StackProfile 校验依赖和 build 脚本。
      */
     public Stats validateSource(Path source, StackProfile profile) {
-        validatePackage(source, profile);
+        validatePackage(source, profile, true);
         return stats(source, properties.getMaxSourceFiles(), properties.getMaxSourceBytes(), true);
     }
 
@@ -131,12 +141,12 @@ public class SandboxWorkspaceGuard {
         }
     }
 
-    private void validatePackage(Path source, StackProfile profile) {
+    private void validatePackage(Path source, StackProfile profile, boolean requireLockfile) {
         Path packageJson = source.resolve("package.json");
         if (!Files.isRegularFile(packageJson)) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR, "缺少 package.json");
         }
-        if (properties.getBuild().isRequireLockfile()
+        if (requireLockfile && properties.getBuild().isRequireLockfile()
                 && !Files.isRegularFile(source.resolve("package-lock.json"))) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR,
                     "沙箱模式要求 package-lock.json，拒绝未锁定依赖");

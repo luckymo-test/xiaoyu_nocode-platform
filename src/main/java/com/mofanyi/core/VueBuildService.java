@@ -22,11 +22,13 @@ import org.springframework.context.annotation.Conditional;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -134,10 +136,12 @@ public class VueBuildService {
         ExecResult build = null;
         String failureReason = null;
         try {
-            sourceStats = sandboxGuard.validateSource(projectDir, profile);
+            sourceStats = sandboxGuard.validateSourceForLockfileGeneration(projectDir, profile);
             sandbox = sandboxGuard.createBuildWorkspace(
                     codeFileWriteService.getTmpRoot(), appId);
             sandboxGuard.syncSource(projectDir, sandbox);
+            ensureLockfile(projectDir, sandbox, profile, progress);
+            sourceStats = sandboxGuard.validateSource(sandbox, profile);
 
             notify(progress, "START_INSTALL");
             install = exec(sandbox, "install", profile);
@@ -251,19 +255,31 @@ public class VueBuildService {
      * args 按空格拆成多个 token（如 "run build" → run + build）。
      */
     private ExecResult exec(Path workDir, String action, StackProfile profile) {
-        CommandSpec command = "install".equals(action)
-                ? firstCommand(profile.installCommands())
-                : firstCommand(profile.buildCommands());
+        CommandSpec command = switch (action) {
+            case "install", "package-lock-only" -> firstCommand(profile.installCommands());
+            case "run build" -> firstCommand(profile.buildCommands());
+            default -> throw new BusinessException(ErrorCode.OPERATION_ERROR,
+                    "不支持的 npm 动作：" + action);
+        };
         ThrowUtils.throwIf(command == null || command.noop(),
                 ErrorCode.OPERATION_ERROR, "StackProfile 未配置 " + action + " 命令");
         List<String> executable = command.executable();
         ThrowUtils.throwIf(!"npm".equals(executable.getFirst()),
                 ErrorCode.OPERATION_ERROR, "Build Sandbox 只允许 npm 命令");
-        List<String> argTokens = new ArrayList<>(executable.subList(1, executable.size()));
+        List<String> argTokens = "package-lock-only".equals(action)
+                ? new ArrayList<>(List.of("install", "--package-lock-only"))
+                : new ArrayList<>(executable.subList(1, executable.size()));
         if ("install".equals(action)) {
             if (sandboxProperties.getBuild().isIgnoreScripts()) {
                 argTokens.add("--ignore-scripts");
             }
+            argTokens.add("--no-audit");
+            argTokens.add("--no-fund");
+            if (StrUtil.isNotBlank(sandboxProperties.getBuild().getRegistry())) {
+                argTokens.add("--registry=" + sandboxProperties.getBuild().getRegistry());
+            }
+        } else if ("package-lock-only".equals(action)) {
+            argTokens.add("--ignore-scripts");
             argTokens.add("--no-audit");
             argTokens.add("--no-fund");
             if (StrUtil.isNotBlank(sandboxProperties.getBuild().getRegistry())) {
@@ -484,6 +500,35 @@ public class VueBuildService {
         } catch (Exception e) {
             log.warn("[build] 构建报告落盘失败，appId={}", appId, e);
         }
+    }
+
+    private void ensureLockfile(Path projectDir, Path sandbox, StackProfile profile,
+                                BuildProgress progress) {
+        Path projectLockfile = projectDir.resolve("package-lock.json");
+        if (Files.isRegularFile(projectLockfile)
+                || !sandboxProperties.getBuild().isRequireLockfile()) {
+            return;
+        }
+        notify(progress, "START_LOCKFILE");
+        ExecResult lockfile = exec(sandbox, "package-lock-only", profile);
+        if (!lockfile.success()) {
+            String reason = lockfile.timedOut()
+                    ? "生成 package-lock.json 超时"
+                    : "生成 package-lock.json 失败：" + extractError(lockfile.all());
+            throw new BusinessException(ErrorCode.OPERATION_ERROR, reason);
+        }
+        Path generated = sandbox.resolve("package-lock.json");
+        if (!Files.isRegularFile(generated)) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR,
+                    "npm 未产出 package-lock.json");
+        }
+        try {
+            Files.copy(generated, projectLockfile, StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException e) {
+            throw new BusinessException(ErrorCode.OPERATION_ERROR,
+                    "保存 package-lock.json 失败：" + e.getMessage());
+        }
+        notify(progress, "LOCKFILE_READY");
     }
 
     Path buildProjectDir(Long appId) {
