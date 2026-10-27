@@ -50,12 +50,14 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -301,6 +303,61 @@ class AgentToolLoopGatewayTest {
                 .findFirst().orElseThrow().responseData();
         assertTrue(response.contains("\"code\":\"TOOL_ARGUMENTS_TRUNCATED\""));
         assertTrue(response.contains("writeFileChunk"));
+    }
+
+    @Test
+    @DisplayName("自管循环最后一轮只暴露 finish，避免继续展开工作")
+    void exposesOnlyFinishInFinalRound() {
+        ReflectionTestUtils.setField(loop, "selfManagedLoopEnabled", true);
+        when(profiles.resolve(ReasoningLevel.STANDARD)).thenReturn(
+                new ReasoningProfile(true, "high", 2, 20_000, 1,
+                        4_096, "deepseek-flash"));
+        AssistantMessage.ToolCall read = new AssistantMessage.ToolCall(
+                "call-read", "function", "readFile", "{\"path\":\"src/App.vue\"}");
+        AssistantMessage.ToolCall finish = new AssistantMessage.ToolCall(
+                "call-finish", "function", "finish", "{\"description\":\"done\"}");
+        when(modelGateway.stream(any())).thenReturn(
+                Flux.just(new ModelChunk("", "", List.of(read), "tool_calls",
+                        new ModelUsage(1, 1), "deepseek",
+                        "deepseek-flash", "deepseek-flash")),
+                Flux.just(new ModelChunk("", "", List.of(finish), "tool_calls",
+                        new ModelUsage(1, 1), "deepseek",
+                        "deepseek-flash", "deepseek-flash")));
+        AtomicBoolean finished = new AtomicBoolean();
+        when(finishCallback.call(anyString())).thenAnswer(invocation -> {
+            finished.set(true);
+            return "finished";
+        });
+
+        loop.run(request(new AtomicReference<>(""), finished,
+                new TokenUsageAccumulator(), null));
+
+        ArgumentCaptor<ModelRequest> requests = ArgumentCaptor.forClass(ModelRequest.class);
+        verify(modelGateway, times(2)).stream(requests.capture());
+        assertEquals(List.of("finish"), requests.getAllValues().get(1).tools().stream()
+                .map(callback -> callback.getToolDefinition().name()).toList());
+        assertTrue(finished.get());
+    }
+
+    @Test
+    @DisplayName("轮数耗尽仍未 finish 时返回明确错误")
+    void rejectsExhaustedLoopWithoutFinish() {
+        ReflectionTestUtils.setField(loop, "selfManagedLoopEnabled", true);
+        when(profiles.resolve(ReasoningLevel.STANDARD)).thenReturn(
+                new ReasoningProfile(true, "high", 1, 20_000, 1,
+                        4_096, "deepseek-flash"));
+        AssistantMessage.ToolCall forged = new AssistantMessage.ToolCall(
+                "call-read", "function", "readFile", "{\"path\":\"src/App.vue\"}");
+        when(modelGateway.stream(any())).thenReturn(Flux.just(
+                new ModelChunk("", "", List.of(forged), "tool_calls",
+                        new ModelUsage(1, 1), "deepseek",
+                        "deepseek-flash", "deepseek-flash")));
+
+        IllegalStateException error = assertThrows(IllegalStateException.class,
+                () -> loop.run(request(new AtomicReference<>(""), new AtomicBoolean(),
+                        new TokenUsageAccumulator(), null)));
+
+        assertTrue(error.getMessage().contains("MAX_STEPS_EXCEEDED"));
     }
 
     private AgentToolLoop.ToolLoopRequest request(

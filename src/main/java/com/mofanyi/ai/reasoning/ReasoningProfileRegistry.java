@@ -69,13 +69,13 @@ public class ReasoningProfileRegistry {
 
     private ReasoningProfile fallback(ReasoningLevel level) {
         return switch (level) {
-            case FAST -> new ReasoningProfile(false, null, 8, 300_000L, 1,
+            case FAST -> new ReasoningProfile(false, null, 10, 400_000L, 1,
                     32_768, "deepseek-flash", 600);
-            case ECO -> new ReasoningProfile(true, "low", 12, 600_000L, 1,
+            case ECO -> new ReasoningProfile(true, "low", 16, 900_000L, 1,
                     32_768, "deepseek-flash", 900);
-            case STANDARD -> new ReasoningProfile(true, "high", 20, 1_200_000L, 2,
+            case STANDARD -> new ReasoningProfile(true, "high", 28, 2_000_000L, 2,
                     65_536, "deepseek-flash", 1_200);
-            case MAX -> new ReasoningProfile(true, "max", 30, 2_000_000L, 3,
+            case MAX -> new ReasoningProfile(true, "max", 40, 3_500_000L, 3,
                     65_536, "deepseek-flash", 1_500);
         };
     }

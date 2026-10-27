@@ -217,8 +217,8 @@ codegen:
       fast:
         thinking-enabled: false
         effort:
-        max-steps: 8
-        max-loop-tokens: ${CODEGEN_FAST_MAX_LOOP_TOKENS:300000}
+        max-steps: 10
+        max-loop-tokens: ${CODEGEN_FAST_MAX_LOOP_TOKENS:400000}
         max-duration-seconds: 600
         repair-rounds: 1
         max-output-tokens: 32768
@@ -226,8 +226,8 @@ codegen:
       eco:
         thinking-enabled: true
         effort: low
-        max-steps: 12
-        max-loop-tokens: ${CODEGEN_ECO_MAX_LOOP_TOKENS:600000}
+        max-steps: 16
+        max-loop-tokens: ${CODEGEN_ECO_MAX_LOOP_TOKENS:900000}
         max-duration-seconds: 900
         repair-rounds: 1
         max-output-tokens: 32768
@@ -235,8 +235,8 @@ codegen:
       standard:
         thinking-enabled: true
         effort: high
-        max-steps: 20
-        max-loop-tokens: ${CODEGEN_STANDARD_MAX_LOOP_TOKENS:1200000}
+        max-steps: 28
+        max-loop-tokens: ${CODEGEN_STANDARD_MAX_LOOP_TOKENS:2000000}
         max-duration-seconds: 1200
         repair-rounds: 2
         max-output-tokens: 65536
@@ -244,8 +244,8 @@ codegen:
       max:
         thinking-enabled: true
         effort: max
-        max-steps: 30
-        max-loop-tokens: ${CODEGEN_MAX_MAX_LOOP_TOKENS:2000000}
+        max-steps: 40
+        max-loop-tokens: ${CODEGEN_MAX_MAX_LOOP_TOKENS:3500000}
         max-duration-seconds: 1500
         repair-rounds: 3
         max-output-tokens: 65536

@@ -121,12 +121,11 @@ public class VueBuildService {
      */
     public File build(Long appId, BuildProgress progress) {
         ThrowUtils.throwIf(appId == null || appId <= 0, ErrorCode.PARAMS_ERROR);
-        Path liveDir = Path.of(codeFileWriteService.getLiveProjectDir(
-                CodeGenTypeEnum.VUE, appId)).toAbsolutePath().normalize();
-        ThrowUtils.throwIf(!Files.isDirectory(liveDir), ErrorCode.OPERATION_ERROR,
+        Path projectDir = buildProjectDir(appId);
+        ThrowUtils.throwIf(!Files.isDirectory(projectDir), ErrorCode.OPERATION_ERROR,
                 "应用尚未生成代码，请先生成");
-        StackProfile profile = resolveProfile(appId, liveDir);
-        Path outputDir = resolveOutputDirectory(liveDir, profile.outputDirectory());
+        StackProfile profile = resolveProfile(appId, projectDir);
+        Path outputDir = resolveOutputDirectory(projectDir, profile.outputDirectory());
         long startedAt = System.currentTimeMillis();
         Path sandbox = null;
         SandboxWorkspaceGuard.Stats sourceStats = null;
@@ -135,10 +134,10 @@ public class VueBuildService {
         ExecResult build = null;
         String failureReason = null;
         try {
-            sourceStats = sandboxGuard.validateSource(liveDir, profile);
+            sourceStats = sandboxGuard.validateSource(projectDir, profile);
             sandbox = sandboxGuard.createBuildWorkspace(
                     codeFileWriteService.getTmpRoot(), appId);
-            sandboxGuard.syncSource(liveDir, sandbox);
+            sandboxGuard.syncSource(projectDir, sandbox);
 
             notify(progress, "START_INSTALL");
             install = exec(sandbox, "install", profile);
@@ -164,8 +163,8 @@ public class VueBuildService {
                     notify(progress, "FIX_FAILED|" + truncate(e.getMessage(), 200));
                     break;
                 }
-                sourceStats = sandboxGuard.validateSource(liveDir, profile);
-                sandboxGuard.syncSource(liveDir, sandbox);
+                sourceStats = sandboxGuard.validateSource(projectDir, profile);
+                sandboxGuard.syncSource(projectDir, sandbox);
                 notify(progress, "REBUILDING");
                 build = exec(sandbox, "run build", profile);
             }
@@ -180,14 +179,14 @@ public class VueBuildService {
             outputStats = sandboxGuard.validateOutput(sandboxDist);
             sandboxGuard.replaceOutput(sandboxDist, outputDir);
             notify(progress, "BUILD_OK");
-            writeBuildReport(appId, startedAt, true, null,
+            writeBuildReport(appId, projectDir, startedAt, true, null,
                     sourceStats, outputStats, install, build, profile);
             return outputDir.toFile();
         } catch (RuntimeException e) {
             if (failureReason == null) {
                 failureReason = truncate(e.getMessage(), 1_000);
             }
-            writeBuildReport(appId, startedAt, false, failureReason,
+            writeBuildReport(appId, projectDir, startedAt, false, failureReason,
                     sourceStats, outputStats, install, build, profile);
             throw e;
         } finally {
@@ -456,7 +455,7 @@ public class VueBuildService {
         }
     }
 
-    private void writeBuildReport(Long appId, long startedAt, boolean success,
+    private void writeBuildReport(Long appId, Path projectDir, long startedAt, boolean success,
                                   String failureReason,
                                   SandboxWorkspaceGuard.Stats sourceStats,
                                   SandboxWorkspaceGuard.Stats outputStats,
@@ -478,14 +477,18 @@ public class VueBuildService {
             report.put("outputBytes", outputStats == null ? 0 : outputStats.bytes());
             report.put("installTimedOut", install != null && install.timedOut());
             report.put("buildTimedOut", build != null && build.timedOut());
-            Path out = Path.of(codeFileWriteService.getLiveProjectDir(
-                    CodeGenTypeEnum.VUE, appId), ".agent", "build-report.json");
+            Path out = projectDir.resolve(".agent").resolve("build-report.json");
             Files.createDirectories(out.getParent());
             objectMapper.writerWithDefaultPrettyPrinter()
                     .writeValue(out.toFile(), report);
         } catch (Exception e) {
             log.warn("[build] 构建报告落盘失败，appId={}", appId, e);
         }
+    }
+
+    Path buildProjectDir(Long appId) {
+        return Path.of(codeFileWriteService.getProjectDir(
+                CodeGenTypeEnum.VUE, appId)).toAbsolutePath().normalize();
     }
 
     private String truncate(String s) {

@@ -269,10 +269,14 @@ public class AgentToolLoop {
         for (ToolCallback callback : toolCallbacks) {
             byName.put(callback.getToolDefinition().name(), callback);
         }
+        List<ToolCallback> finishOnly = toolCallbacks.stream()
+                .filter(callback -> "finish".equals(callback.getToolDefinition().name()))
+                .toList();
         long loopStart = System.currentTimeMillis();
         int consecutiveFailures = 0;
         Map<String, Integer> repeatedCalls = new LinkedHashMap<>();
         int lastRoundStart = request.messages().size();
+        boolean exhausted = true;
         for (int round = 1; round <= profile.maxSteps(); round++) {
             taskRegistry.checkCancelled(request.appId());
             if (contextSlimEnabled) {
@@ -291,8 +295,13 @@ public class AgentToolLoop {
             long beforeIn = usageValue(request.usage(), true);
             long beforeOut = usageValue(request.usage(), false);
             ModelTurn turn;
+            boolean finalRound = round == profile.maxSteps();
+            List<ToolCallback> roundCallbacks = finalRound ? finishOnly : toolCallbacks;
+            if (finalRound) {
+                log.info("[agent] round={} 模式=self 已进入收尾轮，仅允许 finish", round);
+            }
             try {
-                turn = callModel(request, profile, toolCallbacks, false);
+                turn = callModel(request, profile, roundCallbacks, false);
             } catch (RuntimeException e) {
                 aiCallListener.onFailure(request.ctx(), e,
                         System.currentTimeMillis() - callStart, level.code(),
@@ -316,13 +325,15 @@ public class AgentToolLoop {
                 request.description().set(output.getText());
             }
             if (!output.hasToolCalls()) {
+                exhausted = false;
                 break;
             }
             log.info("[agent] round={} 模式=self 工具调用={}", round,
                     output.getToolCalls().stream().map(AssistantMessage.ToolCall::name).toList());
             List<ToolResponseMessage.ToolResponse> responses = new ArrayList<>();
             for (AssistantMessage.ToolCall toolCall : output.getToolCalls()) {
-                ToolCallback callback = byName.get(toolCall.name());
+                ToolCallback callback = finalRound && !"finish".equals(toolCall.name())
+                        ? null : byName.get(toolCall.name());
                 String result;
                 String signature = toolCall.name() + ":" + toolCall.arguments();
                 int repeatCount = repeatedCalls.merge(signature, 1, Integer::sum);
@@ -352,8 +363,16 @@ public class AgentToolLoop {
             }
             request.messages().add(ToolResponseMessage.builder().responses(responses).build());
             if (request.finished().get()) {
+                exhausted = false;
                 break;
             }
+        }
+        if (!request.finished().get()) {
+            String reason = exhausted
+                    ? "MAX_STEPS_EXCEEDED：已达到最大工具轮数 " + profile.maxSteps()
+                    : "FINISH_REQUIRED：模型结束了输出但未调用 finish";
+            throw new IllegalStateException(reason
+                    + "；请缩小页面/组件范围，或提高推理档位后重试");
         }
     }
 
