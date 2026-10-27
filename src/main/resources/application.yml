@@ -79,6 +79,7 @@ codegen:
   node:
     # 默认使用 PATH 中与应用 Node 版本匹配的 npm shim；仅在离线定制环境显式开启。
     use-explicit-cli: ${CODEGEN_NODE_USE_EXPLICIT_CLI:false}
+    auto-resolve-cli: ${CODEGEN_NODE_AUTO_RESOLVE_CLI:true}
     corepack-command: ${CODEGEN_NODE_COREPACK_COMMAND:}
   model:
     routing:

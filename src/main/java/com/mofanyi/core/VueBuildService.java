@@ -83,11 +83,17 @@ public class VueBuildService {
     @Value("${codegen.node.use-explicit-cli:false}")
     private boolean useExplicitNodeCli;
 
+    @Value("${codegen.node.auto-resolve-cli:true}")
+    private boolean autoResolveNpmCli;
+
     /**
      * 可选 Corepack npm 启动器（如 corepack），用于隔离宿主损坏或版本不匹配的 npm。
      */
     @Value("${codegen.node.corepack-command:}")
     private String corepackCommand;
+
+    private volatile ResolvedNpm resolvedNpm;
+    private volatile boolean resolvedNpmAttempted;
 
     public VueBuildService(CodeFileWriteService codeFileWriteService,
                            SiteRepairAgent siteRepairAgent,
@@ -286,33 +292,7 @@ public class VueBuildService {
                 argTokens.add("--registry=" + sandboxProperties.getBuild().getRegistry());
             }
         }
-        List<String> cmd = new ArrayList<>();
-        if (StrUtil.isNotBlank(corepackCommand)) {
-            if (IS_WINDOWS) {
-                cmd.add("cmd.exe");
-                cmd.add("/d");
-                cmd.add("/s");
-                cmd.add("/c");
-            }
-            cmd.add(corepackCommand);
-            cmd.add("npm");
-            cmd.addAll(argTokens);
-        } else if (useExplicitNodeCli
-                && StrUtil.isNotBlank(nodeCommand) && StrUtil.isNotBlank(npmCliPath)) {
-            cmd.add(nodeCommand);
-            cmd.add(npmCliPath);
-            cmd.addAll(argTokens);
-        } else if (IS_WINDOWS) {
-            cmd.add("cmd.exe");
-            cmd.add("/d");
-            cmd.add("/s");
-            cmd.add("/c");
-            cmd.add("npm.cmd");
-            cmd.addAll(argTokens);
-        } else {
-            cmd.add("npm");
-            cmd.addAll(argTokens);
-        }
+        List<String> cmd = buildProcessCommand(argTokens);
         long timeoutMillis = Math.min(
                 Math.max(30, sandboxProperties.getCommandTimeoutSeconds()) * 1_000L,
                 Math.max(30_000L, command.timeout().toMillis()));
@@ -346,6 +326,151 @@ public class VueBuildService {
         } catch (Exception e) {
             throw new BusinessException(ErrorCode.OPERATION_ERROR,
                     "执行 npm " + action + " 失败: " + e.getMessage());
+        }
+    }
+
+    private List<String> buildProcessCommand(List<String> argTokens) {
+        if (StrUtil.isNotBlank(corepackCommand)) {
+            List<String> command = new ArrayList<>();
+            if (IS_WINDOWS) {
+                command.add("cmd.exe");
+                command.add("/d");
+                command.add("/s");
+                command.add("/c");
+            }
+            command.add(corepackCommand);
+            command.add("npm");
+            command.addAll(argTokens);
+            return command;
+        }
+        if (useExplicitNodeCli
+                && StrUtil.isNotBlank(nodeCommand) && StrUtil.isNotBlank(npmCliPath)) {
+            return explicitNodeCommand(nodeCommand, npmCliPath, argTokens);
+        }
+        if (autoResolveNpmCli) {
+            ResolvedNpm resolved = resolveAutoNpm();
+            if (resolved != null) {
+                return explicitNodeCommand(resolved.nodeExecutable(),
+                        resolved.npmCliPath(), argTokens);
+            }
+        }
+        List<String> fallback = new ArrayList<>();
+        if (IS_WINDOWS) {
+            fallback.add("cmd.exe");
+            fallback.add("/d");
+            fallback.add("/s");
+            fallback.add("/c");
+            fallback.add("npm.cmd");
+        } else {
+            fallback.add("npm");
+        }
+        fallback.addAll(argTokens);
+        return fallback;
+    }
+
+    private static List<String> explicitNodeCommand(String node, String npmCli,
+                                                     List<String> argTokens) {
+        List<String> command = new ArrayList<>(argTokens.size() + 2);
+        command.add(node);
+        command.add(npmCli);
+        command.addAll(argTokens);
+        return command;
+    }
+
+    private ResolvedNpm resolveAutoNpm() {
+        ResolvedNpm cached = resolvedNpm;
+        if (cached != null || resolvedNpmAttempted) {
+            return cached;
+        }
+        synchronized (this) {
+            if (resolvedNpm != null || resolvedNpmAttempted) {
+                return resolvedNpm;
+            }
+            resolvedNpmAttempted = true;
+            try {
+                String node = resolveNodeExecutable();
+                String prefix = resolveNpmGlobalPrefix(node);
+                if (StrUtil.isBlank(prefix)) {
+                    return null;
+                }
+                Path root = Path.of(prefix).toAbsolutePath().normalize();
+                Path cli = resolveNpmCli(root);
+                if (cli == null) {
+                    return null;
+                }
+                resolvedNpm = new ResolvedNpm(node, cli.toString());
+                log.info("[build] npm CLI resolved: node={}, npm={}",
+                        resolvedNpm.nodeExecutable(), resolvedNpm.npmCliPath());
+                return resolvedNpm;
+            } catch (RuntimeException e) {
+                log.warn("[build] 自动解析 npm CLI 失败，将回退 PATH 中的 npm", e);
+                return null;
+            }
+        }
+    }
+
+    private String resolveNodeExecutable() {
+        if (StrUtil.isNotBlank(nodeCommand)) {
+            try {
+                if (Files.isRegularFile(Path.of(nodeCommand))) {
+                    return nodeCommand;
+                }
+            } catch (RuntimeException ignored) {
+                // A command name such as "node" is resolved through PATH below.
+            }
+        }
+        String output = captureCommand(List.of("node", "-p", "process.execPath"), 10);
+        return StrUtil.isBlank(output) ? null : output.trim();
+    }
+
+    private String resolveNpmGlobalPrefix(String nodeExecutable) {
+        if (StrUtil.isBlank(nodeExecutable)) {
+            return null;
+        }
+        Path node = Path.of(nodeExecutable).toAbsolutePath().normalize();
+        Path prefixScript = node.getParent()
+                .resolve("node_modules/npm/bin/npm-prefix.js");
+        String output;
+        if (Files.isRegularFile(prefixScript)) {
+            output = captureCommand(List.of(node.toString(), prefixScript.toString()), 15);
+        } else {
+            output = captureCommand(List.of(
+                    IS_WINDOWS ? "npm.cmd" : "npm", "prefix", "-g"), 15);
+        }
+        return StrUtil.isBlank(output) ? null : output.trim();
+    }
+
+    static Path resolveNpmCli(Path prefix) {
+        if (prefix == null) {
+            return null;
+        }
+        return List.of(
+                        prefix.resolve("node_modules/npm/bin/npm-cli.js"),
+                        prefix.resolve("lib/node_modules/npm/bin/npm-cli.js"))
+                .stream()
+                .filter(Files::isRegularFile)
+                .findFirst()
+                .orElse(null);
+    }
+
+    private static String captureCommand(List<String> command, int timeoutSeconds) {
+        Process process = null;
+        try {
+            process = new ProcessBuilder(command)
+                    .redirectErrorStream(true)
+                    .start();
+            if (!process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
+                process.destroyForcibly();
+                return "";
+            }
+            return new String(process.getInputStream().readAllBytes(),
+                    StandardCharsets.UTF_8).trim();
+        } catch (Exception e) {
+            return "";
+        } finally {
+            if (process != null && process.isAlive()) {
+                process.destroyForcibly();
+            }
         }
     }
 
@@ -601,6 +726,9 @@ public class VueBuildService {
             String err = stderr == null ? "" : stderr;
             return err.isBlank() ? out : out + "\n" + err;
         }
+    }
+
+    private record ResolvedNpm(String nodeExecutable, String npmCliPath) {
     }
 
     private static final class BoundedOutput {
