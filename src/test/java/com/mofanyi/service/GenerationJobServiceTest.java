@@ -220,7 +220,8 @@ class GenerationJobServiceTest {
 
         assertEquals(9010L, result.getJobId());
         assertEquals("FAILED", result.getStatus());
-        assertEquals("build failed", result.getErrorMessage());
+        assertEquals("BUILD_VALIDATION_FAILED", result.getErrorType());
+        assertEquals("生成项目构建未通过，请重试", result.getErrorMessage());
         verify(workspaceService).requireMember(WORKSPACE_ID, USER_ID);
     }
 

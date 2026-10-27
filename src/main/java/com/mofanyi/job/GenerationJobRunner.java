@@ -5,6 +5,7 @@ import com.mofanyi.ai.reasoning.ReasoningLevel;
 import com.mofanyi.ai.reasoning.ReasoningProfileRegistry;
 import com.mofanyi.ai.model.ModelExecutionTrace;
 import com.mofanyi.ai.task.GenerationCancelledException;
+import com.mofanyi.common.PublicErrorMessage;
 import com.mofanyi.core.AiCodeGeneratorFacade;
 import com.mofanyi.core.GeneratedResultContentFormatter;
 import com.mofanyi.entity.GenerationJob;
@@ -374,9 +375,11 @@ public class GenerationJobRunner {
         int maxAttempts = job.getMaxAttempts() == null ? 1 : job.getMaxAttempts();
         if (failureClassifier.retryable(error) && attempt < maxAttempts) {
             int delay = retryDelaySeconds(attempt);
+            PublicErrorMessage.Message publicError = PublicErrorMessage.from(
+                    error.getClass().getSimpleName(), message);
             appendQuietly(job, "retry_scheduled", "WAITING_RETRY",
                     Map.of("attempt", attempt, "nextAttempt", attempt + 1,
-                            "delaySeconds", delay, "message", message));
+                            "delaySeconds", delay, "message", publicError.text()));
             jobService.scheduleRetry(job, error.getClass().getSimpleName(), message);
             jobQueue.schedule(job.getId(), delay);
             metrics.retried();
@@ -387,16 +390,17 @@ public class GenerationJobRunner {
     }
 
     private void fail(GenerationJob job, String errorType, String errorMessage) {
+        PublicErrorMessage.Message publicError = PublicErrorMessage.from(errorType, errorMessage);
         Map<String, String> payload = new LinkedHashMap<>();
-        payload.put("errorType", errorType);
-        payload.put("message", errorMessage);
+        payload.put("errorType", publicError.code());
+        payload.put("message", publicError.text());
         emitStage(job, "FAILED", "FAILED");
         appendQuietly(job, "failed", "FAILED", payload);
         deadLetterService.record(job, errorType, errorMessage);
         metrics.failed();
         if (jobService.finish(job, GenerationJobStatusEnum.FAILED.getValue(),
                 "FAILED", errorType, errorMessage)) {
-            agentOrchestrator.markFailed(job, errorType, errorMessage);
+            agentOrchestrator.markFailed(job, publicError.code(), publicError.text());
         }
         modelExecutionTrace.clear(job.getId());
     }
@@ -459,12 +463,10 @@ public class GenerationJobRunner {
 
     private void saveAssistantMessageQuietly(GenerationJob job, AiCodeGenResultVO result, String error) {
         try {
-            String content = error == null ? contentFormatter.format(result) : error;
+            String content = error == null ? contentFormatter.format(result)
+                    : PublicErrorMessage.from("GENERATION_FAILED", error).text();
             if (StrUtil.isBlank(content)) {
                 content = "生成已完成";
-            }
-            if (content.length() > 500 && error != null) {
-                content = content.substring(0, 500);
             }
             chatHistoryService.saveMessage(job.getAppId(), job.getRequestedBy(), content,
                     error == null ? ChatMessageTypeEnum.ASSISTANT.getValue()

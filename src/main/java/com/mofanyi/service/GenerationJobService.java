@@ -4,6 +4,7 @@ import cn.hutool.core.util.StrUtil;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mofanyi.ai.reasoning.ReasoningProfileRegistry;
+import com.mofanyi.common.PublicErrorMessage;
 import com.mofanyi.entity.App;
 import com.mofanyi.entity.ChatHistory;
 import com.mofanyi.entity.GenerationJob;
@@ -779,8 +780,12 @@ public class GenerationJobService {
         vo.setVisibility(job.getVisibility());
         vo.setAttempt(job.getAttempt());
         vo.setMaxAttempts(job.getMaxAttempts());
-        vo.setErrorType(job.getErrorType());
-        vo.setErrorMessage(job.getErrorMessage());
+        if (StrUtil.isNotBlank(job.getErrorType()) || StrUtil.isNotBlank(job.getErrorMessage())) {
+            PublicErrorMessage.Message publicError = PublicErrorMessage.from(
+                    job.getErrorType(), job.getErrorMessage());
+            vo.setErrorType(publicError.code());
+            vo.setErrorMessage(publicError.text());
+        }
         vo.setCreateTime(job.getCreateTime());
         vo.setUpdateTime(job.getUpdateTime());
         vo.setEventsUrl("/v1/generation-jobs/" + job.getId() + "/events");

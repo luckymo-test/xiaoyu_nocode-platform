@@ -1,6 +1,9 @@
 package com.mofanyi.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.fasterxml.jackson.databind.node.TextNode;
+import com.mofanyi.common.PublicErrorMessage;
 import com.mofanyi.entity.GenerationJob;
 import com.mofanyi.entity.GenerationJobEvent;
 import com.mofanyi.model.enums.GenerationJobStatusEnum;
@@ -89,14 +92,14 @@ public class GenerationJobSseService {
     }
 
     private void send(SseEmitter emitter, GenerationJobEvent event, boolean legacy) throws Exception {
+        JsonNode payload = publicPayload(event);
         if (!legacy) {
             emitter.send(SseEmitter.event()
                     .id(String.valueOf(event.getSeq()))
                     .name(event.getEventType())
-                    .data(event.getPayload(), MediaType.APPLICATION_JSON));
+                    .data(payload, MediaType.APPLICATION_JSON));
             return;
         }
-        JsonNode payload = eventService.readPayload(event);
         String eventName;
         String data;
         switch (event.getEventType()) {
@@ -126,5 +129,25 @@ public class GenerationJobSseService {
         }
         emitter.send(SseEmitter.event().id(String.valueOf(event.getSeq()))
                 .name(eventName).data(data));
+    }
+
+    private JsonNode publicPayload(GenerationJobEvent event) {
+        JsonNode payload = eventService.readPayload(event);
+        if (!"failed".equals(event.getEventType())
+                && !"retry_scheduled".equals(event.getEventType())) {
+            return payload;
+        }
+        String internalType = payload.path("errorType").asText(event.getStage());
+        String internalMessage = payload.path("message").asText(
+                payload.isTextual() ? payload.asText() : "");
+        PublicErrorMessage.Message publicError =
+                PublicErrorMessage.from(internalType, internalMessage);
+        if (payload instanceof ObjectNode object) {
+            ObjectNode safe = object.deepCopy();
+            safe.put("errorType", publicError.code());
+            safe.put("message", publicError.text());
+            return safe;
+        }
+        return TextNode.valueOf(publicError.text());
     }
 }

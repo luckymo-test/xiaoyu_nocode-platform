@@ -6,6 +6,7 @@ import {
   SafetyCertificateOutlined,
 } from '@ant-design/icons-vue'
 import { appMessage as message } from '@/utils/feedback'
+import { userFacingGenerationError } from '@/utils/publicError'
 import {
   confirmGenerationPlan,
   getGenerationJob,
@@ -55,6 +56,12 @@ const ui = computed(() => parse(plan.value?.uiJson))
 const waiting = computed(() => job.value?.status === 'WAITING_CONFIRMATION')
 const paused = computed(() => job.value?.status === 'PAUSED')
 const failed = computed(() => job.value?.status === 'FAILED')
+const publicErrorMessage = computed(() => userFacingGenerationError(job.value?.errorMessage))
+const publicErrorCode = computed(() =>
+  /^[A-Z0-9_]+$/.test(job.value?.errorType ?? '')
+    ? job.value?.errorType
+    : 'GENERATION_FAILED',
+)
 const active = computed(() =>
   ['QUEUED', 'RUNNING', 'WAITING_RETRY', 'PAUSE_REQUESTED', 'PAUSED', 'WAITING_CONFIRMATION'].includes(
     job.value?.status ?? '',
@@ -266,9 +273,9 @@ onUnmounted(stopPolling)
         <strong>任务执行失败</strong>
         <span v-if="job?.currentStage">阶段：{{ job.currentStage }}</span>
       </div>
-      <p>{{ job?.errorMessage || '后台任务已终止，请重试或查看执行日志。' }}</p>
+      <p>{{ publicErrorMessage }}</p>
       <div class="job-error-actions">
-        <code v-if="job?.errorType">{{ job.errorType }}</code>
+        <code>{{ publicErrorCode }}</code>
         <a-button
           type="primary"
           size="small"
@@ -347,7 +354,9 @@ onUnmounted(stopPolling)
         <div>
           <strong>{{ step.title }}</strong>
           <span>{{ step.agentType }} · {{ step.status }}</span>
-          <small v-if="step.errorMessage" class="step-error">{{ step.errorMessage }}</small>
+          <small v-if="step.errorMessage" class="step-error">
+            {{ userFacingGenerationError(step.errorMessage) }}
+          </small>
         </div>
         <a-button
           v-if="step.status === 'FAILED' || step.status === 'PAUSED'"

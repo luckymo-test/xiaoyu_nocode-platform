@@ -4,6 +4,7 @@ import {
 } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { appMessage as message } from '@/utils/feedback'
+import { userFacingGenerationError } from '@/utils/publicError'
 import {
   ArrowLeftOutlined,
   CloudUploadOutlined,
@@ -1339,7 +1340,9 @@ const toChatMessage = (item: API.ChatHistory): ChatMessage => {
     const parsed = parseMessageContent(content)
     return {
       role: 'ai',
-      content: item.messageType === 'error' ? content : parsed.description || '',
+      content: item.messageType === 'error'
+        ? userFacingGenerationError(content)
+        : parsed.description || '',
       status: item.messageType === 'error' ? 'error' : 'done',
       files: parsed.files,
     }
@@ -1689,14 +1692,7 @@ const sendMessage = async (text?: string, auto = false) => {
 
 // 将后端错误信息映射为友好文案（网络断连等常见情况）
 const friendlyError = (errorMsg: string): string => {
-  if (/connection reset|connection closed|connection refused|eof|timeout|premature close/i.test(errorMsg)) {
-    return '生成失败：网络连接不稳定，请重试'
-  }
-  if (/jsonmappingexception|parse/i.test(errorMsg)) {
-    return '生成失败：AI 输出不完整，请重试或简化需求'
-  }
-  // 其他错误截断展示，避免刷屏技术堆栈
-  return '生成失败：' + errorMsg.slice(0, 80)
+  return userFacingGenerationError(errorMsg)
 }
 
 const buildPreviewDoc = (result: API.AiCodeGenResultVO): string => {
