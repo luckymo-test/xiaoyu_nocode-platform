@@ -105,7 +105,8 @@ class AppRevisionServiceTest {
                 .fencingToken(1L)
                 .build();
         trace.recordProfile(99L, "standard",
-                new ReasoningProfile(true, "high", 20, 800_000, 2, 65_536, "deepseek-flash"));
+                new ReasoningProfile(true, "high", 20, 800_000, 2, 65_536,
+                        "deepseek-flash", 900));
         trace.recordCall(AiCallContext.ofJob(7L, 3L, "html", 99L),
                 "GENERATE", "success", "deepseek", "deepseek-flash",
                 "deepseek-flash", "standard", 120, 30, 800, "stop");

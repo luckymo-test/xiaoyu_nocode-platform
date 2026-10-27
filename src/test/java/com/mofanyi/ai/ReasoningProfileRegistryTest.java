@@ -34,7 +34,8 @@ class ReasoningProfileRegistryTest {
     @DisplayName("配置映射优先于代码兜底，并保留 thinking off")
     void resolvesConfiguredProfile() {
         ReasoningProfileRegistry registry = new ReasoningProfileRegistry();
-        ReasoningProfile fast = new ReasoningProfile(false, null, 6, 100_000L, 1, 16_384, "deepseek-flash");
+        ReasoningProfile fast = new ReasoningProfile(
+                false, null, 6, 100_000L, 1, 16_384, "deepseek-flash", 900);
         registry.setProfiles(Map.of("fast", fast));
 
         ReasoningProfile resolved = registry.resolve(ReasoningLevel.FAST);
@@ -47,16 +48,16 @@ class ReasoningProfileRegistryTest {
         assertEquals(100_000, resolved.maxLoopTokens(), "显式配置必须覆盖代码兜底值");
 
         ReasoningProfileRegistry fallback = new ReasoningProfileRegistry();
-        assertEquals(16, fallback.resolve("fast").maxSteps());
-        assertEquals(1_000_000, fallback.resolve("fast").maxLoopTokens());
-        assertEquals(24, fallback.resolve("eco").maxSteps());
-        assertEquals(2_000_000, fallback.resolve("eco").maxLoopTokens());
-        assertEquals(48, fallback.resolve("standard").maxSteps());
-        assertEquals(4_000_000, fallback.resolve("standard").maxLoopTokens());
+        assertEquals(24, fallback.resolve("fast").maxSteps());
+        assertEquals(1_500_000, fallback.resolve("fast").maxLoopTokens());
+        assertEquals(40, fallback.resolve("eco").maxSteps());
+        assertEquals(3_000_000, fallback.resolve("eco").maxLoopTokens());
+        assertEquals(80, fallback.resolve("standard").maxSteps());
+        assertEquals(8_000_000, fallback.resolve("standard").maxLoopTokens());
         assertTrue(fallback.resolve("max").thinkingEnabled());
-        assertEquals(64, fallback.resolve("max").maxSteps());
-        assertEquals(6_000_000, fallback.resolve("max").maxLoopTokens());
-        assertEquals(1_500, fallback.resolve("max").maxDurationSeconds());
+        assertEquals(120, fallback.resolve("max").maxSteps());
+        assertEquals(12_000_000, fallback.resolve("max").maxLoopTokens());
+        assertEquals(2_400, fallback.resolve("max").maxDurationSeconds());
     }
 
     @Test
@@ -74,12 +75,12 @@ class ReasoningProfileRegistryTest {
                 .withPropertyValues(
                         "codegen.reasoning.default-level=eco",
                         "codegen.reasoning.profiles.fast.thinking-enabled=false",
-                        "codegen.reasoning.profiles.fast.max-steps=16",
-                        "codegen.reasoning.profiles.fast.max-loop-tokens=1000000",
+                        "codegen.reasoning.profiles.fast.max-steps=21",
+                        "codegen.reasoning.profiles.fast.max-loop-tokens=1400000",
                         "codegen.reasoning.profiles.fast.repair-rounds=1",
                         "codegen.reasoning.profiles.fast.max-output-tokens=32768",
                         "codegen.reasoning.profiles.fast.model=deepseek-flash",
-                        "codegen.reasoning.profiles.fast.max-duration-seconds=600")
+                        "codegen.reasoning.profiles.fast.max-duration-seconds=777")
                 .run(context -> {
                     ReasoningProfileRegistry registry =
                             context.getBean(ReasoningProfileRegistry.class);
@@ -89,10 +90,11 @@ class ReasoningProfileRegistryTest {
                     assertFalse(fast.isThinkingEnabled());
                     assertNull(fast.effort());
                     assertNull(fast.getEffort());
-                    assertEquals(16, fast.maxSteps());
-                    assertEquals(16, fast.getMaxSteps());
-                    assertEquals(1_000_000, fast.maxLoopTokens());
-                    assertEquals(1_000_000, fast.getMaxLoopTokens());
+                    assertEquals(21, fast.maxSteps());
+                    assertEquals(21, fast.getMaxSteps());
+                    assertEquals(1_400_000, fast.maxLoopTokens());
+                    assertEquals(1_400_000, fast.getMaxLoopTokens());
+                    assertEquals(777, fast.maxDurationSeconds());
                 });
     }
 

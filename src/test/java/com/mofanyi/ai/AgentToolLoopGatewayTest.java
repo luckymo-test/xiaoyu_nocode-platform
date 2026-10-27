@@ -90,7 +90,7 @@ class AgentToolLoopGatewayTest {
 
         when(profiles.resolve(ReasoningLevel.STANDARD)).thenReturn(
                 new ReasoningProfile(true, "high", 4, 20_000, 1,
-                        4_096, "deepseek-flash"));
+                        4_096, "deepseek-flash", 900));
         when(finishTool.build(any(), any())).thenReturn(finishCallback);
         when(writeFileTool.build(any(), any(), any(), any())).thenReturn(writeFileCallback);
         SearchWebTool searchWeb = mock(SearchWebTool.class);
@@ -311,7 +311,7 @@ class AgentToolLoopGatewayTest {
         ReflectionTestUtils.setField(loop, "selfManagedLoopEnabled", true);
         when(profiles.resolve(ReasoningLevel.STANDARD)).thenReturn(
                 new ReasoningProfile(true, "high", 2, 20_000, 1,
-                        4_096, "deepseek-flash"));
+                        4_096, "deepseek-flash", 900));
         AssistantMessage.ToolCall read = new AssistantMessage.ToolCall(
                 "call-read", "function", "readFile", "{\"path\":\"src/App.vue\"}");
         AssistantMessage.ToolCall finish = new AssistantMessage.ToolCall(
@@ -345,7 +345,7 @@ class AgentToolLoopGatewayTest {
         ReflectionTestUtils.setField(loop, "selfManagedLoopEnabled", true);
         when(profiles.resolve(ReasoningLevel.STANDARD)).thenReturn(
                 new ReasoningProfile(true, "high", 1, 20_000, 1,
-                        4_096, "deepseek-flash"));
+                        4_096, "deepseek-flash", 900));
         AssistantMessage.ToolCall forged = new AssistantMessage.ToolCall(
                 "call-read", "function", "readFile", "{\"path\":\"src/App.vue\"}");
         when(modelGateway.stream(any())).thenReturn(Flux.just(

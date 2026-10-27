@@ -218,36 +218,36 @@ codegen:
       fast:
         thinking-enabled: false
         effort:
-        max-steps: 16
-        max-loop-tokens: ${CODEGEN_FAST_MAX_LOOP_TOKENS:1000000}
-        max-duration-seconds: 600
+        max-steps: 24
+        max-loop-tokens: ${CODEGEN_FAST_MAX_LOOP_TOKENS:1500000}
+        max-duration-seconds: 900
         repair-rounds: 1
         max-output-tokens: 32768
         model: deepseek-flash
       eco:
         thinking-enabled: true
         effort: low
-        max-steps: 24
-        max-loop-tokens: ${CODEGEN_ECO_MAX_LOOP_TOKENS:2000000}
-        max-duration-seconds: 900
+        max-steps: 40
+        max-loop-tokens: ${CODEGEN_ECO_MAX_LOOP_TOKENS:3000000}
+        max-duration-seconds: 1200
         repair-rounds: 1
         max-output-tokens: 32768
         model: deepseek-flash
       standard:
         thinking-enabled: true
         effort: high
-        max-steps: 48
-        max-loop-tokens: ${CODEGEN_STANDARD_MAX_LOOP_TOKENS:4000000}
-        max-duration-seconds: 1200
+        max-steps: 80
+        max-loop-tokens: ${CODEGEN_STANDARD_MAX_LOOP_TOKENS:8000000}
+        max-duration-seconds: 1800
         repair-rounds: 2
         max-output-tokens: 65536
         model: deepseek-flash
       max:
         thinking-enabled: true
         effort: max
-        max-steps: 64
-        max-loop-tokens: ${CODEGEN_MAX_MAX_LOOP_TOKENS:6000000}
-        max-duration-seconds: 1500
+        max-steps: 120
+        max-loop-tokens: ${CODEGEN_MAX_MAX_LOOP_TOKENS:12000000}
+        max-duration-seconds: 2400
         repair-rounds: 3
         max-output-tokens: 65536
         model: deepseek-flash
