@@ -72,6 +72,11 @@ public class AppVO implements Serializable {
     private String deployUrl;
 
     /**
+     * 部署时间（非空表示当前应用已部署）
+     */
+    private LocalDateTime deployedTime;
+
+    /**
      * 代码生成类型（枚举）
      */
     private String codeGenType;

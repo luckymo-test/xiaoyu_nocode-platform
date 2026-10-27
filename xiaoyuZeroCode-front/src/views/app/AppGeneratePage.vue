@@ -1856,6 +1856,14 @@ const handleDeploy = async () => {
         deploying.value = false
         deployStatus.value = '部署成功'
         message.success('部署成功')
+        // SSE 已给出成功结果，先同步本地状态，确保刷新接口尚未返回时也能看到入口。
+        if (app.value) {
+          app.value = {
+            ...app.value,
+            deployUrl: url,
+            deployedTime: app.value.deployedTime || new Date().toISOString(),
+          }
+        }
         await loadApp()
         window.open(url, '_blank', 'noopener,noreferrer')
       },
