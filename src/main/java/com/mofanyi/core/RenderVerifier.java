@@ -22,7 +22,13 @@ import org.openqa.selenium.OutputType;
 import org.openqa.selenium.TakesScreenshot;
 import org.springframework.stereotype.Service;
 
+import com.sun.net.httpserver.HttpExchange;
+import com.sun.net.httpserver.HttpServer;
+
 import java.io.File;
+import java.io.IOException;
+import java.net.InetSocketAddress;
+import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.nio.file.Path;
 import java.security.MessageDigest;
@@ -30,6 +36,7 @@ import java.util.HexFormat;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 交付前渲染验证（plan-agent-pipeline.md P0-4）。
@@ -45,8 +52,8 @@ import java.util.List;
  * 报告落盘到 {@code .agent/verify.json} 供追溯，同时转成文本喂给修复 agent。
  *
  * <p>范围：html / multi_file / vue dist 构建产物。
- * 局限：通过 {@code file://} 加载，ES module / fetch 这类需要 http 源的页面可能加载失败；
- * 生产 Playwright Adapter 使用一次性 HTTP 静态源避免该问题。
+ * 构建产物通过进程内临时 HTTP 静态源加载，避免 Vite ES module 和 CSS 在 {@code file://}
+ * 下被浏览器按跨源资源拒绝。
  */
 @Slf4j
 @Service
@@ -77,6 +84,24 @@ public class RenderVerifier implements BrowserVerifierPort {
      * 页面加载后等待渲染/图片就绪的毫秒数
      */
     private static final long SETTLE_MILLIS = 1200;
+
+    private static final Map<String, String> CONTENT_TYPES = Map.ofEntries(
+            Map.entry("html", "text/html; charset=utf-8"),
+            Map.entry("css", "text/css; charset=utf-8"),
+            Map.entry("js", "text/javascript; charset=utf-8"),
+            Map.entry("mjs", "text/javascript; charset=utf-8"),
+            Map.entry("json", "application/json; charset=utf-8"),
+            Map.entry("svg", "image/svg+xml"),
+            Map.entry("png", "image/png"),
+            Map.entry("jpg", "image/jpeg"),
+            Map.entry("jpeg", "image/jpeg"),
+            Map.entry("webp", "image/webp"),
+            Map.entry("avif", "image/avif"),
+            Map.entry("gif", "image/gif"),
+            Map.entry("ico", "image/x-icon"),
+            Map.entry("woff", "font/woff"),
+            Map.entry("woff2", "font/woff2"),
+            Map.entry("map", "application/json; charset=utf-8"));
 
     /**
      * 页面内取证脚本：返回 JSON
@@ -211,16 +236,18 @@ public class RenderVerifier implements BrowserVerifierPort {
             return new RenderReport(results, List.of("参数非法"));
         }
         String projectDir = codeFileWriteService.getProjectDir(type, appId);
-        File index = type == CodeGenTypeEnum.VUE
-                ? Paths.get(projectDir, "dist", "index.html").toFile()
-                : Paths.get(projectDir, "index.html").toFile();
+        Path sourceDir = type == CodeGenTypeEnum.VUE
+                ? Paths.get(projectDir, "dist").toAbsolutePath().normalize()
+                : Paths.get(projectDir).toAbsolutePath().normalize();
+        File index = sourceDir.resolve("index.html").toFile();
         if (!FileUtil.exist(index)) {
             return new RenderReport(results, List.of("未找到 index.html，跳过渲染验证"));
         }
-        String url = index.toURI().toString();
         WebDriver driver = null;
-        try {
-            // 只起一个会话，逐视口 resize——比每档各起一次会话快得多
+        try (StaticSiteServer server = StaticSiteServer.start(sourceDir)) {
+            // Vite 构建产物包含 ES module；file:// 会被 Chromium 按跨源资源拒绝。
+            // 临时 HTTP 源只在本次验证期间监听回环地址，不暴露到外部网络。
+            String url = server.baseUrl() + "/";
             driver = createDriver(VIEWPORTS.get(0));
             driver.get(url);
             waitReady(driver);
@@ -243,6 +270,88 @@ public class RenderVerifier implements BrowserVerifierPort {
         RenderReport report = new RenderReport(results, errors);
         log.info("[verify] appId={} 渲染验证完成：{}", appId, report.summary());
         return report;
+    }
+
+    private static final class StaticSiteServer implements AutoCloseable {
+
+        private final Path root;
+        private final HttpServer server;
+
+        private StaticSiteServer(Path root, HttpServer server) {
+            this.root = root;
+            this.server = server;
+        }
+
+        static StaticSiteServer start(Path root) throws IOException {
+            HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+            StaticSiteServer site = new StaticSiteServer(root, server);
+            server.createContext("/", site::handle);
+            server.start();
+            return site;
+        }
+
+        String baseUrl() {
+            return "http://127.0.0.1:" + server.getAddress().getPort();
+        }
+
+        private void handle(HttpExchange exchange) throws IOException {
+            try {
+                if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())
+                        && !"HEAD".equalsIgnoreCase(exchange.getRequestMethod())) {
+                    respond(exchange, 405, "Method Not Allowed", "text/plain; charset=utf-8");
+                    return;
+                }
+                String pathname = exchange.getRequestURI().getPath();
+                if ("/favicon.ico".equals(pathname)) {
+                    exchange.sendResponseHeaders(204, -1);
+                    return;
+                }
+                String relative = pathname == null || pathname.isBlank() || "/".equals(pathname)
+                        ? "index.html" : pathname.replaceFirst("^/+", "");
+                Path file = root.resolve(relative).normalize();
+                if (!file.startsWith(root)) {
+                    respond(exchange, 403, "Forbidden", "text/plain; charset=utf-8");
+                    return;
+                }
+                if (!Files.isRegularFile(file)
+                        && relative.indexOf('.') < 0
+                        && Files.isRegularFile(root.resolve("index.html"))) {
+                    file = root.resolve("index.html");
+                }
+                if (!Files.isRegularFile(file)) {
+                    respond(exchange, 404, "Not Found", "text/plain; charset=utf-8");
+                    return;
+                }
+                byte[] body = Files.readAllBytes(file);
+                String filename = file.getFileName().toString();
+                int dot = filename.lastIndexOf('.');
+                String extension = dot < 0 ? "" : filename.substring(dot + 1).toLowerCase();
+                exchange.getResponseHeaders().set("Content-Type",
+                        CONTENT_TYPES.getOrDefault(extension, "application/octet-stream"));
+                exchange.getResponseHeaders().set("Cache-Control", "no-store");
+                exchange.getResponseHeaders().set("X-Content-Type-Options", "nosniff");
+                exchange.sendResponseHeaders(200,
+                        "HEAD".equalsIgnoreCase(exchange.getRequestMethod()) ? -1 : body.length);
+                if (!"HEAD".equalsIgnoreCase(exchange.getRequestMethod())) {
+                    exchange.getResponseBody().write(body);
+                }
+            } finally {
+                exchange.close();
+            }
+        }
+
+        private static void respond(HttpExchange exchange, int status,
+                                    String body, String contentType) throws IOException {
+            byte[] bytes = body.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", contentType);
+            exchange.sendResponseHeaders(status, bytes.length);
+            exchange.getResponseBody().write(bytes);
+        }
+
+        @Override
+        public void close() {
+            server.stop(0);
+        }
     }
 
     /**

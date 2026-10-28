@@ -133,4 +133,34 @@ class RenderVerifierTest {
         Assumptions.assumeTrue(report.isUsable(), "浏览器不可用，跳过断言");
         assertFalse(report.hasProblems(), "正常页面不应被判定有问题：" + report.toPromptText());
     }
+
+    @Test
+    @DisplayName("Vue ES module 构建产物必须通过 HTTP 源加载")
+    void loadsVueDistOverHttp() {
+        Assumptions.assumeTrue(browserAvailable,
+                "本机无可用浏览器驱动，跳过渲染验证集成测试。" + browserInitError);
+
+        CodeFileWriteService files = new CodeFileWriteService();
+        files.setTmpRoot(tmpRoot.toString());
+        files.saveProjectFile(CodeGenTypeEnum.VUE, APP_ID, "dist/index.html",
+                "<!DOCTYPE html><html lang='zh-CN'><head><meta charset='utf-8'>"
+                        + "<link rel='stylesheet' href='./assets/app.css'></head><body>"
+                        + "<div id='app'></div>"
+                        + "<script type='module' src='./assets/app.js'></script>"
+                        + "</body></html>");
+        files.saveProjectFile(CodeGenTypeEnum.VUE, APP_ID, "dist/assets/app.css",
+                "#app{padding:2rem;font-family:sans-serif}");
+        files.saveProjectFile(CodeGenTypeEnum.VUE, APP_ID, "dist/assets/app.js",
+                "document.querySelector('#app').textContent = '"
+                        + "Vue 构建产物已通过临时 HTTP 源正常加载并完成渲染';");
+
+        RenderVerifier verifier = newVerifier(files);
+        RenderVerifier.RenderReport report = verifier.verify(CodeGenTypeEnum.VUE, APP_ID);
+
+        Assumptions.assumeTrue(report.isUsable(), "浏览器不可用，跳过断言");
+        assertFalse(report.hasProblems(), "Vue dist 不应因 file:// 跨源限制被误判："
+                + report.toPromptText());
+        assertTrue(report.viewports().stream().allMatch(v -> v.textLength() > 20),
+                "三档视口都应渲染出页面文本");
+    }
 }
